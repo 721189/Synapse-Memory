@@ -11,8 +11,9 @@ jobs:
         python-version: '3.10'
     - name: Install dependencies
       run: |
-        pip install -r requirements.txt
+        pip install -r sdk/python/requirements.txt
         pip install -r requirements-dev.txt
+        pip install -e sdk/python
         pip install bandit
     - name: Lint with flake8
       run: flake8 sdk/python
