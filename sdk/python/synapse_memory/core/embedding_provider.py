@@ -91,30 +91,28 @@ class OpenAIEmbeddingProvider(EmbeddingProvider):
     def embed_batch(self, texts: List[str]) -> List[List[float]]:
         return [self.embed(t) for t in texts]
 
+from functools import lru_cache
+
 class EmbeddingManager:
     """Manager to handle provider switching, caching, and retries."""
-    def __init__(self, provider: EmbeddingProvider, cache_enabled: bool = True):
+    def __init__(self, provider: EmbeddingProvider, cache_size: int = 1000):
         self.provider = provider
-        self.cache: Dict[str, List[float]] = {}
-        self.cache_enabled = cache_enabled
+        self.cache_size = cache_size
+        self._cached_embed = lru_cache(maxsize=cache_size)(self.provider.embed)
 
     def get_embedding(self, text: str) -> List[float]:
-        if self.cache_enabled and text in self.cache:
-            log_event("embedding_cache", "HIT", {"text_len": len(text)})
-            return self.cache[text]
-        
-        log_event("embedding_cache", "MISS", {"text_len": len(text)})
+        log_event("embedding_manager", "REQUEST", {"text_len": len(text)})
             
         # Add simple retry logic
         retries = 3
         for i in range(retries):
             try:
-                embedding = self.provider.embed(text)
+                # Use the cached provider method
+                embedding = self._cached_embed(text)
+                
                 if len(embedding) != self.provider.dimension:
                     raise ValueError(f"Dimension mismatch: expected {self.provider.dimension}, got {len(embedding)}")
                 
-                if self.cache_enabled:
-                    self.cache[text] = embedding
                 return embedding
             except Exception as e:
                 log_event("embedding_retry", "RETRYING", {"attempt": i+1, "error": str(e)})

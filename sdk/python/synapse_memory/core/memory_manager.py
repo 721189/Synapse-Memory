@@ -46,7 +46,7 @@ class MemoryManager:
         
         # 1. Generate real vector representation
         new_vector = self.embedder.embed_query(content)
-        existing_memories = self.store.get_all_memories()
+        existing_memories = self.store.get_memories_by_category(category)
 
         # 2. Check for duplicate nodes
         new_node_base = {

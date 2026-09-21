@@ -10,8 +10,9 @@ class SQLiteMemoryStore:
     Ensures zero-loss local storage of vectorized cognitive memories.
     """
 
-    def __init__(self, db_path: str = "synapse_memory.db"):
+    def __init__(self, db_path: str = "synapse_memory.db", encryption_provider=None):
         self.db_path = db_path
+        self.encryption_provider = encryption_provider
         self._initialize_database()
 
     def _get_connection(self) -> sqlite3.Connection:
@@ -44,23 +45,31 @@ class SQLiteMemoryStore:
 
     def insert_memory(self, memory: Dict[str, Any]) -> None:
         """Inserts a structured memory node into the SQLite table."""
+        content = memory["content"]
+        embedding = memory.get("embedding", [])
+        
+        if self.encryption_provider:
+            content = self.encryption_provider.encrypt(content)
+            embedding = self.encryption_provider.encrypt(json.dumps(embedding))
+        else:
+            embedding = json.dumps(embedding)
+            
         with self._get_connection() as conn:
             cursor = conn.cursor()
-            embedding_json = json.dumps(memory.get("embedding", []))
             cursor.execute("""
                 INSERT OR REPLACE INTO memories (
                     id, content, category, confidence, created_at, last_accessed_at, access_count, token_cost, embedding, feedback_multiplier
                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (
                 memory["id"],
-                memory["content"],
+                content,
                 memory["category"],
                 memory["confidence"],
                 memory["created_at"],
                 memory.get("last_accessed_at", memory["created_at"]),
                 memory.get("access_count", 0),
                 memory["token_cost"],
-                embedding_json,
+                embedding,
                 memory.get("feedback_multiplier", 1.0)
             ))
             conn.commit()
@@ -75,7 +84,17 @@ class SQLiteMemoryStore:
             memories = []
             for row in rows:
                 mem = dict(row)
-                mem["embedding"] = json.loads(row["embedding"]) if row["embedding"] else []
+                content = mem["content"]
+                embedding = mem["embedding"]
+                
+                if self.encryption_provider:
+                    content = self.encryption_provider.decrypt(content)
+                    embedding = json.loads(self.encryption_provider.decrypt(embedding))
+                else:
+                    embedding = json.loads(embedding) if embedding else []
+                    
+                mem["content"] = content
+                mem["embedding"] = embedding
                 memories.append(mem)
             return memories
 
@@ -87,7 +106,17 @@ class SQLiteMemoryStore:
             row = cursor.fetchone()
             if row:
                 mem = dict(row)
-                mem["embedding"] = json.loads(row["embedding"]) if row["embedding"] else []
+                content = mem["content"]
+                embedding = mem["embedding"]
+                
+                if self.encryption_provider:
+                    content = self.encryption_provider.decrypt(content)
+                    embedding = json.loads(self.encryption_provider.decrypt(embedding))
+                else:
+                    embedding = json.loads(embedding) if embedding else []
+                
+                mem["content"] = content
+                mem["embedding"] = embedding
                 return mem
             return None
 
@@ -119,8 +148,26 @@ class SQLiteMemoryStore:
             cursor.execute("DELETE FROM memories WHERE id = ?", (memory_id,))
             conn.commit()
 
-    def count_memories(self) -> int:
+    def get_memories_by_category(self, category: str) -> List[Dict[str, Any]]:
+        """Retrieves memories filtered by category, utilizing the category index."""
         with self._get_connection() as conn:
             cursor = conn.cursor()
-            cursor.execute("SELECT COUNT(*) FROM memories")
-            return cursor.fetchone()[0]
+            cursor.execute("SELECT * FROM memories WHERE category = ?", (category,))
+            rows = cursor.fetchall()
+            
+            memories = []
+            for row in rows:
+                mem = dict(row)
+                content = mem["content"]
+                embedding = mem["embedding"]
+                
+                if self.encryption_provider:
+                    content = self.encryption_provider.decrypt(content)
+                    embedding = json.loads(self.encryption_provider.decrypt(embedding))
+                else:
+                    embedding = json.loads(embedding) if embedding else []
+                    
+                mem["content"] = content
+                mem["embedding"] = embedding
+                memories.append(mem)
+            return memories
