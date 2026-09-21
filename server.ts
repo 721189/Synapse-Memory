@@ -12,31 +12,34 @@ const proxy = httpProxy.createProxyServer();
 
 app.use(express.json());
 
-// Spawn Python FastAPI backend if available
+const PYTHON_PORT = parseInt(process.env.PYTHON_PORT || "8008", 10);
+const PYTHON_URL = `http://127.0.0.1:${PYTHON_PORT}`;
+
+// Spawn Python FastAPI backend if available on dedicated internal port
 try {
   const pythonBackend = spawn(
     "python3",
-    ["-m", "uvicorn", "synapse_memory.api.fastapi_server:app", "--port", "8000", "--host", "127.0.0.1"],
+    ["-m", "uvicorn", "synapse_memory.api.fastapi_server:app", "--port", String(PYTHON_PORT), "--host", "127.0.0.1"],
     {
       cwd: "./sdk/python",
       stdio: "ignore",
       env: { ...process.env, PYTHONPATH: "./" }
     }
   );
-  pythonBackend.on("error", (err) => {
-    console.log("Python backend not available; running with native TypeScript core:", err.message);
+  pythonBackend.on("error", () => {
+    // Graceful fallback to native TypeScript core
   });
 } catch (e) {
-  console.log("Python spawn bypassed; using native TypeScript core.");
+  // Silent fallback
 }
 
 proxy.on("error", (err, req, res) => {
-  console.warn("Python backend proxy unavailable:", err.message);
+  // Silent fallback handling
 });
 
 // Forward /api/py to python FastAPI if called, otherwise fall back
 app.use("/api/py", (req, res, next) => {
-  proxy.web(req, res, { target: "http://127.0.0.1:8000" }, () => {
+  proxy.web(req, res, { target: PYTHON_URL }, () => {
     res.status(503).json({ error: "Python FastAPI backend currently offline. Use native /api endpoints." });
   });
 });
@@ -227,17 +230,19 @@ let telemetryLogs: Array<{
 // Unified Python FastAPI Backend Integration Helper
 async function callPythonBackend(endpoint: string, options: any = {}): Promise<any> {
   const apiKey = process.env.SYNAPSE_API_KEY || "syn_live_master_gateway";
-  const url = `http://127.0.0.1:8000${endpoint}`;
+  const url = `${PYTHON_URL}${endpoint}`;
   const headers = {
     "Content-Type": "application/json",
     "X-Synapse-API-Key": apiKey,
+    "Authorization": `Bearer ${apiKey}`,
     ...(options.headers || {})
   };
   try {
-    const res = await fetch(url, { ...options, headers });
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 800);
+    const res = await fetch(url, { ...options, headers, signal: controller.signal });
+    clearTimeout(timeoutId);
     if (!res.ok) {
-      const errText = await res.text();
-      console.warn(`Python API responded with ${res.status}: ${errText}`);
       return null;
     }
     return await res.json();

@@ -438,4 +438,4 @@ def scrub_pii(payload: Dict[str, Any]):
 
 
 if __name__ == "__main__":
-    uvicorn.run("fastapi_server:app", host="127.0.0.1", port=8000, reload=True)  # nosec B104
+    uvicorn.run("fastapi_server:app", host="127.0.0.1", port=int(os.environ.get("PORT", 8008)), reload=True)  # nosec B104
