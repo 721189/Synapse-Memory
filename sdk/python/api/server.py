@@ -15,7 +15,7 @@ class MemoryIngest(BaseModel):
 
 @app.post("/ingest")
 async def ingest(request: MemoryIngest):
-    m_id, status, cost = await manager.ingest_async(request.content, category=request.category)
+    m_id, status, cost = manager.ingest_with_deduplication(request.content, category=request.category)
     return {"id": m_id, "status": status, "token_cost": cost}
 
 @app.get("/health")

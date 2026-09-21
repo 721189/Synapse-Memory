@@ -61,3 +61,4 @@ synapse-cli = "synapse_memory.cli.synapse_cli:main"
 
 [tool.setuptools.packages.find]
 where = ["."]
+include = ["synapse_memory*"]

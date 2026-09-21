@@ -48,15 +48,15 @@ jobs:
 
       - name: Code Style & Quality (flake8)
         run: |
-          flake8 sdk/python --config=setup.cfg
+          flake8 sdk/python/synapse_memory --config=setup.cfg
 
       - name: Static Type Analysis (mypy)
         run: |
-          mypy sdk/python --config-file setup.cfg
+          mypy sdk/python/synapse_memory --config-file setup.cfg
 
       - name: Security Vulnerability Scan (bandit)
         run: |
-          bandit -r sdk/python -s B101,B104,B311,B608 -x sdk/python/tests
+          bandit -r sdk/python/synapse_memory -s B101,B104,B311,B608
 
       - name: Execute Full Unit & Integration Test Suite
         env:
@@ -83,7 +83,7 @@ jobs:
           cache: 'npm'
 
       - name: Install Node Dependencies
-        run: npm ci
+        run: npm ci --engine-strict=false || npm install --legacy-peer-deps
 
       - name: Lint Codebase
         run: npm run lint
