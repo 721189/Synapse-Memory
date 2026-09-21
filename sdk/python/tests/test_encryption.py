@@ -1,7 +1,9 @@
+import os
+import sqlite3
 import unittest
 from synapse_memory.core.sqlite_db import SQLiteMemoryStore
 from synapse_memory.core.encryption import FernetEncryptionProvider
-import os
+
 
 class TestEncryption(unittest.TestCase):
     def setUp(self):
@@ -26,7 +28,6 @@ class TestEncryption(unittest.TestCase):
         self.store.insert_memory(memory)
 
         # Verify content in DB is encrypted
-        import sqlite3
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
         cursor.execute("SELECT content FROM memories WHERE id='mem_1'")
@@ -39,5 +40,7 @@ class TestEncryption(unittest.TestCase):
         self.assertEqual(retrieved["content"], "Secret cognitive memory")
         self.assertEqual(retrieved["embedding"], [0.1, 0.2, 0.3])
 
+
 if __name__ == '__main__':
     unittest.main()
+

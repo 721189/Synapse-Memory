@@ -1,6 +1,7 @@
 import unittest
 from synapse_memory.core.deduplicator import Deduplicator, Action
 
+
 class TestDeduplicator(unittest.TestCase):
     def setUp(self):
         self.deduplicator = Deduplicator({"interaction": 0.8, "infrastructure": 0.9}, default_threshold=0.85)
@@ -30,5 +31,7 @@ class TestDeduplicator(unittest.TestCase):
         result = self.deduplicator.check_duplicate(new, existing)
         self.assertEqual(result.action, Action.REJECT)
 
+
 if __name__ == '__main__':
     unittest.main()
+

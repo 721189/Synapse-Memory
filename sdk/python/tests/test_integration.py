@@ -1,6 +1,7 @@
+import os
 import unittest
 from synapse_memory import MemoryManager, SQLiteMemoryStore, SynapseEmbedder
-import asyncio
+
 
 class TestIntegration(unittest.TestCase):
     def setUp(self):
@@ -10,7 +11,6 @@ class TestIntegration(unittest.TestCase):
         self.manager = MemoryManager(store=self.store, embedder=self.embedder, max_record_limit=5)
 
     def tearDown(self):
-        import os
         if os.path.exists(self.db_path):
             os.remove(self.db_path)
 
@@ -27,5 +27,7 @@ class TestIntegration(unittest.TestCase):
         memories = self.store.get_all_memories()
         self.assertEqual(len(memories), 1)
 
+
 if __name__ == '__main__':
     unittest.main()
+

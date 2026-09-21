@@ -1,6 +1,7 @@
 import unittest
 from synapse_memory.core.knapsack_packer import KnapsackPacker
 
+
 class TestKnapsackPacker(unittest.TestCase):
     def setUp(self):
         self.packer = KnapsackPacker(token_budget=100)
@@ -12,22 +13,19 @@ class TestKnapsackPacker(unittest.TestCase):
         ]
 
     def test_dp_packing(self):
-        # Budget 100
-        # Optimal: m1+m2+m4 = 30+40+20=90 cost, value 0.9+0.8+0.7=2.4
-        # vs m3+m1 = 80 cost, value 1.85
-        # vs m3+m4+m1 = 100 cost, value 2.55
-        packed_ids = self.packer.pack(self.memories)
-
+        packed = self.packer.pack(self.memories)
+        packed_ids = [m["id"] if isinstance(m, dict) else m for m in packed]
         total_cost = sum(m["token_cost"] for m in self.memories if m["id"] in packed_ids)
         self.assertLessEqual(total_cost, 100)
 
     def test_budget_safety(self):
-        # Adversarial: budget too small
         packer = KnapsackPacker(token_budget=10)
-        packed_ids = self.packer.pack(self.memories)
-        # Should be empty or small
+        packed = packer.pack(self.memories)
+        packed_ids = [m["id"] if isinstance(m, dict) else m for m in packed]
         total_cost = sum(m["token_cost"] for m in self.memories if m["id"] in packed_ids)
-        self.assertLessEqual(total_cost, 100)
+        self.assertLessEqual(total_cost, 10)
+
 
 if __name__ == '__main__':
     unittest.main()
+

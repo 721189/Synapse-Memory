@@ -1,7 +1,8 @@
-import unittest
 import time
+import unittest
 from synapse_memory.core.pruner import PruningEngine, TTLPruningPolicy, ConfidencePruningPolicy, CapacityPruningPolicy
 from synapse_memory.core.decay_engine import DecayEngine
+
 
 class TestPruner(unittest.TestCase):
     def setUp(self):
@@ -45,5 +46,7 @@ class TestPruner(unittest.TestCase):
         self.assertIn("m2", targets)
         self.assertIn("m3", targets)
 
+
 if __name__ == '__main__':
     unittest.main()
+
