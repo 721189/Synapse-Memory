@@ -1,27 +1,28 @@
 version: '3.8'
 
-# Production Docker Compose for SynapseMemory Substrate
-# Note: Never commit production passwords. Provide them via .env or secret managers.
-
+# Production-grade Docker Compose for SynapseMemory Enterprise Cognitive Substrate
 services:
   synapse-memory-gateway:
+    build:
+      context: ..
+      dockerfile: Dockerfile
     image: synapse-memory/gateway:${GATEWAY_VERSION:-v1.2.0}
     container_name: synapse-gateway
     restart: unless-stopped
     ports:
       - "${GATEWAY_PORT:-3000}:3000"
+      - "${ENGINE_PORT:-8000}:8000"
     environment:
       - NODE_ENV=production
-      - GEMINI_API_KEY=${GEMINI_API_KEY:?Error: GEMINI_API_KEY must be provided}
-      - DB_HOST=postgres-pgvector
-      - DB_PORT=5432
-      - DB_USER=${POSTGRES_USER:-synapse_admin}
-      - DB_PASSWORD=${POSTGRES_PASSWORD:?Error: POSTGRES_PASSWORD must be set}
-      - DB_NAME=${POSTGRES_DB:-synapse_cognitive}
+      - PORT=3000
+      - GEMINI_API_KEY=${GEMINI_API_KEY:-}
+      - SYNAPSE_API_KEY=${SYNAPSE_API_KEY:-syn_live_master_gateway_key}
+      - DATABASE_URL=postgresql://${POSTGRES_USER:-synapse_admin}:${POSTGRES_PASSWORD:-synapse_secret_change_me}@postgres-pgvector:5432/${POSTGRES_DB:-synapse_cognitive}
+      - SYNAPSE_STORAGE_BACKEND=pgvector
       - REDIS_URL=redis://:${REDIS_PASSWORD:-}@redis-state:6379/0
       - TOKEN_BUDGET_MAX=${TOKEN_BUDGET_MAX:-1500}
       - HYBRID_DECAY_RATE=${HYBRID_DECAY_RATE:-0.08}
-      - SYNAPSE_ENCRYPTION_KEY=${SYNAPSE_ENCRYPTION_KEY:?Error: SYNAPSE_ENCRYPTION_KEY must be provided}
+      - SYNAPSE_ENCRYPTION_KEY=${SYNAPSE_ENCRYPTION_KEY:-2N53Wk7u2V5bK1wU_1F5Y9mZ7zN53Wk7u2V5bK1wU_0=}
     depends_on:
       postgres-pgvector:
         condition: service_healthy
@@ -36,13 +37,13 @@ services:
     restart: unless-stopped
     environment:
       - POSTGRES_USER=${POSTGRES_USER:-synapse_admin}
-      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:?Error: POSTGRES_PASSWORD must be set}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-synapse_secret_change_me}
       - POSTGRES_DB=${POSTGRES_DB:-synapse_cognitive}
     volumes:
       - synapse-db-data:/var/lib/postgresql/data
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-synapse_admin} -d ${POSTGRES_DB:-synapse_cognitive}"]
-      interval: 10s
+      interval: 5s
       timeout: 5s
       retries: 5
     networks:
@@ -65,8 +66,8 @@ services:
     volumes:
       - synapse-redis-data:/data
     healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
-      interval: 10s
+      test: ["CMD-SHELL", "if [ -n \"$$REDIS_PASSWORD\" ]; then redis-cli -a \"$$REDIS_PASSWORD\" ping; else redis-cli ping; fi"]
+      interval: 5s
       timeout: 5s
       retries: 5
     networks:

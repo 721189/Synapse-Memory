@@ -48,7 +48,7 @@ class Deduplicator:
 
     def check_duplicate(self, new_mem: Dict[str, Any], existing_mems: List[Dict[str, Any]]) -> MergeResult:
         threshold = self._get_threshold(new_mem.get("category", "interaction"))
-        
+
         for existing in existing_mems:
             # 1. Exact Match Check (e.g., hash of content or specific ID)
             if new_mem.get("id") == existing.get("id"):
@@ -56,21 +56,21 @@ class Deduplicator:
 
             # 2. Lexical Similarity (Jaccard)
             lexical_sim = self._jaccard_similarity(new_mem["content"], existing["content"])
-            
+
             # 3. Semantic Similarity (Cosine)
             semantic_sim = self._cosine_similarity(new_mem.get("embedding", []), existing.get("embedding", []))
-            
+
             # 4. Conflict & Supersession Detection (Production-Grade Heuristic)
             if semantic_sim > threshold:
                 # If high semantic similarity, compare metadata to decide supersession
                 new_conf = new_mem.get("confidence", 0.5)
                 old_conf = existing.get("confidence", 0.5)
-                
+
                 # If new memory has significantly higher confidence, suggest supersession (merge)
                 if new_conf > old_conf + 0.1:
-                     return MergeResult(Action.MERGE, existing["id"], "Higher confidence supersession", 
+                     return MergeResult(Action.MERGE, existing["id"], "Higher confidence supersession",
                                         {"new_conf": new_conf, "old_conf": old_conf})
-                
+
                 # Check for explicit contradiction in content
                 if ("true" in new_mem["content"].lower() and "false" in existing["content"].lower()) or \
                    ("false" in new_mem["content"].lower() and "true" in existing["content"].lower()):
@@ -78,7 +78,7 @@ class Deduplicator:
 
             # 5. Threshold Decision
             if semantic_sim >= threshold or (lexical_sim > 0.9 and semantic_sim > 0.7):
-                return MergeResult(Action.MERGE, existing["id"], "Semantic/Lexical similarity threshold exceeded", 
+                return MergeResult(Action.MERGE, existing["id"], "Semantic/Lexical similarity threshold exceeded",
                                    {"semantic_sim": semantic_sim, "lexical_sim": lexical_sim})
-        
+
         return MergeResult(Action.CREATE, None, "No duplicates found", {})

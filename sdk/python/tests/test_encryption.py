@@ -24,7 +24,7 @@ class TestEncryption(unittest.TestCase):
             "embedding": [0.1, 0.2, 0.3]
         }
         self.store.insert_memory(memory)
-        
+
         # Verify content in DB is encrypted
         import sqlite3
         conn = sqlite3.connect(self.db_path)
@@ -33,7 +33,7 @@ class TestEncryption(unittest.TestCase):
         raw_content = cursor.fetchone()[0]
         self.assertNotEqual(raw_content, "Secret cognitive memory")
         conn.close()
-        
+
         # Retrieve and verify decryption
         retrieved = self.store.get_memory_by_id("mem_1")
         self.assertEqual(retrieved["content"], "Secret cognitive memory")

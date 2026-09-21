@@ -1,7 +1,6 @@
 """
-Production PostgreSQL + pgvector + HNSW Memory Store.
-Provides native database-level vector indexing, HNSW cosine distance search,
-and PostgreSQL full-text search reciprocal rank fusion.
+Production PostgreSQL + pgvector + HNSW Memory Store with Database-Level Multi-Tenancy
+and PostgreSQL Row-Level Security (RLS).
 """
 
 import json
@@ -38,7 +37,7 @@ class PGVectorMemoryStore:
     """
     Enterprise-grade Postgres + pgvector + HNSW storage engine.
     Executes vector similarity search directly in SQL using HNSW graph indexes
-    with optional payload encryption and PostgreSQL full-text search.
+    with database-level multi-tenancy, Row-Level Security (RLS), and payload encryption.
     """
 
     def __init__(
@@ -92,14 +91,15 @@ class PGVectorMemoryStore:
         conn = self._get_connection()
         try:
             with conn.cursor() as cur:
-                # 1. Enable pgvector extension
+                # 1. Enable extensions
                 cur.execute("CREATE EXTENSION IF NOT EXISTS vector;")
                 cur.execute("CREATE EXTENSION IF NOT EXISTS pg_trgm;")
 
-                # 2. Main cognitive memories table
+                # 2. Main cognitive memories table with tenant_id
                 cur.execute(f"""
                     CREATE TABLE IF NOT EXISTS memories (
                         id VARCHAR(128) PRIMARY KEY,
+                        tenant_id VARCHAR(128) NOT NULL DEFAULT 'default',
                         content TEXT NOT NULL,
                         category VARCHAR(64) NOT NULL,
                         confidence REAL NOT NULL,
@@ -112,17 +112,57 @@ class PGVectorMemoryStore:
                     );
                 """)
 
-                # 3. Create HNSW index for high-scale O(log N) vector retrieval
+                # 3. Column migration if table already exists
+                cur.execute("""
+                    DO $$
+                    BEGIN
+                        IF NOT EXISTS (
+                            SELECT 1 FROM information_schema.columns
+                            WHERE table_name='memories' AND column_name='tenant_id'
+                        ) THEN
+                            ALTER TABLE memories ADD COLUMN tenant_id VARCHAR(128) NOT NULL DEFAULT 'default';
+                        END IF;
+                    END $$;
+                """)
+
+                # 4. HNSW vector index
                 cur.execute(f"""
                     CREATE INDEX IF NOT EXISTS idx_memories_hnsw
                     ON memories USING hnsw (embedding vector_cosine_ops)
                     WITH (m = {self.m}, ef_construction = {self.ef_construction});
                 """)
 
-                # 4. Standard relational indexes for composite pruning and filtering
+                # 5. Relational and tenant indexes
+                cur.execute("CREATE INDEX IF NOT EXISTS idx_memories_tenant ON memories(tenant_id);")
+                cur.execute("CREATE INDEX IF NOT EXISTS idx_memories_tenant_cat ON memories(tenant_id, category);")
                 cur.execute("CREATE INDEX IF NOT EXISTS idx_memories_cat ON memories(category);")
                 cur.execute("CREATE INDEX IF NOT EXISTS idx_memories_created ON memories(created_at DESC);")
                 cur.execute("CREATE INDEX IF NOT EXISTS idx_memories_access ON memories(last_accessed_at DESC);")
+
+                # 6. Database Row-Level Security (RLS)
+                cur.execute("ALTER TABLE memories ENABLE ROW LEVEL SECURITY;")
+                cur.execute("""
+                    DO $$
+                    BEGIN
+                        IF NOT EXISTS (
+                            SELECT 1 FROM pg_policies WHERE tablename = 'memories' AND policyname = 'tenant_isolation_policy'
+                        ) THEN
+                            CREATE POLICY tenant_isolation_policy ON memories
+                            FOR ALL
+                            USING (
+                                current_setting('app.current_tenant', true) IS NULL
+                                OR current_setting('app.current_tenant', true) = ''
+                                OR tenant_id = current_setting('app.current_tenant', true)
+                            )
+                            WITH CHECK (
+                                current_setting('app.current_tenant', true) IS NULL
+                                OR current_setting('app.current_tenant', true) = ''
+                                OR tenant_id = current_setting('app.current_tenant', true)
+                            );
+                        END IF;
+                    END $$;
+                """)
+
                 conn.commit()
         except Exception as e:
             conn.rollback()
@@ -146,9 +186,16 @@ class PGVectorMemoryStore:
             except Exception:
                 pass
 
+    def _set_tenant_context(self, cur: Any, tenant_id: Optional[str]) -> None:
+        if tenant_id:
+            cur.execute("SET LOCAL app.current_tenant = %s;", (tenant_id,))
+
     def insert_memory(self, memory: Dict[str, Any]) -> None:
-        """Inserts memory with embedding vector into pgvector table."""
-        self._fallback_cache[memory["id"]] = memory
+        """Inserts memory with embedding vector into pgvector table with tenant isolation."""
+        tenant_id = memory.get("tenant_id") or memory.get("tenantId") or "default"
+        mem_copy = memory.copy()
+        mem_copy["tenant_id"] = tenant_id
+        self._fallback_cache[memory["id"]] = mem_copy
 
         if not self._connected or not HAS_PSYCOPG2:
             return
@@ -156,15 +203,17 @@ class PGVectorMemoryStore:
         conn = self._get_connection()
         try:
             with conn.cursor() as cur:
+                self._set_tenant_context(cur, tenant_id)
                 emb = memory.get("embedding", [])
                 emb_str = f"[{','.join(str(float(x)) for x in emb)}]" if emb else None
                 cur.execute("""
                     INSERT INTO memories (
-                        id, content, category, confidence, created_at,
+                        id, tenant_id, content, category, confidence, created_at,
                         last_accessed_at, access_count, token_cost,
                         feedback_multiplier, embedding
-                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                     ON CONFLICT (id) DO UPDATE SET
+                        tenant_id = EXCLUDED.tenant_id,
                         content = EXCLUDED.content,
                         category = EXCLUDED.category,
                         confidence = EXCLUDED.confidence,
@@ -175,6 +224,7 @@ class PGVectorMemoryStore:
                         embedding = EXCLUDED.embedding;
                 """, (
                     memory["id"],
+                    tenant_id,
                     memory["content"],
                     memory["category"],
                     memory["confidence"],
@@ -192,14 +242,21 @@ class PGVectorMemoryStore:
         finally:
             self._return_connection(conn)
 
-    def get_memory_by_id(self, memory_id: str) -> Optional[Dict[str, Any]]:
+    def get_memory_by_id(self, memory_id: str, tenant_id: Optional[str] = None) -> Optional[Dict[str, Any]]:
         if not self._connected or not HAS_PSYCOPG2:
-            return self._fallback_cache.get(memory_id)
+            mem = self._fallback_cache.get(memory_id)
+            if mem and tenant_id and mem.get("tenant_id") != tenant_id:
+                return None
+            return mem
 
         conn = self._get_connection()
         try:
             with conn.cursor(cursor_factory=RealDictCursor) as cur:
-                cur.execute("SELECT * FROM memories WHERE id = %s", (memory_id,))
+                self._set_tenant_context(cur, tenant_id)
+                if tenant_id:
+                    cur.execute("SELECT * FROM memories WHERE id = %s AND tenant_id = %s", (memory_id, tenant_id))
+                else:
+                    cur.execute("SELECT * FROM memories WHERE id = %s", (memory_id,))
                 row = cur.fetchone()
                 if row:
                     mem = dict(row)
@@ -213,20 +270,100 @@ class PGVectorMemoryStore:
         finally:
             self._return_connection(conn)
 
+    def get_memories_by_category(self, category: str, tenant_id: Optional[str] = None) -> List[Dict[str, Any]]:
+        if not self._connected or not HAS_PSYCOPG2:
+            return [
+                m for m in self._fallback_cache.values()
+                if m.get("category") == category and (tenant_id is None or m.get("tenant_id") == tenant_id)
+            ]
+
+        conn = self._get_connection()
+        try:
+            with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                self._set_tenant_context(cur, tenant_id)
+                if tenant_id:
+                    cur.execute("SELECT * FROM memories WHERE category = %s AND tenant_id = %s", (category, tenant_id))
+                else:
+                    cur.execute("SELECT * FROM memories WHERE category = %s", (category,))
+                rows = cur.fetchall()
+                results = []
+                for r in rows:
+                    mem = dict(r)
+                    if isinstance(mem.get("embedding"), str):
+                        try:
+                            mem["embedding"] = json.loads(mem["embedding"])
+                        except Exception:
+                            pass
+                    results.append(mem)
+                return results
+        finally:
+            self._return_connection(conn)
+
+    def update_access_count(self, memory_id: str, count_increment: int = 1, tenant_id: Optional[str] = None) -> None:
+        if memory_id in self._fallback_cache:
+            self._fallback_cache[memory_id]["access_count"] = (
+                self._fallback_cache[memory_id].get("access_count", 0) + count_increment
+            )
+            self._fallback_cache[memory_id]["last_accessed_at"] = time.time()
+
+        if not self._connected or not HAS_PSYCOPG2:
+            return
+
+        conn = self._get_connection()
+        try:
+            with conn.cursor() as cur:
+                self._set_tenant_context(cur, tenant_id)
+                if tenant_id:
+                    cur.execute("""
+                        UPDATE memories
+                        SET access_count = access_count + %s, last_accessed_at = %s
+                        WHERE id = %s AND tenant_id = %s
+                    """, (count_increment, time.time(), memory_id, tenant_id))
+                else:
+                    cur.execute("""
+                        UPDATE memories
+                        SET access_count = access_count + %s, last_accessed_at = %s
+                        WHERE id = %s
+                    """, (count_increment, time.time(), memory_id))
+                conn.commit()
+        finally:
+            self._return_connection(conn)
+
+    def update_confidence(self, memory_id: str, new_confidence: float, tenant_id: Optional[str] = None) -> None:
+        if memory_id in self._fallback_cache:
+            self._fallback_cache[memory_id]["confidence"] = new_confidence
+
+        if not self._connected or not HAS_PSYCOPG2:
+            return
+
+        conn = self._get_connection()
+        try:
+            with conn.cursor() as cur:
+                self._set_tenant_context(cur, tenant_id)
+                if tenant_id:
+                    cur.execute("UPDATE memories SET confidence = %s WHERE id = %s AND tenant_id = %s", (new_confidence, memory_id, tenant_id))
+                else:
+                    cur.execute("UPDATE memories SET confidence = %s WHERE id = %s", (new_confidence, memory_id))
+                conn.commit()
+        finally:
+            self._return_connection(conn)
+
     def vector_search(
         self,
         query_vec: List[float],
         top_k: int = 10,
-        category: Optional[str] = None
+        category: Optional[str] = None,
+        tenant_id: Optional[str] = None
     ) -> List[Dict[str, Any]]:
         """
         Executes native pgvector cosine distance search using HNSW index:
         ORDER BY embedding <=> query_vec::vector LIMIT top_k
         """
         if not self._connected or not HAS_PSYCOPG2:
-            # Emulate vector search on fallback cache
             results = []
             for mem in self._fallback_cache.values():
+                if tenant_id and mem.get("tenant_id") != tenant_id:
+                    continue
                 if category and mem.get("category") != category:
                     continue
                 v = mem.get("embedding", [])
@@ -247,28 +384,31 @@ class PGVectorMemoryStore:
         conn = self._get_connection()
         try:
             with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                self._set_tenant_context(cur, tenant_id)
                 emb_str = f"[{','.join(str(float(x)) for x in query_vec)}]"
+
+                conditions = []
+                params: List[Any] = [emb_str]
+                if tenant_id:
+                    conditions.append("tenant_id = %s")
+                    params.append(tenant_id)
                 if category:
-                    query = """
-                        SELECT id, content, category, confidence, created_at,
-                               last_accessed_at, access_count, token_cost, feedback_multiplier,
-                               1 - (embedding <=> %s::vector) AS cosine_similarity
-                        FROM memories
-                        WHERE category = %s
-                        ORDER BY embedding <=> %s::vector
-                        LIMIT %s
-                    """
-                    cur.execute(query, (emb_str, category, emb_str, top_k))
-                else:
-                    query = """
-                        SELECT id, content, category, confidence, created_at,
-                               last_accessed_at, access_count, token_cost, feedback_multiplier,
-                               1 - (embedding <=> %s::vector) AS cosine_similarity
-                        FROM memories
-                        ORDER BY embedding <=> %s::vector
-                        LIMIT %s
-                    """
-                    cur.execute(query, (emb_str, emb_str, top_k))
+                    conditions.append("category = %s")
+                    params.append(category)
+
+                where_clause = ("WHERE " + " AND ".join(conditions)) if conditions else ""
+                params.extend([emb_str, top_k])
+
+                query = f"""
+                    SELECT id, tenant_id, content, category, confidence, created_at,
+                           last_accessed_at, access_count, token_cost, feedback_multiplier,
+                           1 - (embedding <=> %s::vector) AS cosine_similarity
+                    FROM memories
+                    {where_clause}
+                    ORDER BY embedding <=> %s::vector
+                    LIMIT %s
+                """
+                cur.execute(query, tuple(params))
                 rows = cur.fetchall()
                 results = []
                 for r in rows:
@@ -279,37 +419,73 @@ class PGVectorMemoryStore:
         finally:
             self._return_connection(conn)
 
-    def count_memories(self) -> int:
+    def count_memories(self, tenant_id: Optional[str] = None) -> int:
         if not self._connected or not HAS_PSYCOPG2:
+            if tenant_id:
+                return len([m for m in self._fallback_cache.values() if m.get("tenant_id") == tenant_id])
             return len(self._fallback_cache)
         conn = self._get_connection()
         try:
             with conn.cursor() as cur:
-                cur.execute("SELECT count(*) FROM memories;")
+                self._set_tenant_context(cur, tenant_id)
+                if tenant_id:
+                    cur.execute("SELECT count(*) FROM memories WHERE tenant_id = %s;", (tenant_id,))
+                else:
+                    cur.execute("SELECT count(*) FROM memories;")
                 return int(cur.fetchone()[0])
         finally:
             self._return_connection(conn)
 
-    def get_all_memories(self) -> List[Dict[str, Any]]:
+    def get_all_memories(self, tenant_id: Optional[str] = None) -> List[Dict[str, Any]]:
         if not self._connected or not HAS_PSYCOPG2:
+            if tenant_id:
+                return [m for m in self._fallback_cache.values() if m.get("tenant_id") == tenant_id]
             return list(self._fallback_cache.values())
         conn = self._get_connection()
         try:
             with conn.cursor(cursor_factory=RealDictCursor) as cur:
-                cur.execute("SELECT * FROM memories ORDER BY created_at DESC;")
+                self._set_tenant_context(cur, tenant_id)
+                if tenant_id:
+                    cur.execute("SELECT * FROM memories WHERE tenant_id = %s ORDER BY created_at DESC;", (tenant_id,))
+                else:
+                    cur.execute("SELECT * FROM memories ORDER BY created_at DESC;")
                 rows = cur.fetchall()
                 return [dict(r) for r in rows]
         finally:
             self._return_connection(conn)
 
-    def delete_memory(self, memory_id: str) -> None:
+    def delete_memory(self, memory_id: str, tenant_id: Optional[str] = None) -> None:
         self._fallback_cache.pop(memory_id, None)
         if not self._connected or not HAS_PSYCOPG2:
             return
         conn = self._get_connection()
         try:
             with conn.cursor() as cur:
-                cur.execute("DELETE FROM memories WHERE id = %s;", (memory_id,))
+                self._set_tenant_context(cur, tenant_id)
+                if tenant_id:
+                    cur.execute("DELETE FROM memories WHERE id = %s AND tenant_id = %s;", (memory_id, tenant_id))
+                else:
+                    cur.execute("DELETE FROM memories WHERE id = %s;", (memory_id,))
+                conn.commit()
+        finally:
+            self._return_connection(conn)
+
+    def clear_memories(self, tenant_id: Optional[str] = None) -> None:
+        if tenant_id:
+            self._fallback_cache = {k: v for k, v in self._fallback_cache.items() if v.get("tenant_id") != tenant_id}
+        else:
+            self._fallback_cache.clear()
+
+        if not self._connected or not HAS_PSYCOPG2:
+            return
+        conn = self._get_connection()
+        try:
+            with conn.cursor() as cur:
+                self._set_tenant_context(cur, tenant_id)
+                if tenant_id:
+                    cur.execute("DELETE FROM memories WHERE tenant_id = %s;", (tenant_id,))
+                else:
+                    cur.execute("DELETE FROM memories;")
                 conn.commit()
         finally:
             self._return_connection(conn)

@@ -1,9 +1,9 @@
 import os
 from typing import List
 from synapse_memory.core.embedding_provider import (
-    EmbeddingManager, 
-    LocalEmbeddingProvider, 
-    GeminiEmbeddingProvider, 
+    EmbeddingManager,
+    LocalEmbeddingProvider,
+    GeminiEmbeddingProvider,
     OpenAIEmbeddingProvider,
     SentenceTransformerEmbeddingProvider
 )
@@ -18,7 +18,7 @@ class SynapseEmbedder:
         self.provider_name = provider.lower()
         self.gemini_key = os.getenv("GEMINI_API_KEY", "")
         self.openai_key = os.getenv("OPENAI_API_KEY", "")
-        
+
         provider_instance = self._get_provider()
         self.manager = EmbeddingManager(provider_instance)
 

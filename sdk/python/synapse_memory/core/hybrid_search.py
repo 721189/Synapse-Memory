@@ -8,7 +8,7 @@ def _tokenize(text: str) -> List[str]:
 class HybridSearch:
     """
     State-of-the-art Hybrid Information Retrieval Engine.
-    Combines Lexical Sparse Search (real BM25 algorithm) with Dense Cosine 
+    Combines Lexical Sparse Search (real BM25 algorithm) with Dense Cosine
     vector similarity, fused via Reciprocal Rank Fusion (RRF).
     """
 
@@ -55,7 +55,7 @@ class HybridSearch:
                 doc_id = doc["id"]
                 words = tokenized_corpus[doc_id]
                 tf = words.count(term)
-                
+
                 if tf > 0:
                     dl = doc_lengths[doc_id]
                     numerator = tf * (self.k1 + 1.0)
@@ -65,8 +65,8 @@ class HybridSearch:
         return scores
 
     def _calculate_dense_similarities(
-        self, 
-        query_vector: List[float], 
+        self,
+        query_vector: List[float],
         corpus: List[Dict[str, Any]]
     ) -> Dict[str, float]:
         """Calculates true Cosine similarity between query vector and document embeddings."""
@@ -81,22 +81,22 @@ class HybridSearch:
         for doc in corpus:
             doc_id = doc["id"]
             doc_vec = doc.get("embedding", [])
-            
+
             if not doc_vec or len(doc_vec) != len(query_vector):
                 continue
 
             dot_product = sum(q * d for q, d in zip(query_vector, doc_vec))
             norm_d = math.sqrt(sum(d * d for d in doc_vec))
-            
+
             if norm_d > 0.0:
                 similarities[doc_id] = dot_product / (norm_q * norm_d)
 
         return similarities
 
     def fused_search(
-        self, 
-        query: str, 
-        documents: List[Dict[str, Any]], 
+        self,
+        query: str,
+        documents: List[Dict[str, Any]],
         query_vector: Optional[List[float]] = None,
         top_k: int = 10,
         category_filter: Optional[str] = None,
@@ -105,10 +105,10 @@ class HybridSearch:
         """
         Executes unified Reciprocal Rank Fusion (RRF) combining Sparse BM25 and Dense Cosine ranks.
         Provides retrieval explainability via detailed score breakdown.
-        
+
         Formula:
             RRF_Score(d) = 1 / (rrf_k + rank_bm25(d)) + 1 / (rrf_k + rank_dense(d))
-            
+
         Args:
             query: Raw query string.
             documents: List of memory documents.
@@ -123,12 +123,12 @@ class HybridSearch:
             filtered_docs = [d for d in filtered_docs if d.get("category") == category_filter]
         if tenant_filter:
             filtered_docs = [d for d in filtered_docs if d.get("tenant_id") == tenant_filter]
-            
+
         if not filtered_docs:
             return []
 
         query_terms = _tokenize(query)
-        
+
         # 2. Compute pure Lexical BM25 scores and sort to get Sparse ranks
         bm25_scores = self._calculate_bm25_scores(query_terms, filtered_docs)
         sparse_ranking = sorted(filtered_docs, key=lambda x: bm25_scores[x["id"]], reverse=True)
@@ -143,17 +143,17 @@ class HybridSearch:
         results = []
         for doc in filtered_docs:
             doc_id = doc["id"]
-            
+
             # Reciprocal sparse rank score
             rank_s = sparse_ranks.get(doc_id, len(filtered_docs))
             rrf_sparse = 1.0 / (self.rrf_k + rank_s)
-            
+
             # Reciprocal dense rank score
             rank_d = dense_ranks.get(doc_id, len(filtered_docs))
             rrf_dense = 1.0 / (self.rrf_k + rank_d)
 
             fused_score = rrf_sparse + rrf_dense
-            
+
             # Structure Explainability Data
             explanation = {
                 "lexical_score": bm25_scores[doc_id],

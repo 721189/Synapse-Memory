@@ -6,7 +6,7 @@ import time
 import urllib.request
 from abc import ABC, abstractmethod
 from functools import lru_cache
-from typing import List
+from typing import List, Optional
 
 from synapse_memory.core.observability import instrument_operation, log_event
 
@@ -29,11 +29,15 @@ class EmbeddingProvider(ABC):
     def dimension(self) -> int:
         pass
 
+    @property
+    def is_semantic(self) -> bool:
+        return True
 
-class LocalEmbeddingProvider(EmbeddingProvider):
+
+class DeterministicHashEmbeddingProvider(EmbeddingProvider):
     """
-    Local embedding provider for deterministic testing, offline operation,
-    and fast semantic similarity without heavy external model binaries.
+    Local deterministic hash provider for offline unit testing and development.
+    NOTE: This generates deterministic word-frequency hash projections, NOT neural semantic embeddings.
     """
     def __init__(self, dim: int = 128):
         self._dim = dim
@@ -41,6 +45,10 @@ class LocalEmbeddingProvider(EmbeddingProvider):
     @property
     def dimension(self) -> int:
         return self._dim
+
+    @property
+    def is_semantic(self) -> bool:
+        return False
 
     def embed(self, text: str) -> List[float]:
         # Normalize text (lowercase and strip non-alphanumeric characters)
@@ -66,43 +74,62 @@ class LocalEmbeddingProvider(EmbeddingProvider):
         return [self.embed(t) for t in texts]
 
 
+# Alias for backward compatibility
+LocalEmbeddingProvider = DeterministicHashEmbeddingProvider
+
+
 class SentenceTransformerEmbeddingProvider(EmbeddingProvider):
     """
-    Production-grade local embedding provider using sentence-transformers.
-    Gracefully falls back to LocalEmbeddingProvider if the heavy dependency is absent.
+    Production-grade local neural semantic embedding provider using sentence-transformers.
+    Requires: sentence-transformers (pip install 'synapse-memory[local-models]')
     """
-    def __init__(self, model_name: str = "all-MiniLM-L6-v2"):
+    def __init__(self, model_name: str = "all-MiniLM-L6-v2", allow_fallback: bool = True):
         self.model_name = model_name
         self._model = None
-        self._fallback = None
+        self._fallback: Optional[DeterministicHashEmbeddingProvider] = None
+        self._is_using_real_model = False
+
         try:
             from sentence_transformers import SentenceTransformer
             self._model = SentenceTransformer(model_name)
             self._dim = int(self._model.get_sentence_embedding_dimension())
+            self._is_using_real_model = True
+            logger.info(f"Loaded neural embedding model '{model_name}' (dim: {self._dim}).")
         except Exception as err:
+            if not allow_fallback:
+                raise ImportError(
+                    f"Failed to load sentence-transformers model '{model_name}': {err}. "
+                    "Install dependencies with: pip install 'synapse-memory[local-models]'"
+                ) from err
             logger.warning(
-                f"sentence-transformers unavailable ({err}); using local fallback."
+                f"[SynapseEmbedder Warning] sentence-transformers not installed ({err}). "
+                "Falling back to DeterministicHashEmbeddingProvider. "
+                "For production neural embeddings, install with: pip install sentence-transformers"
             )
-            self._fallback = LocalEmbeddingProvider()
+            self._fallback = DeterministicHashEmbeddingProvider()
             self._dim = self._fallback.dimension
 
     @property
     def dimension(self) -> int:
         return self._dim
 
+    @property
+    def is_semantic(self) -> bool:
+        return self._is_using_real_model
+
     @instrument_operation("st_embed")
     def embed(self, text: str) -> List[float]:
         if self._model is not None:
             return self._model.encode(text).tolist()
         if self._fallback is None:
-            self._fallback = LocalEmbeddingProvider()
+            self._fallback = DeterministicHashEmbeddingProvider()
         return self._fallback.embed(text)
 
     def embed_batch(self, texts: List[str]) -> List[List[float]]:
         if self._model is not None:
             return self._model.encode(texts).tolist()
         if self._fallback is None:
-            self._fallback = LocalEmbeddingProvider()
+            self._fallback = DeterministicHashEmbeddingProvider()
         return self._fallback.embed_batch(texts)
 
 
@@ -114,6 +141,10 @@ class GeminiEmbeddingProvider(EmbeddingProvider):
     @property
     def dimension(self) -> int:
         return self._dim
+
+    @property
+    def is_semantic(self) -> bool:
+        return True
 
     @instrument_operation("gemini_embed")
     def embed(self, text: str) -> List[float]:
@@ -139,13 +170,18 @@ class GeminiEmbeddingProvider(EmbeddingProvider):
 
 
 class OpenAIEmbeddingProvider(EmbeddingProvider):
-    def __init__(self, api_key: str, dim: int = 1536):
+    def __init__(self, api_key: str, model: str = "text-embedding-3-small", dim: int = 1536):
         self.api_key = api_key
+        self.model = model
         self._dim = dim
 
     @property
     def dimension(self) -> int:
         return self._dim
+
+    @property
+    def is_semantic(self) -> bool:
+        return True
 
     @instrument_operation("openai_embed")
     def embed(self, text: str) -> List[float]:
@@ -154,8 +190,10 @@ class OpenAIEmbeddingProvider(EmbeddingProvider):
             "Content-Type": "application/json",
             "Authorization": f"Bearer {self.api_key}"
         }
-        payload = {"input": text, "model": "text-embedding-3-small"}
-
+        payload = {
+            "input": text,
+            "model": self.model
+        }
         req = urllib.request.Request(
             url,
             data=json.dumps(payload).encode("utf-8"),
@@ -171,33 +209,15 @@ class OpenAIEmbeddingProvider(EmbeddingProvider):
 
 
 class EmbeddingManager:
-    """Manager to handle provider switching, caching, and retries."""
-    def __init__(self, provider: EmbeddingProvider, cache_size: int = 1000):
+    """
+    Manages embedding provider operations with caching and observability.
+    """
+    def __init__(self, provider: EmbeddingProvider):
         self.provider = provider
-        self.cache_size = cache_size
-        self._cached_embed = lru_cache(maxsize=cache_size)(self.provider.embed)
 
+    @lru_cache(maxsize=1024)
     def get_embedding(self, text: str) -> List[float]:
-        log_event("embedding_manager", "REQUEST", {"text_len": len(text)})
+        return self.provider.embed(text)
 
-        retries = 3
-        for i in range(retries):
-            try:
-                embedding = self._cached_embed(text)
-                if len(embedding) != self.provider.dimension:
-                    raise ValueError(
-                        f"Dimension mismatch: expected {self.provider.dimension}, "
-                        f"got {len(embedding)}"
-                    )
-                return embedding
-            except Exception as e:
-                log_event(
-                    "embedding_retry",
-                    "RETRYING",
-                    {"attempt": i + 1, "error": str(e)}
-                )
-                if i == retries - 1:
-                    raise e
-                time.sleep(1)
-        return []
-
+    def get_batch_embeddings(self, texts: List[str]) -> List[List[float]]:
+        return self.provider.embed_batch(texts)

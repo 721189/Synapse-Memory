@@ -79,7 +79,7 @@ def run_production_demo():
         c_copy = c.copy()
         c_copy["relevance_score"] = current_score
         decayed_candidates.append(c_copy)
-        
+
         # Display computed weight variations
         print(f"    - Node {c['id']}: Orig Search Relevance={original_score:.3f} | Current Decay Score={current_score:.3f}")
 

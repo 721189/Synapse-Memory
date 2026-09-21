@@ -11,7 +11,8 @@ from synapse_memory.core.encryption import (
 
 class SQLiteMemoryStore:
     """
-    Sovereign SQLite persistence backend with mandatory authenticated encryption at rest.
+    Sovereign SQLite persistence backend with mandatory authenticated encryption at rest
+    and database-level multi-tenant isolation.
     """
 
     def __init__(
@@ -33,12 +34,13 @@ class SQLiteMemoryStore:
         return conn
 
     def _initialize_database(self) -> None:
-        """Creates the memory table with index constraints on creation."""
+        """Creates the memory table with tenant isolation and index constraints on creation."""
         with self._get_connection() as conn:
             cursor = conn.cursor()
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS memories (
                     id TEXT PRIMARY KEY,
+                    tenant_id TEXT NOT NULL DEFAULT 'default',
                     content TEXT NOT NULL,
                     category TEXT NOT NULL,
                     confidence REAL NOT NULL,
@@ -50,6 +52,21 @@ class SQLiteMemoryStore:
                     feedback_multiplier REAL NOT NULL
                 )
             """)
+
+            # Migration check: Ensure tenant_id column exists if table was created in older version
+            cursor.execute("PRAGMA table_info(memories)")
+            columns = [info[1] for info in cursor.fetchall()]
+            if "tenant_id" not in columns:
+                cursor.execute(
+                    "ALTER TABLE memories ADD COLUMN tenant_id TEXT NOT NULL DEFAULT 'default'"
+                )
+
+            cursor.execute(
+                "CREATE INDEX IF NOT EXISTS idx_tenant ON memories(tenant_id)"
+            )
+            cursor.execute(
+                "CREATE INDEX IF NOT EXISTS idx_tenant_category ON memories(tenant_id, category)"
+            )
             cursor.execute(
                 "CREATE INDEX IF NOT EXISTS idx_category ON memories(category)"
             )
@@ -62,22 +79,24 @@ class SQLiteMemoryStore:
             conn.commit()
 
     def insert_memory(self, memory: Dict[str, Any]) -> None:
-        """Inserts a structured memory node into the SQLite table."""
+        """Inserts a structured memory node into the SQLite table with tenant isolation."""
         content = self.encryption_provider.encrypt(memory["content"])
         embedding = self.encryption_provider.encrypt(
             json.dumps(memory.get("embedding", []))
         )
+        tenant_id = memory.get("tenant_id") or memory.get("tenantId") or "default"
 
         with self._get_connection() as conn:
             cursor = conn.cursor()
             cursor.execute("""
                 INSERT OR REPLACE INTO memories (
-                    id, content, category, confidence, created_at,
+                    id, tenant_id, content, category, confidence, created_at,
                     last_accessed_at, access_count, token_cost,
                     embedding, feedback_multiplier
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (
                 memory["id"],
+                tenant_id,
                 content,
                 memory["category"],
                 memory["confidence"],
@@ -90,11 +109,14 @@ class SQLiteMemoryStore:
             ))
             conn.commit()
 
-    def get_all_memories(self) -> List[Dict[str, Any]]:
-        """Retrieves all memories with deserialized embeddings."""
+    def get_all_memories(self, tenant_id: Optional[str] = None) -> List[Dict[str, Any]]:
+        """Retrieves memories with deserialized embeddings, optionally scoped to tenant_id."""
         with self._get_connection() as conn:
             cursor = conn.cursor()
-            cursor.execute("SELECT * FROM memories")
+            if tenant_id is not None:
+                cursor.execute("SELECT * FROM memories WHERE tenant_id = ?", (tenant_id,))
+            else:
+                cursor.execute("SELECT * FROM memories")
             rows = cursor.fetchall()
 
             memories = []
@@ -107,11 +129,17 @@ class SQLiteMemoryStore:
                 memories.append(mem)
             return memories
 
-    def get_memory_by_id(self, memory_id: str) -> Optional[Dict[str, Any]]:
-        """Retrieves a single memory node by its unique primary key ID."""
+    def get_memory_by_id(self, memory_id: str, tenant_id: Optional[str] = None) -> Optional[Dict[str, Any]]:
+        """Retrieves a single memory node by its unique primary key ID and optional tenant scope."""
         with self._get_connection() as conn:
             cursor = conn.cursor()
-            cursor.execute("SELECT * FROM memories WHERE id = ?", (memory_id,))
+            if tenant_id is not None:
+                cursor.execute(
+                    "SELECT * FROM memories WHERE id = ? AND tenant_id = ?",
+                    (memory_id, tenant_id)
+                )
+            else:
+                cursor.execute("SELECT * FROM memories WHERE id = ?", (memory_id,))
             row = cursor.fetchone()
             if row:
                 mem = dict(row)
@@ -123,42 +151,82 @@ class SQLiteMemoryStore:
             return None
 
     def update_access_count(
-        self, memory_id: str, count_increment: int = 1
+        self, memory_id: str, count_increment: int = 1, tenant_id: Optional[str] = None
     ) -> None:
         """Increases the usage metrics for Ebbinghaus stabilization weight tracking."""
         with self._get_connection() as conn:
             cursor = conn.cursor()
-            cursor.execute("""
-                UPDATE memories 
-                SET access_count = access_count + ?, last_accessed_at = ?
-                WHERE id = ?
-            """, (count_increment, time.time(), memory_id))
+            if tenant_id is not None:
+                cursor.execute("""
+                    UPDATE memories
+                    SET access_count = access_count + ?, last_accessed_at = ?
+                    WHERE id = ? AND tenant_id = ?
+                """, (count_increment, time.time(), memory_id, tenant_id))
+            else:
+                cursor.execute("""
+                    UPDATE memories
+                    SET access_count = access_count + ?, last_accessed_at = ?
+                    WHERE id = ?
+                """, (count_increment, time.time(), memory_id))
             conn.commit()
 
-    def update_confidence(self, memory_id: str, new_confidence: float) -> None:
+    def update_confidence(
+        self, memory_id: str, new_confidence: float, tenant_id: Optional[str] = None
+    ) -> None:
         """Saves mutated confidence values resulting from active RLAIF feedback."""
         with self._get_connection() as conn:
             cursor = conn.cursor()
-            cursor.execute("""
-                UPDATE memories 
-                SET confidence = ? 
-                WHERE id = ?
-            """, (new_confidence, memory_id))
+            if tenant_id is not None:
+                cursor.execute("""
+                    UPDATE memories
+                    SET confidence = ?
+                    WHERE id = ? AND tenant_id = ?
+                """, (new_confidence, memory_id, tenant_id))
+            else:
+                cursor.execute("""
+                    UPDATE memories
+                    SET confidence = ?
+                    WHERE id = ?
+                """, (new_confidence, memory_id))
             conn.commit()
 
-    def delete_memory(self, memory_id: str) -> None:
+    def delete_memory(self, memory_id: str, tenant_id: Optional[str] = None) -> None:
         with self._get_connection() as conn:
             cursor = conn.cursor()
-            cursor.execute("DELETE FROM memories WHERE id = ?", (memory_id,))
+            if tenant_id is not None:
+                cursor.execute(
+                    "DELETE FROM memories WHERE id = ? AND tenant_id = ?",
+                    (memory_id, tenant_id)
+                )
+            else:
+                cursor.execute("DELETE FROM memories WHERE id = ?", (memory_id,))
             conn.commit()
 
-    def get_memories_by_category(self, category: str) -> List[Dict[str, Any]]:
+    def clear_memories(self, tenant_id: Optional[str] = None) -> None:
+        """Clears memories for a given tenant or the entire store."""
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            if tenant_id is not None:
+                cursor.execute("DELETE FROM memories WHERE tenant_id = ?", (tenant_id,))
+            else:
+                cursor.execute("DELETE FROM memories")
+            conn.commit()
+
+    def get_memories_by_category(
+        self, category: str, tenant_id: Optional[str] = None
+    ) -> List[Dict[str, Any]]:
         """Retrieves memories filtered by category, utilizing the category index."""
         with self._get_connection() as conn:
             cursor = conn.cursor()
-            cursor.execute(
-                "SELECT * FROM memories WHERE category = ?", (category,)
-            )
+            if tenant_id is not None:
+                cursor.execute(
+                    "SELECT * FROM memories WHERE category = ? AND tenant_id = ?",
+                    (category, tenant_id)
+                )
+            else:
+                cursor.execute(
+                    "SELECT * FROM memories WHERE category = ?", (category,)
+                )
             rows = cursor.fetchall()
 
             memories = []
@@ -171,15 +239,21 @@ class SQLiteMemoryStore:
                 memories.append(mem)
             return memories
 
-    def count_memories(self) -> int:
+    def count_memories(self, tenant_id: Optional[str] = None) -> int:
         with self._get_connection() as conn:
             cursor = conn.cursor()
-            cursor.execute("SELECT count(*) FROM memories")
+            if tenant_id is not None:
+                cursor.execute(
+                    "SELECT count(*) FROM memories WHERE tenant_id = ?", (tenant_id,)
+                )
+            else:
+                cursor.execute("SELECT count(*) FROM memories")
             return int(cursor.fetchone()[0])
 
     def query_candidates(
         self,
         category: Optional[str] = None,
+        tenant_id: Optional[str] = None,
         min_confidence: float = 0.0,
         limit: int = 100,
         order_by: str = "last_accessed_at DESC"
@@ -190,6 +264,9 @@ class SQLiteMemoryStore:
         """
         query = "SELECT * FROM memories WHERE confidence >= ?"
         params: List[Any] = [min_confidence]
+        if tenant_id is not None:
+            query += " AND tenant_id = ?"
+            params.append(tenant_id)
         if category:
             query += " AND category = ?"
             params.append(category)
@@ -217,4 +294,3 @@ class SQLiteMemoryStore:
                 )
                 memories.append(mem)
             return memories
-

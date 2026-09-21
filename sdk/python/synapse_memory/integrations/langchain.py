@@ -194,7 +194,7 @@ class SynapseLangChainMemory(BaseMemory):
             return
 
         combined_content = f"{self.human_prefix}: {user_input} -> {self.ai_prefix}: {model_output}"
-        
+
         # Ingest through memory manager to trigger semantic deduplication and auto-pruning
         self.manager.ingest_with_deduplication(
             content=combined_content,

@@ -1,121 +1,59 @@
 # Synapse Memory
 
-**Synapse Memory** is a sovereign, token-aware cognitive memory substrate designed for autonomous AI agents and large language model workflows.
+**Synapse Memory** is a sovereign, token-aware cognitive memory substrate with database-level multi-tenancy, cryptographic encryption, and dynamic context budgeting for AI agents and LLM applications.
 
-[![CI Status](https://github.com/synapse-memory/synapse_memory/actions/workflows/ci.yml/badge.svg)](https://github.com/synapse-memory/synapse_memory/actions)
-[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](https://opensource.org/licenses/MIT)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Python Version](https://img.shields.io/badge/python-3.9%2B-blue.svg)](https://www.python.org/)
 [![Node Version](https://img.shields.io/badge/node-18%2B-green.svg)](https://nodejs.org/)
+[![PostgreSQL](https://img.shields.io/badge/pgvector-HNSW-336791.svg)](https://github.com/pgvector/pgvector)
 
 ---
 
 ## Technical Overview
 
-Synapse Memory bridges the gap between stateless LLM interactions and stateful agent memory architectures. Rather than relying solely on unbounded vector dumps that trigger context overflow and model hallucinations, Synapse provides a layered cognitive pipeline:
+Synapse Memory bridges stateless LLM interactions and stateful agent memory architectures. Rather than unbounded vector dumps that trigger context overflow and model hallucinations, Synapse provides a deterministic cognitive pipeline:
 
-1. **Storage & Cryptographic Integrity**: Authenticated symmetric encryption at rest (Fernet AES-128-CBC with HMAC-SHA256) ensures sensitive context and vector representations are never persisted unencrypted.
-2. **Dynamic Context Budgeting**: An exact 0/1 Knapsack dynamic programming optimizer (`KnapsackPacker`) selects the highest cumulative relevance memory nodes to strictly satisfy fixed token budgets.
-3. **Temporal Decay & Reinforcement**: An Ebbinghaus-derived exponential decay engine (`DecayEngine`) discounts aged memories over time while boosting frequently accessed or positively reinforced nodes.
-4. **Semantic Deduplication**: Dual-stage verification (lexical Jaccard token screening + dense vector cosine similarity) identifies redundant knowledge and merges access counters without fragmenting the index.
-5. **Hybrid Information Retrieval**: Dense semantic similarity search combined with sparse lexical BM25 ranking fused using Reciprocal Rank Fusion (RRF, $k=60$).
+1. **Storage & Cryptographic Integrity**: Authenticated symmetric encryption at rest (Fernet AES-128-CBC with HMAC-SHA256) ensures sensitive context and vector representations are never stored unencrypted.
+2. **Database-Level Multi-Tenancy**:
+   - **PostgreSQL (`pgvector`)**: Native Row-Level Security (RLS) via `app.current_tenant` session settings and HNSW vector index acceleration.
+   - **SQLite**: Automatic tenant indexing and cryptographic key scoping.
+3. **Enterprise Identity & RBAC**: Cryptographically hashed API keys (`syn_live_*`), granular authorization scopes (`memories:read`, `memories:write`, `admin`), and immutable audit logging.
+4. **Dynamic Context Budgeting**: Exact 0/1 Knapsack dynamic programming optimizer (`KnapsackPacker`) selecting the highest-relevance memories within fixed token envelopes.
+5. **Temporal Decay & Reinforcement**: Ebbinghaus-derived exponential decay engine (`DecayEngine`) discounting aged records while boosting actively reinforced nodes.
+6. **Semantic Deduplication**: Dual-stage verification (lexical token screening + dense vector cosine similarity) preventing index fragmentation.
+7. **Hybrid Retrieval**: Dense semantic similarity search combined with sparse lexical BM25 ranking fused using Reciprocal Rank Fusion (RRF, $k=60$).
 
 ---
 
-## Architectural Architecture & Operational Modes
+## Architecture & Operational Modes
 
 ```
 +-------------------------------------------------------------------------+
 |                          Agent Orchestrators                            |
-|       (LangChain BaseMemory, LlamaIndex BaseMemory, CrewAI, Custom)     |
+|       (LangChain BaseMemory, LlamaIndex BaseMemory, CrewAI, REST API)   |
 +-------------------------------------------------------------------------+
                                      |
                                      v
 +-------------------------------------------------------------------------+
-|                         Cognitive Substrate                             |
+|                      Unified Cognitive Gateway                          |
 |  +--------------------+  +--------------------+  +--------------------+ |
 |  |    HybridSearch    |  |   KnapsackPacker   |  |    DecayEngine     | |
 |  |   (BM25 + Dense)   |  |   (0/1 DP Solver)  |  | (Ebbinghaus Decay) | |
 |  +--------------------+  +--------------------+  +--------------------+ |
 |  +--------------------+  +--------------------+  +--------------------+ |
-|  |    Deduplicator    |  |   PruningEngine    |  |   Observability    | |
-|  |  (Lexical+Cosine)  |  |  (Eviction Policy) |  | (Latency/Counters) | |
+|  |    Deduplicator    |  |   SecurityManager  |  |   MemoryManager    | |
+|  |  (Lexical+Cosine)  |  | (Hashed RBAC/Audit)|  | (Tenant Isolation) | |
 |  +--------------------+  +--------------------+  +--------------------+ |
 +-------------------------------------------------------------------------+
                                      |
-                +--------------------+--------------------+
-                |                                         |
-                v                                         v
-   [Embedded Storage Mode]                   [Gateway Enterprise Mode]
-    - SQLite Storage Engine                   - Express / Node.js API Gateway
-    - Fernet AES-128-CBC + HMAC-SHA256        - PostgreSQL + pgvector (HNSW)
-    - Zero external network dependencies      - Distributed Celery/Redis workers
-    - Local or API-backed embeddings          - Kubernetes / Helm Deployments
-```
-
-### 1. Embedded Mode (Local Python Runtime)
-- Designed for single-agent CLI tools, desktop applications, and embedded pipelines.
-- Data is persisted to a local encrypted SQLite database (`sqlite3` + `cryptography.fernet`).
-- Direct Python API imports: `from synapse_memory.core import SQLiteMemoryStore, MemoryManager, HybridSearch`.
-
-### 2. Clustered Gateway Mode (Production Services)
-- Designed for multi-tenant enterprise applications with high concurrent query volumes.
-- Node.js/TypeScript REST API gateway (`server.ts`) with Prometheus metrics, rate limiting, and PII quarantine scrubbers.
-- Backed by PostgreSQL with `pgvector` HNSW indexes and Docker Compose / Helm chart deployment manifests.
-
----
-
-## Security & Encryption Model
-
-- **Encryption Standard**: Fernet symmetric authenticated encryption (128-bit AES in CBC mode with PKCS7 padding and HMAC-SHA256 signature).
-- **Protected Fields**: Raw memory `content` and serialized vector `embedding` blobs.
-- **Key Injection**:
-  - **Production Recommended**: Inject a 32-byte URL-safe base64 key into the environment:
-    ```bash
-    export SYNAPSE_ENCRYPTION_KEY="$(python3 -c 'from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())')"
-    ```
-  - **Local Development Fallback**: If no environment key is provided, the store creates a local key file (`.synapse_key`) with restricted read/write permissions.
-  - **Plaintext Mode**: Only active if encryption is explicitly disabled (`encryption_key=False`).
-
----
-
-## Drop-In Framework Integrations
-
-### LangChain (`BaseMemory`)
-Drop-in integration compliant with `langchain_core.memory.BaseMemory`:
-
-```python
-from synapse_memory.integrations.langchain import SynapseLangChainMemory
-from synapse_memory.core import SQLiteMemoryStore, SynapseEmbedder
-
-# Initialize memory connected to your persistent store
-memory = SynapseLangChainMemory(
-    memory_key="chat_history",
-    max_token_budget=1500,
-    store=SQLiteMemoryStore("agent_memory.db"),
-    embedder=SynapseEmbedder(provider="local")
-)
-
-# Integrates into any standard LangChain chain or agent:
-# inputs = {"input": "What database parameters did we choose yesterday?"}
-# loaded = memory.load_memory_variables(inputs)
-# memory.save_context({"input": "..."}, {"output": "..."})
-```
-
-### LlamaIndex (`BaseMemory`)
-Drop-in integration for LlamaIndex chat engines:
-
-```python
-from synapse_memory.integrations.llamaindex import SynapseLlamaIndexMemory
-from synapse_memory.core import SQLiteMemoryStore, SynapseEmbedder
-
-memory = SynapseLlamaIndexMemory(
-    max_token_limit=2048,
-    store=SQLiteMemoryStore("agent_memory.db"),
-    embedder=SynapseEmbedder(provider="local")
-)
-
-# Use directly in LlamaIndex chat workflows
-# response = chat_engine.chat("Query", memory=memory)
+                 +-------------------+-------------------+
+                 |                                       |
+                 v                                       v
+    [Embedded Storage Mode]                 [Enterprise Clustered Mode]
+     - SQLite Storage Engine                 - PostgreSQL + pgvector (HNSW)
+     - Fernet AES-128-CBC Encryption         - Row-Level Security (RLS)
+     - Zero external dependencies            - FastAPI + Express API Gateway
+     - Single-tenant / embedded use          - Multi-tenant cluster with Docker/Helm
 ```
 
 ---
@@ -124,10 +62,14 @@ memory = SynapseLlamaIndexMemory(
 
 ### Installation
 ```bash
+# Minimal embedded engine
 pip install -e sdk/python
+
+# Full enterprise suite (pgvector, sentence-transformers, LangChain, LlamaIndex)
+pip install -e "sdk/python[all]"
 ```
 
-### Core Ingestion & Retrieval Example
+### Multi-Tenant Ingestion & Retrieval Example
 ```python
 from synapse_memory.core.sqlite_db import SQLiteMemoryStore
 from synapse_memory.core.embedder import SynapseEmbedder
@@ -140,19 +82,20 @@ store = SQLiteMemoryStore(db_path="agent_memory.db")
 embedder = SynapseEmbedder(provider="local")
 manager = MemoryManager(store=store, embedder=embedder, max_record_limit=100)
 
-# 2. Ingest memory with automatic semantic deduplication
+# 2. Ingest memory scoped to a tenant with automatic semantic deduplication
 mem_id, action, tokens = manager.ingest_with_deduplication(
     content="Production PostgreSQL connection timeout is configured to 3000ms.",
     category="infrastructure",
-    confidence=0.95
+    confidence=0.95,
+    tenant_id="tenant_finance_org"
 )
 print(f"Memory {mem_id}: Action={action} ({tokens} tokens)")
 
-# 3. Hybrid search over encrypted records
+# 3. Hybrid search over tenant-isolated encrypted records
 searcher = HybridSearch(alpha=0.6, k=60)
 results = searcher.search(
     query="Postgres timeout settings",
-    corpus=store.get_all_memories(),
+    corpus=store.get_all_memories(tenant_id="tenant_finance_org"),
     query_vector=embedder.embed_query("Postgres timeout settings"),
     top_k=5
 )
@@ -165,41 +108,77 @@ print(f"Packed {len(packed_memories)} memories into token envelope.")
 
 ---
 
-## Testing & Quality Verification
+## Turnkey Deployment
 
-All core algorithms, storage adapters, and integrations are thoroughly tested across standard suites:
+### Docker Compose
+Run the unified multi-container stack (Node.js Gateway + FastAPI Engine + PostgreSQL pgvector + Redis Cache):
 
 ```bash
-# Run complete test suite
-PYTHONPATH=sdk/python pytest sdk/python/tests
+cd deploy
+docker compose up --build
+```
 
-# Static security audit
+### Kubernetes (Helm Chart)
+Deploy production clusters with horizontal pod autoscaling and automated TLS:
+
+```bash
+helm install synapse-memory deploy/helm-chart \
+  --set secrets.existingSecret=my-k8s-credentials \
+  --set ingress.hosts[0].host=synapse.yourdomain.com
+```
+
+---
+
+## Drop-In Framework Integrations
+
+### LangChain (`BaseMemory`)
+```python
+from synapse_memory.integrations.langchain import SynapseLangChainMemory
+from synapse_memory.core import SQLiteMemoryStore, SynapseEmbedder
+
+memory = SynapseLangChainMemory(
+    memory_key="chat_history",
+    max_token_budget=1500,
+    store=SQLiteMemoryStore("agent_memory.db"),
+    embedder=SynapseEmbedder(provider="local")
+)
+```
+
+### LlamaIndex (`BaseMemory`)
+```python
+from synapse_memory.integrations.llamaindex import SynapseLlamaIndexMemory
+from synapse_memory.core import SQLiteMemoryStore, SynapseEmbedder
+
+memory = SynapseLlamaIndexMemory(
+    max_token_limit=2048,
+    store=SQLiteMemoryStore("agent_memory.db"),
+    embedder=SynapseEmbedder(provider="local")
+)
+```
+
+---
+
+## Testing & Quality Verification
+
+```bash
+# Run unit & integration test suite
+PYTHONPATH=sdk/python pytest sdk/python/tests -v
+
+# Static type analysis
+mypy sdk/python --config-file setup.cfg
+
+# Security vulnerability audit
 bandit -r sdk/python -s B101,B104,B311
 
 # Code linting
 flake8 sdk/python --config=setup.cfg
-
-# Type checking
-mypy sdk/python --config-file setup.cfg
 ```
-
-### Verified Test Suites:
-- `test_decay.py`: Temporal Ebbinghaus decay formulas, half-life parameters, and reinforcement multipliers.
-- `test_deduplicator.py`: Lexical Jaccard and cosine similarity deduplication thresholds (merge, reject, create).
-- `test_encryption.py`: Fernet AES-128-CBC authenticated encryption at rest and key rotation.
-- `test_knapsack.py`: 0/1 Dynamic programming optimal item packing and budget safety.
-- `test_pruner.py`: Capacity and decay-driven eviction policies.
-- `test_synapse.py`: End-to-end integration across memory managers, hybrid retrieval, and SQLite operations.
-- `test_langchain.py`: LangChain `BaseMemory` contract, `load_memory_variables`, and `save_context`.
-- `test_llamaindex.py`: LlamaIndex chat memory integration and token packing.
 
 ---
 
 ## Security Policy
 
-Please refer to [SECURITY.md](SECURITY.md) for our coordinated vulnerability disclosure guidelines and designated security channels.
-
----
+Please refer to [SECURITY.md](SECURITY.md) for our vulnerability disclosure guidelines and designated security channels.
 
 ## License
 

@@ -68,7 +68,7 @@ def main():
             return
 
         candidates = searcher.fused_search(args.prompt, memories, top_k=25)
-        
+
         # Apply temporal decay calculations
         decayed = []
         for c in candidates:

@@ -8,7 +8,7 @@ logger = logging.getLogger("Pruner")
 
 class PruningPolicy(ABC):
     """Abstract base class for memory pruning policies."""
-    
+
     @abstractmethod
     def identify_targets(self, memories: List[Dict[str, Any]]) -> List[str]:
         """Returns list of memory IDs to be pruned based on the policy."""
@@ -40,13 +40,13 @@ class CapacityPruningPolicy(PruningPolicy):
     def identify_targets(self, memories: List[Dict[str, Any]]) -> List[str]:
         if len(memories) <= self.max_records:
             return []
-        
+
         # Calculate relevance using robust DecayEngine
         scored = []
         for m in memories:
             relevance = self.decay_engine.calculate_relevance(m)
             scored.append((relevance, m["id"]))
-            
+
         scored.sort(key=lambda x: x[0])
         excess = len(memories) - self.max_records
         return [m_id for _, m_id in scored[:excess]]

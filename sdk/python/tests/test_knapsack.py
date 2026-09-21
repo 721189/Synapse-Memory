@@ -17,7 +17,7 @@ class TestKnapsackPacker(unittest.TestCase):
         # vs m3+m1 = 80 cost, value 1.85
         # vs m3+m4+m1 = 100 cost, value 2.55
         packed_ids = self.packer.pack(self.memories)
-        
+
         total_cost = sum(m["token_cost"] for m in self.memories if m["id"] in packed_ids)
         self.assertLessEqual(total_cost, 100)
 

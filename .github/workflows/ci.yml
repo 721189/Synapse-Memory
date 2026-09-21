@@ -1,35 +1,99 @@
-name: CI
-on: [push, pull_request]
+name: Synapse CI/CD Matrix Pipeline
+
+on:
+  push:
+    branches: [main, master, develop]
+  pull_request:
+    branches: [main, master]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
-  test:
+  python-matrix-tests:
+    name: Python ${{ matrix.python-version }} Engine Tests
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ['3.9', '3.10', '3.11', '3.12']
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: 'pip'
+
+      - name: Install System Dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libpq-dev
+
+      - name: Install Python Package & Dependencies
+        run: |
+          python -m pip install --upgrade pip setuptools wheel
+          pip install -r requirements.txt
+          pip install -r requirements-dev.txt
+          pip install -e "sdk/python[all,dev]"
+
+      - name: Verify Clean Module Imports
+        run: |
+          python -c "import synapse_memory; from synapse_memory.core import SQLiteMemoryStore, PGVectorMemoryStore, SynapseEmbedder, HybridSearch, KnapsackPacker, DecayEngine, SecurityManager; print('SynapseMemory all core engines cleanly imported!')"
+
+      - name: Code Style & Quality (flake8)
+        run: |
+          flake8 sdk/python --config=setup.cfg
+
+      - name: Static Type Analysis (mypy)
+        run: |
+          mypy sdk/python --config-file setup.cfg
+
+      - name: Security Vulnerability Scan (bandit)
+        run: |
+          bandit -r sdk/python -s B101,B104,B311
+
+      - name: Execute Full Unit & Integration Test Suite
+        env:
+          SYNAPSE_ENCRYPTION_KEY: "2N53Wk7u2V5bK1wU_1F5Y9mZ7zN53Wk7u2V5bK1wU_0="
+          SYNAPSE_API_KEY: "syn_live_ci_test_key"
+        run: |
+          pytest sdk/python/tests -v
+
+  frontend-build:
+    name: Node.js Frontend & Gateway Build
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        node-version: [18.x, 20.x]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node.js ${{ matrix.node-version }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node-version }}
+          cache: 'npm'
+
+      - name: Install Node Dependencies
+        run: npm ci
+
+      - name: Lint Codebase
+        run: npm run lint
+
+      - name: Production Bundle Compilation
+        run: npm run build
+
+  container-build:
+    name: Docker Container Image Validation
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@v3
-    - name: Set up Python
-      uses: actions/setup-python@v4
-      with:
-        python-version: '3.10'
-    - name: 1. Clean Install
-      run: |
-        python -m pip install --upgrade pip
-        pip install -r requirements.txt
-        pip install -r requirements-dev.txt
-        pip install -e sdk/python
-    - name: 2. Clean Import Verification
-      run: |
-        python -c "import synapse_memory; from synapse_memory.core import SQLiteMemoryStore, SynapseEmbedder, HybridSearch, KnapsackPacker, DecayEngine; print('SynapseMemory core modules cleanly imported!')"
-    - name: 3. Lint with flake8
-      run: flake8 sdk/python --config=setup.cfg
-    - name: 4. Security audit with bandit
-      run: bandit -r sdk/python -s B101,B104,B311
-    - name: 5. Type-check with mypy
-      run: mypy sdk/python --config-file setup.cfg
-    - name: 6. Unit Tests
-      env:
-        SYNAPSE_ENCRYPTION_KEY: "c3luYXBzZS1lbmNyeXB0aW9uLWtleS1kZW1vLTEyMzQ1Ng=="
-      run: pytest sdk/python/tests -k "not test_integration"
-    - name: 7. Integration Tests
-      env:
-        SYNAPSE_ENCRYPTION_KEY: "c3luYXBzZS1lbmNyeXB0aW9uLWtleS1kZW1vLTEyMzQ1Ng=="
-      run: pytest sdk/python/tests/test_integration.py
+      - uses: actions/checkout@v4
 
+      - name: Build Docker Container
+        run: |
+          docker build -t synapse-memory:ci-test .

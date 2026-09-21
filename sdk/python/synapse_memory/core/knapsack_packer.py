@@ -34,11 +34,11 @@ class KnapsackPacker:
     ) -> List[MemoryNodeResult]:
         """
         Packs memories into the token budget using a DP approach.
-        
+
         Args:
             memories: List of memory nodes with 'id', 'token_cost', and 'relevance_score'.
             token_budget: Optional override for budget. If None, uses self.token_budget.
-            
+
         Returns:
             List of packed memory nodes that maximize total relevance score within budget.
         """
@@ -49,7 +49,7 @@ class KnapsackPacker:
         n = len(memories)
         weights = [max(1, int(m.get("token_cost", 1))) for m in memories]
         values = [max(0, int(float(m.get("relevance_score", 0.0)) * 1000)) for m in memories]
-        
+
         dp = [0] * (budget + 1)
         items_included: List[List[int]] = [[] for _ in range(budget + 1)]
 
@@ -74,11 +74,11 @@ class KnapsackPacker:
         """Greedy fallback: Pack by highest relevance/cost ratio."""
         budget = token_budget if token_budget is not None else self.token_budget
         sorted_memories = sorted(
-            memories, 
-            key=lambda m: float(m.get("relevance_score", 0.0)) / max(1, m.get("token_cost", 1)), 
+            memories,
+            key=lambda m: float(m.get("relevance_score", 0.0)) / max(1, m.get("token_cost", 1)),
             reverse=True
         )
-        
+
         selected: List[MemoryNodeResult] = []
         current_cost = 0
         for m in sorted_memories:

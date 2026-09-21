@@ -18,11 +18,11 @@ class TestIntegration(unittest.TestCase):
         # 1. Ingest
         mid, status, cost = self.manager.ingest_with_deduplication("Hello World")
         self.assertEqual(status, "CREATED")
-        
+
         # 2. Ingest duplicate
         mid2, status2, cost2 = self.manager.ingest_with_deduplication("Hello World")
         self.assertEqual(status2, "MERGED")
-        
+
         # 3. Verify store
         memories = self.store.get_all_memories()
         self.assertEqual(len(memories), 1)

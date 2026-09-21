@@ -28,19 +28,19 @@ class TestDecayEngine(unittest.TestCase):
         # Calculate initial score
         now = time.time()
         score_initial = self.engine.calculate_relevance(self.memory, now=now)
-        
+
         # Reinforce
         reinforced_memory = self.engine.reinforce(self.memory, feedback_value=1.0)
-        
+
         # Calculate new score - should be higher due to increased strength
         score_reinforced = self.engine.calculate_relevance(reinforced_memory, now=now)
-        
+
         self.assertGreater(score_reinforced, score_initial)
 
     def test_negative_feedback(self):
         # Reinforce negatively
         neg_memory = self.engine.reinforce(self.memory, feedback_value=-1.0)
-        
+
         self.assertLess(neg_memory["feedback_multiplier"], 1.0)
 
 if __name__ == '__main__':
