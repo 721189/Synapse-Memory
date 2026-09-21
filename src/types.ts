@@ -81,6 +81,17 @@ export interface HNSWIndexMetric {
   totalIndexNodes: number;
 }
 
+export interface CommercialLicense {
+  licenseId: string;
+  licensedTo: string;
+  purchaseDate: string;
+  licenseKey: string;
+  status: 'active' | 'pending';
+  ipAssignmentSigned: boolean;
+  slaTier: 'Enterprise 99.99%';
+}
+
+
 
 
 

@@ -51,6 +51,16 @@ interface HNSWIndexMetric {
   totalIndexNodes: number;
 }
 
+interface CommercialLicense {
+  licenseId: string;
+  licensedTo: string;
+  purchaseDate: string;
+  licenseKey: string;
+  status: 'active' | 'pending';
+  ipAssignmentSigned: boolean;
+  slaTier: 'Enterprise 99.99%';
+}
+
 let memoryStore: MemoryNode[] = [
   {
     id: 'mem_1',
@@ -726,6 +736,39 @@ app.post("/api/infrastructure/hnsw-metrics/tune", (req, res) => {
   hnswMetric.queryLatencyMs = Number((2.5 + (0.8 * (hnswMetric.m / 16)) * (hnswMetric.efConstruction / 64)).toFixed(2));
 
   res.json({ success: true, metrics: hnswMetric });
+});
+
+// --- ENTERPRISE $1,000 COMMERCIAL BUYOUT GATEWAY ---
+let activeLicenseStore: CommercialLicense | null = null;
+
+app.get("/api/licensing/details", (req, res) => {
+  res.json({ success: true, license: activeLicenseStore });
+});
+
+app.post("/api/licensing/buyout", (req, res) => {
+  const { licensedTo } = req.body;
+  if (!licensedTo) return res.status(400).json({ error: "Company or Developer name is required for legal licensing attribution." });
+
+  const randomKey = `SYN-COMM-${Math.random().toString(36).substring(2, 10).toUpperCase()}-${Math.random().toString(36).substring(2, 10).toUpperCase()}-2026`;
+  
+  activeLicenseStore = {
+    licenseId: `lic_${Math.floor(Math.random() * 900000) + 100000}`,
+    licensedTo,
+    purchaseDate: new Date().toISOString(),
+    licenseKey: randomKey,
+    status: 'active',
+    ipAssignmentSigned: false,
+    slaTier: 'Enterprise 99.99%'
+  };
+
+  res.json({ success: true, license: activeLicenseStore });
+});
+
+app.post("/api/licensing/sign-contract", (req, res) => {
+  if (!activeLicenseStore) return res.status(400).json({ error: "No active buyout license found to sign." });
+
+  activeLicenseStore.ipAssignmentSigned = true;
+  res.json({ success: true, license: activeLicenseStore });
 });
 
 async function startServer() {
