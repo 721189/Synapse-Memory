@@ -1,0 +1,30 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "synapse_memory"
+version = "0.1.0"
+authors = [
+  { name="AI Assistant", email="ai-assistant@example.com" },
+]
+description = "A sovereign, secure, and performant cognitive memory engine for AI agents."
+readme = "README.md"
+requires-python = ">=3.10"
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+]
+dependencies = [
+    "cryptography",
+    "fastapi",
+    "pydantic",
+]
+
+[project.urls]
+"Homepage" = "https://github.com/example/synapse_memory"
+"Bug Tracker" = "https://github.com/example/synapse_memory/issues"
+
+[tool.setuptools.packages.find]
+where = ["sdk/python"]
