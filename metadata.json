@@ -1,0 +1,6 @@
+{
+  "name": "SynapseMemory - Universal Active RAG & Memory Layer",
+  "description": "Research-grade active RAG and long-term memory infrastructure for ChatGPT, Claude, and Gemini with automated belief revision and low-latency vector retrieval.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
