@@ -4,7 +4,8 @@ import time
 from typing import List, Dict, Any, Optional
 from pydantic import BaseModel, Field
 import uvicorn
-from fastapi import FastAPI, HTTPException, status
+from fastapi import FastAPI, HTTPException, status, Security, Header
+from fastapi.security import APIKeyHeader
 from fastapi.middleware.cors import CORSMiddleware
 
 # Adjust path to enable absolute imports when running as standalone script
@@ -17,23 +18,35 @@ from synapse_memory.core.knapsack_packer import KnapsackPacker
 from synapse_memory.core.decay_engine import DecayEngine
 from synapse_memory.core.hybrid_search import HybridSearch
 
+# Security configuration
+API_KEY_NAME = "X-Synapse-API-Key"
+API_KEY_HEADER = APIKeyHeader(name=API_KEY_NAME, auto_error=True)
+
+async def validate_api_key(api_key: str = Security(API_KEY_HEADER)):
+    expected_key = os.environ.get("SYNAPSE_API_KEY")
+    if not expected_key or api_key != expected_key:
+        raise HTTPException(status_code=403, detail="Invalid API Key")
+    return api_key
+
 # Initialize FastAPI application
 app = FastAPI(
     title="SynapseMemory RAG Gateway Proxy",
     description="Sovereign Active Long-Term Memory & Context Budgeting REST API.",
-    version="1.0.0"
+    version="1.0.0",
+    dependencies=[Security(validate_api_key)]
 )
 
-# Enable CORS for secure microservice routing
+# Tighten CORS to production-appropriate origins
+ALLOWED_ORIGINS = os.environ.get("ALLOWED_ORIGINS", "https://app.synapse-memory.example.com").split(",")
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=ALLOWED_ORIGINS,
     allow_credentials=True,
-    allow_methods=["*"],
+    allow_methods=["GET", "POST", "OPTIONS"],
     allow_headers=["*"],
 )
 
-# Connect to relational SQLite DB instead of a transient python list
+# Connect to relational SQLite DB with mandated encryption
 store = SQLiteMemoryStore("synapse_memory.db")
 embedder = SynapseEmbedder(provider="local")
 manager = MemoryManager(store=store, embedder=embedder)
@@ -116,7 +129,8 @@ def query_memory(payload: QueryRequest):
         return QueryResponse(fused_context="", injected_nodes_count=0, injected_nodes=[])
 
     # 1. Hybrid semantic/lexical search (using genuine vectors)
-    candidates = searcher.fused_search(payload.prompt, memories, top_k=25)
+    query_vector = embedder.embed_query(payload.prompt)
+    candidates = searcher.fused_search(payload.prompt, memories, query_vector=query_vector, top_k=25)
 
     # 2. Dynamic temporal decay adjustment
     decayed_candidates = []
@@ -197,4 +211,5 @@ def scrub_pii(payload: Dict[str, Any]):
 
 
 if __name__ == "__main__":
-    uvicorn.run("fastapi_server:app", host="0.0.0.0", port=8000, reload=True)
+    uvicorn.run("fastapi_server:app", host="127.0.0.1", port=8000, reload=True)  # nosec B104
+

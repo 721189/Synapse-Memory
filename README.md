@@ -19,7 +19,7 @@ graph TD
     B --> C{EmbeddingManager}
     C -->|LRU Cache| D[Embedding Provider]
     B --> E[SQLiteMemoryStore]
-    E -->|AES-256| F[(Encrypted DB)]
+    E -->|Fernet (AES-128-CBC + HMAC-SHA256)| F[(Encrypted DB)]
 ```
 
 ### Ingestion Workflow
@@ -43,9 +43,9 @@ sequenceDiagram
 
 Security is baked into the storage layer. All sensitive content and embedding vectors are encrypted before persisting to the SQLite database.
 
-*   **Encryption Standard**: Uses `cryptography.fernet` (AES-256).
-*   **Encrypted Fields**: `content` and `embedding` (serialized).
-*   **Key Management**: The provider requires a 32-byte URL-safe base64-encoded key.
+*   **Encryption Standard**: Fernet authenticated symmetric encryption (128-bit AES in CBC mode with PKCS7 padding and HMAC-SHA256 authenticated envelope).
+*   **Encrypted Fields**: `content` and `embedding` (serialized JSON).
+*   **Key Management**: Supports external configuration via `SYNAPSE_ENCRYPTION_KEY`, explicit provider injection, or auto-generation of a durable 32-byte URL-safe base64 key in `.synapse_key`.
 
 ## Performance Optimization
 
@@ -59,7 +59,7 @@ To handle high-throughput memory ingestion, Synapse Memory employs several optim
 
 ## Features
 
-*   **Security-First**: AES-256 encryption at rest (Fernet) ensures sensitive data is never persisted in plain text.
+*   **Security-First**: Authenticated symmetric encryption at rest (Fernet AES-CBC with HMAC-SHA256) ensures sensitive data is never persisted in plain text.
 *   **Highly Performant**: Optimized category-based SQL indexing and LRU-cached embedding operations.
 *   **Observability**: Integrated instrumentation for monitoring cost, latency, and cache hits.
 *   **Extensible**: Modular architecture for embedding providers (Gemini, OpenAI, Local).

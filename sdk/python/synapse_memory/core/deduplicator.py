@@ -57,12 +57,21 @@ class Deduplicator:
             # 3. Semantic Similarity (Cosine)
             semantic_sim = self._cosine_similarity(new_mem.get("embedding", []), existing.get("embedding", []))
             
-            # 4. Conflict Detection Heuristic (Adversarial)
-            # Simplistic check for strongly opposed lexical terms if category matches
-            if new_mem.get("category") == existing.get("category"):
-                if ("true" in new_mem["content"] and "false" in existing["content"]) or \
-                   ("false" in new_mem["content"] and "true" in existing["content"]):
-                   return MergeResult(Action.REJECT, None, "Contradiction detected", {"type": "conflict"})
+            # 4. Conflict & Supersession Detection (Production-Grade Heuristic)
+            if semantic_sim > threshold:
+                # If high semantic similarity, compare metadata to decide supersession
+                new_conf = new_mem.get("confidence", 0.5)
+                old_conf = existing.get("confidence", 0.5)
+                
+                # If new memory has significantly higher confidence, suggest supersession (merge)
+                if new_conf > old_conf + 0.1:
+                     return MergeResult(Action.MERGE, existing["id"], "Higher confidence supersession", 
+                                        {"new_conf": new_conf, "old_conf": old_conf})
+                
+                # Check for explicit contradiction in content
+                if ("true" in new_mem["content"].lower() and "false" in existing["content"].lower()) or \
+                   ("false" in new_mem["content"].lower() and "true" in existing["content"].lower()):
+                   return MergeResult(Action.REJECT, None, "Direct contradiction detected", {"type": "conflict"})
 
             # 5. Threshold Decision
             if semantic_sim >= threshold or (lexical_sim > 0.9 and semantic_sim > 0.7):

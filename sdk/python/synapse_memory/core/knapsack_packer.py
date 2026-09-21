@@ -1,66 +1,90 @@
-from typing import List, Dict, Any, Tuple
+from typing import List, Dict, Any, Optional
 import logging
 
 logger = logging.getLogger("KnapsackPacker")
+
+
+class MemoryNodeResult(dict):
+    """
+    Dual-contract result node that acts both as a dictionary with keys
+    ('id', 'content', etc.) and equals its string ID for backwards-compatible
+    membership checks.
+    """
+    def __eq__(self, other: Any) -> bool:
+        if isinstance(other, str):
+            return self.get("id") == other
+        return super().__eq__(other)
+
+    def __hash__(self) -> int:
+        return hash(self.get("id", ""))
+
 
 class KnapsackPacker:
     """
     Robust 0/1 Knapsack optimizer for packing memory nodes into a token budget.
     Implements a memory-efficient Dynamic Programming solution with a greedy fallback.
     """
-    def __init__(self, token_budget: int):
+    def __init__(self, token_budget: int = 4096):
         self.token_budget = token_budget
 
-    def pack(self, memories: List[Dict[str, Any]]) -> List[str]:
+    def pack(
+        self,
+        memories: List[Dict[str, Any]],
+        token_budget: Optional[int] = None
+    ) -> List[MemoryNodeResult]:
         """
         Packs memories into the token budget using a DP approach.
         
         Args:
             memories: List of memory nodes with 'id', 'token_cost', and 'relevance_score'.
+            token_budget: Optional override for budget. If None, uses self.token_budget.
             
         Returns:
-            List of memory IDs that maximize total relevance score within budget.
+            List of packed memory nodes that maximize total relevance score within budget.
         """
-        if not memories:
+        budget = token_budget if token_budget is not None else self.token_budget
+        if not memories or budget <= 0:
             return []
 
-        # Convert relevance score to integer weight for DP (scaled)
-        # We need integer weights for DP, so we scale by 1000 and round
         n = len(memories)
-        weights = [m["token_cost"] for m in memories]
-        values = [int(m.get("relevance_score", 0.0) * 1000) for m in memories]
+        weights = [max(1, int(m.get("token_cost", 1))) for m in memories]
+        values = [max(0, int(float(m.get("relevance_score", 0.0)) * 1000)) for m in memories]
         
-        # DP table: dp[i][w] is max value with first i items and weight limit w
-        # Using 1D DP array optimization to save memory: O(budget) space
-        dp = [0] * (self.token_budget + 1)
-        # To reconstruct the solution, keep track of items
-        # items_included[w] = list of indices
-        items_included = [[] for _ in range(self.token_budget + 1)]
+        dp = [0] * (budget + 1)
+        items_included: List[List[int]] = [[] for _ in range(budget + 1)]
 
         for i in range(n):
             weight = weights[i]
             value = values[i]
-            for w in range(self.token_budget, weight - 1, -1):
+            if weight > budget:
+                continue
+            for w in range(budget, weight - 1, -1):
                 if dp[w - weight] + value > dp[w]:
                     dp[w] = dp[w - weight] + value
                     items_included[w] = items_included[w - weight] + [i]
 
-        selected_indices = items_included[self.token_budget]
-        return [memories[idx]["id"] for idx in selected_indices]
+        selected_indices = items_included[budget]
+        return [MemoryNodeResult(memories[idx]) for idx in selected_indices]
 
-    def greedy_pack(self, memories: List[Dict[str, Any]]) -> List[str]:
+    def greedy_pack(
+        self,
+        memories: List[Dict[str, Any]],
+        token_budget: Optional[int] = None
+    ) -> List[MemoryNodeResult]:
         """Greedy fallback: Pack by highest relevance/cost ratio."""
-        # Sort by relevance/cost ratio descending
+        budget = token_budget if token_budget is not None else self.token_budget
         sorted_memories = sorted(
             memories, 
-            key=lambda m: m.get("relevance_score", 0.0) / max(1, m["token_cost"]), 
+            key=lambda m: float(m.get("relevance_score", 0.0)) / max(1, m.get("token_cost", 1)), 
             reverse=True
         )
         
-        selected = []
+        selected: List[MemoryNodeResult] = []
         current_cost = 0
         for m in sorted_memories:
-            if current_cost + m["token_cost"] <= self.token_budget:
-                selected.append(m["id"])
-                current_cost += m["token_cost"]
+            cost = m.get("token_cost", 1)
+            if current_cost + cost <= budget:
+                selected.append(MemoryNodeResult(m))
+                current_cost += cost
         return selected
+

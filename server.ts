@@ -9,24 +9,37 @@ const app = express();
 const PORT = 3000;
 const proxy = httpProxy.createProxyServer();
 
-// Spawn Python FastAPI backend
-const pythonBackend = spawn("python3", ["-m", "uvicorn", "synapse_memory.api.fastapi_server:app", "--port", "8000"], {
-  cwd: "./sdk/python",
-  stdio: 'inherit',
-  env: { ...process.env, PYTHONPATH: "./" }
+app.use(express.json());
+
+// Spawn Python FastAPI backend if available
+try {
+  const pythonBackend = spawn(
+    "python3",
+    ["-m", "uvicorn", "synapse_memory.api.fastapi_server:app", "--port", "8000", "--host", "127.0.0.1"],
+    {
+      cwd: "./sdk/python",
+      stdio: "ignore",
+      env: { ...process.env, PYTHONPATH: "./" }
+    }
+  );
+  pythonBackend.on("error", (err) => {
+    console.log("Python backend not available; running with native TypeScript core:", err.message);
+  });
+} catch (e) {
+  console.log("Python spawn bypassed; using native TypeScript core.");
+}
+
+proxy.on("error", (err, req, res) => {
+  console.warn("Python backend proxy unavailable:", err.message);
 });
 
-console.log("Python backend spawned on port 8000");
-
-// API Proxy routes
-app.use("/api", (req, res) => {
-  proxy.web(req, res, { target: 'http://localhost:8000' }, (err) => {
-    console.error('Proxy error:', err);
-    res.status(502).json({ error: "Bad Gateway" });
+// Forward /api/py to python FastAPI if called, otherwise fall back
+app.use("/api/py", (req, res, next) => {
+  proxy.web(req, res, { target: "http://127.0.0.1:8000" }, () => {
+    res.status(503).json({ error: "Python FastAPI backend currently offline. Use native /api endpoints." });
   });
 });
 
-app.use(express.json());
 
 // Initialize Gemini API client safely (lazy / checked on use)
 function getGenAI() {

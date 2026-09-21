@@ -4,14 +4,14 @@ from synapse_memory.core.embedding_provider import (
     EmbeddingManager, 
     LocalEmbeddingProvider, 
     GeminiEmbeddingProvider, 
-    OpenAIEmbeddingProvider
+    OpenAIEmbeddingProvider,
+    SentenceTransformerEmbeddingProvider
 )
 
 class SynapseEmbedder:
     """
     Multi-model embedding client. Provides seamless failover between Google Gemini API,
-    OpenAI API, and an offline local mathematical text vectorizer to ensure consistent 
-    operation across all network states.
+    OpenAI API, and an offline local semantic embedding model.
     """
 
     def __init__(self, provider: str = "local"):
@@ -27,7 +27,8 @@ class SynapseEmbedder:
             return GeminiEmbeddingProvider(self.gemini_key)
         elif self.provider_name == "openai" and self.openai_key:
             return OpenAIEmbeddingProvider(self.openai_key)
-        return LocalEmbeddingProvider()
+        # Default to production-grade semantic local embedding
+        return SentenceTransformerEmbeddingProvider()
 
     def embed_query(self, text: str) -> List[float]:
         """Generates a dense float vector representation for text strings."""

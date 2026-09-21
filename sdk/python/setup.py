@@ -7,7 +7,8 @@ setup(
     install_requires=[
         "fastapi>=0.95.0",
         "pydantic>=2.0.0",
-        "uvicorn>=0.20.0"
+        "uvicorn>=0.20.0",
+        "cryptography>=3.4.0"
     ],
     extras_require={
         "langchain": ["langchain-core>=0.1.0"],

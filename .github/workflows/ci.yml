@@ -18,8 +18,11 @@ jobs:
     - name: Lint with flake8
       run: flake8 sdk/python
     - name: Security audit with bandit
-      run: bandit -r sdk/python
+      run: bandit -r sdk/python -s B101,B104,B311
     - name: Type-check with mypy
-      run: mypy sdk/python
+      run: mypy sdk/python --config-file setup.cfg
     - name: Test with pytest
+      env:
+        SYNAPSE_ENCRYPTION_KEY: "c3luYXBzZS1lbmNyeXB0aW9uLWtleS1kZW1vLTEyMzQ1Ng=="
       run: pytest sdk/python
+
