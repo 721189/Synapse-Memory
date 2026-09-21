@@ -1,74 +1,54 @@
-import math
 import time
+import math
 from typing import Dict, Any
 
 class DecayEngine:
     """
-    Implements the Ebbinghaus Forgetting Curve for temporal memory decay.
+    Robust Ebbinghaus-style decay and reinforcement engine.
     
-    Mathematical Formulation:
-        Retention_t = Base_Relevance * exp(-t / Strength)
-        Strength = Base_Strength * (1 + Access_Count * Boost_Coeff)
+    Formula:
+        Score = Confidence * exp(-(now - last_accessed) / Strength)
+        Strength = BaseStrength * (1 + (access_count * reinforcement_factor) * feedback_multiplier)
     """
+    def __init__(self, category_configs: Dict[str, Dict[str, float]]):
+        # Config structure: { 'category': { 'base_strength': 86400, 'reinforcement_factor': 0.45 } }
+        self.category_configs = category_configs
+        self.default_config = {'base_strength': 86400.0, 'reinforcement_factor': 0.45}
 
-    def __init__(
-        self, 
-        base_strength_seconds: float = 86400.0,  # 1 day default half-life base
-        boost_coefficient: float = 0.45,         # Accesses compound memory stabilization by 45%
-        decay_floor: float = 0.15                # Memories never decay below a floor of 15% relevance
-    ):
-        self.base_strength = base_strength_seconds
-        self.boost_coefficient = boost_coefficient
-        self.decay_floor = decay_floor
+    def _get_config(self, category: str) -> Dict[str, float]:
+        return self.category_configs.get(category, self.default_config)
 
-    def calculate_retention(
-        self, 
-        base_relevance: float, 
-        created_epoch: float, 
-        access_count: int,
-        last_accessed_epoch: float = 0.0
-    ) -> float:
-        """
-        Computes the current relevance of a memory item based on Ebbinghaus forgetting logic.
-        
-        Args:
-            base_relevance: Initial score generated during vector indexing.
-            created_epoch: Epoch timestamp when the memory was registered.
-            access_count: Number of times this memory was retrieved.
-            last_accessed_epoch: Optional timestamp of the last access.
+    def calculate_relevance(self, memory: Dict[str, Any], now: float = None) -> float:
+        """Calculates current relevance score for a memory node."""
+        if now is None:
+            now = time.time()
             
-        Returns:
-            The optimized, decayed relevance score (between decay_floor and base_relevance).
-        """
-        now = time.time()
-        elapsed_seconds = max(0.0, now - created_epoch)
+        last_accessed = memory.get("last_accessed_at", memory["created_at"])
+        elapsed = max(0.0, now - last_accessed)
+        
+        config = self._get_config(memory.get("category", "interaction"))
+        
+        # Calculate strength (durability)
+        access_count = memory.get("access_count", 0)
+        feedback_multiplier = memory.get("feedback_multiplier", 1.0)
+        
+        strength = config['base_strength'] * (1 + (access_count * config['reinforcement_factor']) * feedback_multiplier)
+        
+        # Exponential decay
+        return memory.get("confidence", 0.5) * math.exp(-elapsed / strength)
 
-        # Strength increases with repetitions (access counts)
-        stabilized_strength = self.base_strength * (1.0 + (access_count * self.boost_coefficient))
-        
-        # Calculate exponential retention
-        retention = math.exp(-elapsed_seconds / max(1.0, stabilized_strength))
-        
-        # Compute final relevance and clip to floor boundary
-        final_relevance = base_relevance * retention
-        return max(self.decay_floor, min(base_relevance, final_relevance))
-
-    def compute_feedback_boost(
-        self, 
-        current_confidence: float, 
-        feedback_type: str
-    ) -> float:
+    def reinforce(self, memory: Dict[str, Any], feedback_value: float = 1.0) -> Dict[str, Any]:
         """
-        Adjusts node confidence dynamically based on RLAIF (Reinforcement Learning from AI Feedback).
+        Applies reinforcement to a memory node.
         
-        Args:
-            current_confidence: Active confidence float.
-            feedback_type: 'positive' (reinforce) or 'negative' (hallucination warning).
+        feedback_value > 0: Positive reinforcement
+        feedback_value < 0: Negative reinforcement (penalty)
         """
-        if feedback_type == "positive":
-            # Asymptotically approach 1.0 confidence
-            return current_confidence + (1.0 - current_confidence) * 0.20
-        elif feedback_type == "negative":
-            # Punish confidence by 35% for hallucination reports
-            return max(0.05, current_confidence * 0.65)
-        return current_confidence
+        memory["access_count"] = memory.get("access_count", 0) + 1
+        memory["last_accessed_at"] = time.time()
+        
+        current_multiplier = memory.get("feedback_multiplier", 1.0)
+        # Update feedback multiplier with a smoothing factor
+        memory["feedback_multiplier"] = max(0.1, current_multiplier + (feedback_value * 0.1))
+        
+        return memory

@@ -1,16 +1,5 @@
-"""
-SynapseMemory: Universal Active RAG & Cognitive Long-Term Memory Layer
-Compatible with LangChain, LlamaIndex, and standalone LLM agents.
-"""
+from synapse_memory.core.memory_manager import MemoryManager
+from synapse_memory.core.sqlite_db import SQLiteMemoryStore
+from synapse_memory.core.embedder import SynapseEmbedder
 
-from .core.knapsack_packer import KnapsackPacker
-from .core.decay_engine import DecayEngine
-from .core.hybrid_search import HybridSearch
-
-__all__ = [
-    "KnapsackPacker",
-    "DecayEngine",
-    "HybridSearch",
-]
-
-__version__ = "1.0.0"
+__all__ = ["MemoryManager", "SQLiteMemoryStore", "SynapseEmbedder"]

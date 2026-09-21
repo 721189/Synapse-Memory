@@ -5,6 +5,9 @@ from typing import List, Dict, Any, Tuple, Optional
 from synapse_memory.core.sqlite_db import SQLiteMemoryStore
 from synapse_memory.core.embedder import SynapseEmbedder
 from synapse_memory.core.deduplicator import Deduplicator, Action
+from synapse_memory.core.pruner import PruningEngine, CapacityPruningPolicy
+from synapse_memory.core.decay_engine import DecayEngine
+from synapse_memory.core.observability import log_event, instrument_operation
 
 logger = logging.getLogger("SynapseMemoryManager")
 
@@ -25,7 +28,10 @@ class MemoryManager:
         self.embedder = embedder
         self.deduplicator = Deduplicator(category_thresholds or {})
         self.max_record_limit = max_record_limit
+        self.decay_engine = DecayEngine({})
+        self.pruner = PruningEngine([CapacityPruningPolicy(max_record_limit, self.decay_engine)])
 
+    @instrument_operation("ingest_memory")
     def ingest_with_deduplication(
         self, 
         content: str, 
@@ -53,13 +59,10 @@ class MemoryManager:
         # 3. Handle Deduplication Result
         if result.action == Action.MERGE and result.target_id:
             match_id = result.target_id
-            logger.info(f"Deduplication: {result.reason}. Merging into node: {match_id}")
+            log_event("memory_deduplication", "MERGED", {"target_id": match_id, "reason": result.reason})
             
             # Reinforce: Boost confidence, update timestamp, increment access count
-            # Note: Best match memory record needs to be fetched for its token cost
             self.store.update_access_count(match_id, 1)
-            # Need a way to fetch the best match again to update confidence properly
-            # For now, simplistic update.
             self.store.update_confidence(match_id, min(1.0, confidence + 0.05))
             
             # Re-fetch for token cost
@@ -68,10 +71,11 @@ class MemoryManager:
             return match_id, "MERGED", match_mem["token_cost"]
 
         elif result.action == Action.REJECT:
-            logger.info(f"Deduplication: Rejected insertion. Reason: {result.reason}")
+            log_event("memory_deduplication", "REJECTED", {"reason": result.reason})
             return "REJECTED", "REJECTED", 0
 
         # 4. Otherwise, save as a clean memory
+        log_event("memory_deduplication", "CREATED", {})
         memory_id = f"mem_{int(time.time() * 1000)}"
         token_cost = max(15, int(len(content.split()) * 1.35) + 10)
 
@@ -95,36 +99,18 @@ class MemoryManager:
 
     def auto_prune_store(self) -> int:
         """
-        Evicts memories if the total database records exceed max_record_limit.
-        Calculates Ebbinghaus temporal decay relevances and prunes the lowest scores first.
+        Evicts memories based on the configured PruningEngine.
         
         Returns:
             The number of successfully evicted memory nodes.
         """
         memories = self.store.get_all_memories()
-        if len(memories) <= self.max_record_limit:
-            return 0
-
-        # Calculate decay weight scores
-        scored_memories = []
-        now = time.time()
-        for m in memories:
-            elapsed = now - m["created_at"]
-            strength = 86400.0 * (1.0 + m["access_count"] * 0.45)
-            # Ebbinghaus curve retention factor
-            decay_relevance = m["confidence"] * (math.exp(-elapsed / strength))
-            scored_memories.append((decay_relevance, m["id"]))
-
-        # Sort ascending (lowest relevance scores first)
-        scored_memories.sort(key=lambda x: x[0])
+        targets = self.pruner.run_pruning(memories)
         
-        # Erase extra items
-        excess_count = len(memories) - self.max_record_limit
         evicted = 0
-        for i in range(excess_count):
-            _, target_id = scored_memories[i]
+        for target_id in targets:
             self.store.delete_memory(target_id)
             evicted += 1
-            logger.info(f"Database overflow. Pruned decayed cognitive node: {target_id}")
-
+            log_event("memory_pruning", "EVICTED", {"target_id": target_id})
+            
         return evicted

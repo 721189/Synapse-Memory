@@ -5,6 +5,7 @@ import logging
 import os
 import json
 import urllib.request
+from synapse_memory.core.observability import log_event, instrument_operation
 
 logger = logging.getLogger("EmbeddingProvider")
 
@@ -35,7 +36,11 @@ class LocalEmbeddingProvider(EmbeddingProvider):
 
     def embed(self, text: str) -> List[float]:
         # Deterministic dummy embedding for testing
-        return [float(ord(c) % 100) / 100.0 for c in text[:self._dim]]
+        vector = [float(ord(c) % 100) / 100.0 for c in text[:self._dim]]
+        # Pad if text is shorter than dimension
+        if len(vector) < self._dim:
+            vector.extend([0.0] * (self._dim - len(vector)))
+        return vector
         
     def embed_batch(self, texts: List[str]) -> List[List[float]]:
         return [self.embed(t) for t in texts]
@@ -49,6 +54,7 @@ class GeminiEmbeddingProvider(EmbeddingProvider):
     def dimension(self) -> int:
         return self._dim
 
+    @instrument_operation("gemini_embed")
     def embed(self, text: str) -> List[float]:
         url = f"https://generativelanguage.googleapis.com/v1beta/models/text-embedding-004:embedContent?key={self.api_key}"
         headers = {"Content-Type": "application/json"}
@@ -71,6 +77,7 @@ class OpenAIEmbeddingProvider(EmbeddingProvider):
     def dimension(self) -> int:
         return self._dim
 
+    @instrument_operation("openai_embed")
     def embed(self, text: str) -> List[float]:
         url = "https://api.openai.com/v1/embeddings"
         headers = {"Content-Type": "application/json", "Authorization": f"Bearer {self.api_key}"}
@@ -93,7 +100,10 @@ class EmbeddingManager:
 
     def get_embedding(self, text: str) -> List[float]:
         if self.cache_enabled and text in self.cache:
+            log_event("embedding_cache", "HIT", {"text_len": len(text)})
             return self.cache[text]
+        
+        log_event("embedding_cache", "MISS", {"text_len": len(text)})
             
         # Add simple retry logic
         retries = 3
@@ -107,6 +117,7 @@ class EmbeddingManager:
                     self.cache[text] = embedding
                 return embedding
             except Exception as e:
+                log_event("embedding_retry", "RETRYING", {"attempt": i+1, "error": str(e)})
                 if i == retries - 1:
                     raise e
                 time.sleep(1) # Linear backoff
