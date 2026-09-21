@@ -1,0 +1,66 @@
+# Default Helm Chart Values for SynapseMemory Cognitive Substrate Cluster
+replicaCount: 3
+
+image:
+  repository: synapse-memory/gateway
+  pullPolicy: IfNotPresent
+  tag: "v1.2.0"
+
+service:
+  type: LoadBalancer
+  port: 80
+  targetPort: 3000
+
+ingress:
+  enabled: true
+  className: "nginx"
+  annotations:
+    cert-manager.io/cluster-issuer: "letsencrypt-prod"
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+  hosts:
+    - host: synapse.enterprise-internal.net
+      paths:
+        - path: /
+          pathType: ImplementationSpecific
+
+resources:
+  limits:
+    cpu: 2000m
+    memory: 4Gi
+  requests:
+    cpu: 500m
+    memory: 1Gi
+
+autoscaling:
+  enabled: true
+  minReplicas: 3
+  maxReplicas: 15
+  targetCPUUtilizationPercentage: 80
+  targetMemoryUtilizationPercentage: 80
+
+env:
+  NODE_ENV: "production"
+  TOKEN_BUDGET_MAX: "1500"
+  HYBRID_DECAY_RATE: "0.08"
+  DB_HOST: "synapse-postgresql.default.svc.cluster.local"
+  REDIS_URL: "redis://synapse-redis-master.default.svc.cluster.local:6379/0"
+
+postgresql:
+  enabled: true
+  image:
+    repository: pgvector/pgvector
+    tag: pg16
+  auth:
+    username: synapse_admin
+    password: synapse_secure_pass
+    database: synapse_cognitive
+  primary:
+    persistence:
+      enabled: true
+      size: 100Gi
+
+redis:
+  enabled: true
+  architecture: replication
+  replica:
+    replicaCount: 2

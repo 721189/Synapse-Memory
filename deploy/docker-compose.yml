@@ -1,0 +1,60 @@
+version: '3.8'
+
+services:
+  synapse-memory-gateway:
+    image: synapse-memory/gateway:v1.2.0
+    container_name: synapse-gateway
+    restart: always
+    ports:
+      - "3000:3000"
+    environment:
+      - NODE_ENV=production
+      - GEMINI_API_KEY=${GEMINI_API_KEY}
+      - DB_HOST=postgres-pgvector
+      - DB_PORT=5432
+      - DB_USER=synapse_admin
+      - DB_PASSWORD=synapse_secure_pass
+      - DB_NAME=synapse_cognitive
+      - REDIS_URL=redis://redis-state:6379/0
+      - TOKEN_BUDGET_MAX=1500
+      - HYBRID_DECAY_RATE=0.08
+    depends_on:
+      - postgres-pgvector
+      - redis-state
+    networks:
+      - synapse-internal
+
+  postgres-pgvector:
+    image: pgvector/pgvector:pg16
+    container_name: synapse-db
+    restart: always
+    environment:
+      - POSTGRES_USER=synapse_admin
+      - POSTGRES_PASSWORD=synapse_secure_pass
+      - POSTGRES_DB=synapse_cognitive
+    ports:
+      - "5432:5432"
+    volumes:
+      - synapse-db-data:/var/lib/postgresql/data
+    networks:
+      - synapse-internal
+
+  redis-state:
+    image: redis:7-alpine
+    container_name: synapse-cache
+    restart: always
+    command: redis-server --appendonly yes
+    ports:
+      - "6379:6379"
+    volumes:
+      - synapse-redis-data:/data
+    networks:
+      - synapse-internal
+
+networks:
+  synapse-internal:
+    driver: bridge
+
+volumes:
+  synapse-db-data:
+  synapse-redis-data:

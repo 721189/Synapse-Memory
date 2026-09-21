@@ -49,7 +49,7 @@ export default function App() {
   }, []);
 
   return (
-    <div className="min-h-screen bg-slate-950 text-slate-900 font-sans antialiased flex flex-col">
+    <div className="min-h-screen bg-slate-50 text-slate-900 font-sans antialiased flex flex-col">
       <Header activeTab={activeTab} setActiveTab={setActiveTab} stats={stats} />
 
       <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-8">

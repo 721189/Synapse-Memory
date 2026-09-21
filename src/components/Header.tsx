@@ -205,7 +205,7 @@ export const Header: React.FC<HeaderProps> = ({ activeTab, setActiveTab, stats }
             }`}
           >
             <Award className="w-4 h-4" />
-            <span>Enterprise License ($1K)</span>
+            <span>Enterprise GTM & License ($1K)</span>
           </button>
 
           <button
