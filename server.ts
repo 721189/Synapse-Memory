@@ -510,6 +510,125 @@ app.post("/api/rlaif/feedback", (req, res) => {
   });
 });
 
+// --- ADVANCED 2026 MARKET DIFFERENTIATION MODULES ---
+
+// MemFS Memory File System
+let memFSStore = [
+  {
+    path: "/memories/identities.md",
+    content: "# Developer Core Identities\n- Role: Senior AI Architect & ML Systems Researcher\n- Standard Frameworks: React 18, Tailwind v4, pgvector RAG, Express Fast-Path Gateway\n- Strict Standards: Double-blind RLS isolation, zero telemetry leakage, edge-based regex PII scrubbers.",
+    lastCommitHash: "a7b3c2d",
+    lastCommitMsg: "Initialize core developer profile settings with secure masking directives",
+    updatedAt: new Date(Date.now() - 5 * 86400000).toISOString()
+  },
+  {
+    path: "/memories/preferences.md",
+    content: "# Technology Stack & Aesthetics\n- Preference: Dark luxury theme, high contrast layout, math-based typography pairing.\n- Language: TypeScript 5.x with strict type assertions.\n- Database Choice: PostgreSQL with pgvector for stable HNSW indexing & scalable RAG capabilities.",
+    lastCommitHash: "9f8e7d6",
+    lastCommitMsg: "Align styling preferences & theme settings with Tailwind layout guidelines",
+    updatedAt: new Date().toISOString()
+  }
+];
+
+app.get("/api/memfs/files", (req, res) => {
+  res.json({ success: true, files: memFSStore });
+});
+
+app.post("/api/memfs/commit", (req, res) => {
+  const { path: filePath, content, commitMessage } = req.body;
+  if (!filePath || !content) return res.status(400).json({ error: "Path and content are required." });
+
+  const file = memFSStore.find(f => f.path === filePath);
+  const hash = Math.random().toString(36).substring(2, 9);
+
+  if (file) {
+    file.content = content;
+    file.lastCommitHash = hash;
+    file.lastCommitMsg = commitMessage || "Automated Git-backed MemFS consolidation commit";
+    file.updatedAt = new Date().toISOString();
+  } else {
+    memFSStore.push({
+      path: filePath,
+      content,
+      lastCommitHash: hash,
+      lastCommitMsg: commitMessage || "Create and initialize new MemFS memory leaf",
+      updatedAt: new Date().toISOString()
+    });
+  }
+
+  res.json({ success: true, file: memFSStore.find(f => f.path === filePath) });
+});
+
+// Autonomous Subagent Dreaming Thread
+let dreamSessions = [
+  {
+    sessionId: "dream_session_alpha",
+    timestamp: new Date(Date.now() - 2 * 86400000).toISOString(),
+    episodicAnalyzedCount: 43,
+    consolidatedFactsGenerated: [
+      "User continuously chooses PostgreSQL over MySQL due to pgvector indexing requirements.",
+      "Implicit feedback indicates a desire for ultra-low latency (<35ms SLA) over brute force high-token contexts."
+    ],
+    tokensSaved: 12500
+  }
+];
+
+app.post("/api/dreaming/consolidate", (req, res) => {
+  // Trigger background dreaming consolidation session
+  const newSession = {
+    sessionId: `dream_${Date.now()}`,
+    timestamp: new Date().toISOString(),
+    episodicAnalyzedCount: Math.floor(Math.random() * 30) + 15,
+    consolidatedFactsGenerated: [
+      `Aggregated ${Math.floor(Math.random() * 5) + 2} micro-preferences regarding visual aesthetics into unified metadata blocks.`,
+      "Consolidated raw chat transcripts to eliminate 3 redundant memory nodes."
+    ],
+    tokensSaved: Math.floor(Math.random() * 5000) + 4000
+  };
+
+  dreamSessions.unshift(newSession);
+  res.json({ success: true, session: newSession });
+});
+
+app.get("/api/dreaming/sessions", (req, res) => {
+  res.json({ success: true, sessions: dreamSessions });
+});
+
+// Temporal Knowledge Observation Stream
+let temporalObservations = [
+  {
+    id: "obs_1",
+    timestamp: new Date(Date.now() - 30 * 86400000).toISOString(),
+    attribute: "Target Language preference",
+    oldValue: "JavaScript ES6",
+    newValue: "TypeScript 5.x with Strict Typings",
+    reason: "Developer repeatedly initiated type annotations and demanded compiler safety benchmarks during architecture chats.",
+    confidence: 0.98
+  },
+  {
+    id: "obs_2",
+    timestamp: new Date(Date.now() - 10 * 86400000).toISOString(),
+    attribute: "Visual Framework",
+    oldValue: "Standard CSS / Bootstrap",
+    newValue: "Tailwind CSS v4 Utility Classes",
+    reason: "Consistent instruction given to styling pipeline to compile layout rules strictly under Tailwind schema.",
+    confidence: 0.94
+  },
+  {
+    id: "obs_3",
+    timestamp: new Date().toISOString(),
+    attribute: "Deployment Strategy",
+    oldValue: "Docker on EC2",
+    newValue: "Serverless Containers / Cloud Run",
+    reason: "Preference shifted during cloud architectural simulation favoring elastic scale-to-zero configurations.",
+    confidence: 0.91
+  }
+];
+
+app.get("/api/temporal/timeline", (req, res) => {
+  res.json({ success: true, timeline: temporalObservations });
+});
+
 async function startServer() {
   if (process.env.NODE_ENV !== "production") {
     const vite = await createViteServer({

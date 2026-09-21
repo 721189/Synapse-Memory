@@ -3,7 +3,7 @@ import { Brain, Sparkles, ShieldCheck, Zap, Database, Code, Activity, Cpu } from
 
 interface HeaderProps {
   activeTab: string;
-  setActiveTab: (tab: 'gateway' | 'memories' | 'poisoning' | 'security' | 'retrieval' | 'decay' | 'graph' | 'knapsack' | 'multimodal' | 'rlaif' | 'docs') => void;
+  setActiveTab: (tab: 'gateway' | 'memories' | 'poisoning' | 'security' | 'retrieval' | 'decay' | 'graph' | 'knapsack' | 'multimodal' | 'rlaif' | 'differentiation' | 'docs') => void;
   stats: {
     totalMemories: number;
     quarantinedCount: number;
@@ -170,6 +170,18 @@ export const Header: React.FC<HeaderProps> = ({ activeTab, setActiveTab, stats }
           >
             <Sparkles className="w-4 h-4 text-violet-400" />
             <span>RLAIF Active Feedback</span>
+          </button>
+
+          <button
+            onClick={() => setActiveTab('differentiation')}
+            className={`flex items-center space-x-2 px-4 py-2 rounded-lg text-sm font-medium transition-all ${
+              activeTab === 'differentiation'
+                ? 'bg-indigo-600 text-white shadow-md shadow-indigo-600/30'
+                : 'text-slate-400 hover:text-white hover:bg-slate-800/60'
+            }`}
+          >
+            <Sparkles className="w-4 h-4 text-emerald-400" />
+            <span>2026 Market Dominance Suite</span>
           </button>
 
           <button

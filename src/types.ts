@@ -37,4 +37,31 @@ export interface GraphCommunity {
   cohesionScore: number;
 }
 
+export interface MemFSFile {
+  path: string;
+  content: string;
+  lastCommitHash: string;
+  lastCommitMsg: string;
+  updatedAt: string;
+}
+
+export interface DreamSession {
+  sessionId: string;
+  timestamp: string;
+  episodicAnalyzedCount: number;
+  consolidatedFactsGenerated: string[];
+  tokensSaved: number;
+}
+
+export interface TemporalObservation {
+  id: string;
+  timestamp: string;
+  attribute: string;
+  oldValue: string;
+  newValue: string;
+  reason: string;
+  confidence: number;
+}
+
+
 
