@@ -24,15 +24,20 @@ RUN npm ci
 # Copy entire codebase
 COPY . .
 
+# Install local Synapse Python package
+RUN pip install --no-cache-dir -e sdk/python
+
 # Build Vite frontend and server bundle
 RUN npm run build
 
-# Expose ports: 3000 (Gateway UI/API) and 8000 (FastAPI Engine)
+# Expose ports: 3000 (Gateway UI/API) and 8008 (FastAPI Engine)
 EXPOSE 3000
-EXPOSE 8000
+EXPOSE 8008
 
 ENV NODE_ENV=production
 ENV PORT=3000
+ENV PYTHONPATH=/app/sdk/python
+ENV PYTHON_PORT=8008
 
 # Start script
-CMD ["sh", "-c", "python3 -m uvicorn sdk.python.synapse_memory.api.fastapi_server:app --host 0.0.0.0 --port 8000 & node dist/server.cjs"]
+CMD ["sh", "-c", "python3 -m uvicorn synapse_memory.api.fastapi_server:app --host 0.0.0.0 --port 8008 & node dist/server.cjs"]

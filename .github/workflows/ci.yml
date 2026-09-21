@@ -41,6 +41,8 @@ jobs:
           pip install -e "sdk/python[all,dev]"
 
       - name: Verify Clean Module Imports
+        env:
+          PYTHONPATH: sdk/python
         run: |
           python -c "import synapse_memory; from synapse_memory.core import SQLiteMemoryStore, PGVectorMemoryStore, SynapseEmbedder, HybridSearch, KnapsackPacker, DecayEngine, SecurityManager; print('SynapseMemory all core engines cleanly imported!')"
 
@@ -58,6 +60,7 @@ jobs:
 
       - name: Execute Full Unit & Integration Test Suite
         env:
+          PYTHONPATH: sdk/python
           SYNAPSE_ENCRYPTION_KEY: "2N53Wk7u2V5bK1wU_1F5Y9mZ7zN53Wk7u2V5bK1wU_0="
           SYNAPSE_API_KEY: "syn_live_ci_test_key"
         run: |
