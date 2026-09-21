@@ -33,6 +33,24 @@ interface MemoryNode {
   mediaUrl?: string;
 }
 
+interface DistributedJob {
+  jobId: string;
+  workerName: string;
+  taskType: 'dream_consolidation' | 'hnsw_reindex' | 'zkp_generation' | 'pii_scrub';
+  status: 'queued' | 'active' | 'completed' | 'failed';
+  progress: number;
+  payloadSize: number;
+  createdAt: string;
+}
+
+interface HNSWIndexMetric {
+  m: number;
+  efConstruction: number;
+  recallRate: number;
+  queryLatencyMs: number;
+  totalIndexNodes: number;
+}
+
 let memoryStore: MemoryNode[] = [
   {
     id: 'mem_1',
@@ -627,6 +645,87 @@ let temporalObservations = [
 
 app.get("/api/temporal/timeline", (req, res) => {
   res.json({ success: true, timeline: temporalObservations });
+});
+
+// --- SCALE-OUT INFRASTRUCTURE MODULES ---
+
+// Distributed Redis / Celery Task Queue Simulator
+let distributedJobs: DistributedJob[] = [
+  {
+    jobId: "job_9481",
+    workerName: "celery_worker_node_4",
+    taskType: "dream_consolidation",
+    status: "completed",
+    progress: 100,
+    payloadSize: 840,
+    createdAt: new Date(Date.now() - 30 * 60000).toISOString()
+  },
+  {
+    jobId: "job_9482",
+    workerName: "celery_worker_node_2",
+    taskType: "hnsw_reindex",
+    status: "active",
+    progress: 65,
+    payloadSize: 4120,
+    createdAt: new Date(Date.now() - 2 * 60000).toISOString()
+  },
+  {
+    jobId: "job_9483",
+    workerName: "celery_worker_node_1",
+    taskType: "zkp_generation",
+    status: "queued",
+    progress: 0,
+    payloadSize: 120,
+    createdAt: new Date().toISOString()
+  }
+];
+
+app.get("/api/infrastructure/jobs", (req, res) => {
+  res.json({ success: true, jobs: distributedJobs });
+});
+
+app.post("/api/infrastructure/jobs/dispatch", (req, res) => {
+  const { taskType } = req.body;
+  if (!taskType) return res.status(400).json({ error: "taskType required" });
+
+  const newJob: DistributedJob = {
+    jobId: `job_${Math.floor(Math.random() * 9000) + 1000}`,
+    workerName: `celery_worker_node_${Math.floor(Math.random() * 4) + 1}`,
+    taskType,
+    status: "queued",
+    progress: 0,
+    payloadSize: Math.floor(Math.random() * 5000) + 500,
+    createdAt: new Date().toISOString()
+  };
+
+  distributedJobs.unshift(newJob);
+  res.json({ success: true, job: newJob });
+});
+
+// Native HNSW pgvector / Graph DB Metrics Config
+let hnswMetric: HNSWIndexMetric = {
+  m: 16,
+  efConstruction: 64,
+  recallRate: 0.945,
+  queryLatencyMs: 3.2,
+  totalIndexNodes: 12850
+};
+
+app.get("/api/infrastructure/hnsw-metrics", (req, res) => {
+  res.json({ success: true, metrics: hnswMetric });
+});
+
+app.post("/api/infrastructure/hnsw-metrics/tune", (req, res) => {
+  const { m, efConstruction } = req.body;
+  if (m) hnswMetric.m = Number(m);
+  if (efConstruction) hnswMetric.efConstruction = Number(efConstruction);
+
+  // Recalculate recall & query latency based on parameters
+  const accuracyMultiplier = (hnswMetric.m / 16) * (hnswMetric.efConstruction / 64);
+  hnswMetric.recallRate = Math.min(Number((0.92 + (0.05 * Math.log2(accuracyMultiplier))).toFixed(4)), 0.999);
+  hnswMetric.queryLatencyMs = Number((2.5 + (0.8 * (hnswMetric.m / 16)) * (hnswMetric.efConstruction / 64)).toFixed(2));
+
+  res.json({ success: true, metrics: hnswMetric });
 });
 
 async function startServer() {

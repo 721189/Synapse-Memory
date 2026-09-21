@@ -11,11 +11,12 @@ import { KnapsackTokenBudgetTab } from './components/KnapsackTokenBudgetTab';
 import { MultiModalMemoryTab } from './components/MultiModalMemoryTab';
 import { RLAIFFeedbackTab } from './components/RLAIFFeedbackTab';
 import { MarketDifferentiationTab } from './components/MarketDifferentiationTab';
+import { ScaleInfrastructureTab } from './components/ScaleInfrastructureTab';
 import { DeveloperDocs } from './components/DeveloperDocs';
 import { MemoryNode, SystemStats } from './types';
 
 export default function App() {
-  const [activeTab, setActiveTab] = useState<'gateway' | 'memories' | 'poisoning' | 'security' | 'retrieval' | 'decay' | 'graph' | 'knapsack' | 'multimodal' | 'rlaif' | 'differentiation' | 'docs'>('gateway');
+  const [activeTab, setActiveTab] = useState<'gateway' | 'memories' | 'poisoning' | 'security' | 'retrieval' | 'decay' | 'graph' | 'knapsack' | 'multimodal' | 'rlaif' | 'differentiation' | 'infrastructure' | 'docs'>('gateway');
   const [memories, setMemories] = useState<MemoryNode[]>([]);
   const [stats, setStats] = useState<SystemStats>({
     totalMemories: 4,
@@ -62,6 +63,7 @@ export default function App() {
         {activeTab === 'multimodal' && <MultiModalMemoryTab onRefresh={fetchAppData} />}
         {activeTab === 'rlaif' && <RLAIFFeedbackTab memories={memories} onRefresh={fetchAppData} />}
         {activeTab === 'differentiation' && <MarketDifferentiationTab />}
+        {activeTab === 'infrastructure' && <ScaleInfrastructureTab />}
         {activeTab === 'docs' && <DeveloperDocs />}
       </main>
 

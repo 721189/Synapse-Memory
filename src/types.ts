@@ -63,5 +63,24 @@ export interface TemporalObservation {
   confidence: number;
 }
 
+export interface DistributedJob {
+  jobId: string;
+  workerName: string;
+  taskType: 'dream_consolidation' | 'hnsw_reindex' | 'zkp_generation' | 'pii_scrub';
+  status: 'queued' | 'active' | 'completed' | 'failed';
+  progress: number;
+  payloadSize: number;
+  createdAt: string;
+}
+
+export interface HNSWIndexMetric {
+  m: number; // Max connections per node
+  efConstruction: number; // Size of the dynamic candidate list for index construction
+  recallRate: number;
+  queryLatencyMs: number;
+  totalIndexNodes: number;
+}
+
+
 
 
