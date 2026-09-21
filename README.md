@@ -9,6 +9,54 @@
 
 Synapse Memory bridges the gap between ephemeral LLM interactions and persistent cognitive context. It provides a structured, secure, and efficient backend for storing and retrieving vectorized memories, utilizing industry-standard encryption and optimized SQL indexing.
 
+## System Architecture
+
+The engine is composed of three primary layers: the **Storage Layer** (SQLite + Encryption), the **Embedding Layer** (Provider abstraction + LRU Caching), and the **Manager Layer** (Deduplication Logic).
+
+```mermaid
+graph TD
+    A[User/Agent] -->|Ingest/Search| B(MemoryManager)
+    B --> C{EmbeddingManager}
+    C -->|LRU Cache| D[Embedding Provider]
+    B --> E[SQLiteMemoryStore]
+    E -->|AES-256| F[(Encrypted DB)]
+```
+
+### Ingestion Workflow
+```mermaid
+sequenceDiagram
+    participant Agent
+    participant Manager
+    participant Embedder
+    participant Store
+    
+    Agent->>Manager: ingest(content)
+    Manager->>Embedder: get_embedding(content)
+    Embedder-->>Manager: vector
+    Manager->>Store: get_memories_by_category(cat)
+    Store-->>Manager: existing_nodes
+    Manager->>Manager: check_deduplication(vector, existing_nodes)
+    Manager->>Store: save_node(content, vector)
+```
+
+## Security Model
+
+Security is baked into the storage layer. All sensitive content and embedding vectors are encrypted before persisting to the SQLite database.
+
+*   **Encryption Standard**: Uses `cryptography.fernet` (AES-256).
+*   **Encrypted Fields**: `content` and `embedding` (serialized).
+*   **Key Management**: The provider requires a 32-byte URL-safe base64-encoded key.
+
+## Performance Optimization
+
+To handle high-throughput memory ingestion, Synapse Memory employs several optimization strategies:
+
+| Technique | Purpose | Benefit |
+| :--- | :--- | :--- |
+| **LRU Caching** | Embedding results | Reduces expensive API calls to embedding providers. |
+| **Category Indexing** | SQLite `category` column | Constrains vector search to relevant cognitive nodes. |
+| **Deduplication** | Semantic comparison | Prevents storage bloat and redundant computation. |
+
 ## Features
 
 *   **Security-First**: AES-256 encryption at rest (Fernet) ensures sensitive data is never persisted in plain text.
