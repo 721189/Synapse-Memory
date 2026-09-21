@@ -1292,7 +1292,10 @@ app.post("/api/licensing/sign-contract", (req, res) => {
 async function startServer() {
   if (process.env.NODE_ENV !== "production") {
     const vite = await createViteServer({
-      server: { middlewareMode: true },
+      server: {
+        middlewareMode: true,
+        hmr: process.env.DISABLE_HMR !== 'true' ? true : false,
+      },
       appType: "spa",
     });
     app.use(vite.middlewares);
