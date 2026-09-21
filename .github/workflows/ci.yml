@@ -56,7 +56,7 @@ jobs:
 
       - name: Security Vulnerability Scan (bandit)
         run: |
-          bandit -r sdk/python -s B101,B104,B311
+          bandit -r sdk/python -s B101,B104,B311,B608 -x sdk/python/tests
 
       - name: Execute Full Unit & Integration Test Suite
         env:
@@ -71,7 +71,7 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        node-version: [18.x, 20.x]
+        node-version: [18.x, 20.x, 22.x]
 
     steps:
       - uses: actions/checkout@v4

@@ -18,10 +18,17 @@ setup(
         "numpy>=1.20.0",
     ],
     extras_require={
+        "local-models": ["sentence-transformers>=2.2.0"],
         "pgvector": ["psycopg2-binary>=2.9.0", "pgvector>=0.2.0"],
         "langchain": ["langchain-core>=0.1.0"],
         "llamaindex": ["llama-index-core>=0.10.0"],
-        "embeddings": ["sentence-transformers>=2.2.0"],
+        "all": [
+            "sentence-transformers>=2.2.0",
+            "psycopg2-binary>=2.9.0",
+            "pgvector>=0.2.0",
+            "langchain-core>=0.1.0",
+            "llama-index-core>=0.10.0",
+        ],
         "dev": [
             "flake8>=6.0.0",
             "mypy>=1.0.0",
