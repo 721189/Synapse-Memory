@@ -1,6 +1,7 @@
 import time
 import logging
 import math
+import asyncio
 from typing import List, Dict, Any, Tuple, Optional
 from synapse_memory.core.sqlite_db import SQLiteMemoryStore
 from synapse_memory.core.embedder import SynapseEmbedder
@@ -97,6 +98,9 @@ class MemoryManager:
         
         return memory_id, "CREATED", token_cost
 
+    async def ingest_async(self, *args, **kwargs) -> Tuple[str, str, int]:
+        return await asyncio.to_thread(self.ingest_with_deduplication, *args, **kwargs)
+
     def auto_prune_store(self) -> int:
         """
         Evicts memories based on the configured PruningEngine.
@@ -114,3 +118,6 @@ class MemoryManager:
             log_event("memory_pruning", "EVICTED", {"target_id": target_id})
             
         return evicted
+
+    async def prune_async(self) -> int:
+        return await asyncio.to_thread(self.auto_prune_store)

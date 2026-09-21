@@ -1,6 +1,7 @@
 import sqlite3
 import json
 import os
+import time
 from typing import List, Dict, Any, Optional
 
 class SQLiteMemoryStore:
@@ -29,12 +30,16 @@ class SQLiteMemoryStore:
                     category TEXT NOT NULL,
                     confidence REAL NOT NULL,
                     created_at REAL NOT NULL,
+                    last_accessed_at REAL NOT NULL,
                     access_count INTEGER NOT NULL,
                     token_cost INTEGER NOT NULL,
-                    embedding TEXT -- JSON array of floats
+                    embedding TEXT,
+                    feedback_multiplier REAL NOT NULL
                 )
             """)
-            cursor.execute("CREATE INDEX IF NOT EXISTS idx_memories_category ON memories(category)")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_category ON memories(category)")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_created_at ON memories(created_at)")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_last_accessed ON memories(last_accessed_at)")
             conn.commit()
 
     def insert_memory(self, memory: Dict[str, Any]) -> None:
@@ -44,17 +49,19 @@ class SQLiteMemoryStore:
             embedding_json = json.dumps(memory.get("embedding", []))
             cursor.execute("""
                 INSERT OR REPLACE INTO memories (
-                    id, content, category, confidence, created_at, access_count, token_cost, embedding
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    id, content, category, confidence, created_at, last_accessed_at, access_count, token_cost, embedding, feedback_multiplier
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (
                 memory["id"],
                 memory["content"],
                 memory["category"],
                 memory["confidence"],
                 memory["created_at"],
-                memory["access_count"],
+                memory.get("last_accessed_at", memory["created_at"]),
+                memory.get("access_count", 0),
                 memory["token_cost"],
-                embedding_json
+                embedding_json,
+                memory.get("feedback_multiplier", 1.0)
             ))
             conn.commit()
 
@@ -90,9 +97,9 @@ class SQLiteMemoryStore:
             cursor = conn.cursor()
             cursor.execute("""
                 UPDATE memories 
-                SET access_count = access_count + ? 
+                SET access_count = access_count + ?, last_accessed_at = ?
                 WHERE id = ?
-            """, (count_increment, memory_id))
+            """, (count_increment, time.time(), memory_id))
             conn.commit()
 
     def update_confidence(self, memory_id: str, new_confidence: float) -> None:
@@ -105,18 +112,6 @@ class SQLiteMemoryStore:
                 WHERE id = ?
             """, (new_confidence, memory_id))
             conn.commit()
-
-    def delete_memories_by_tenant(self, text_pattern: str) -> int:
-        """
-        Executes a targeted wipe of memories matching a text pattern 
-        to comply with GDPR GDPR criteria.
-        """
-        with self._get_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute("DELETE FROM memories WHERE content LIKE ?", (f"%{text_pattern}%",))
-            deleted = cursor.rowcount
-            conn.commit()
-            return deleted
 
     def delete_memory(self, memory_id: str) -> None:
         with self._get_connection() as conn:
