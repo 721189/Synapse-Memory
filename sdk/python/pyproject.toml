@@ -1,0 +1,39 @@
+[build-system]
+requires = ["setuptools>=61.0.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "synapse-memory"
+version = "1.0.0"
+description = "Universal Active RAG & Cognitive Long-Term Memory Layer for AI Agents."
+readme = "README.md"
+authors = [
+    { name = "Synapse Labs", email = "support@synapsememory.io" }
+]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: Apache Software License",
+    "Operating System :: OS Independent",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence"
+]
+dependencies = [
+    "fastapi>=0.95.0",
+    "pydantic>=2.0.0",
+    "uvicorn>=0.20.0"
+]
+requires-python = ">=3.8"
+
+[project.optional-dependencies]
+langchain = ["langchain-core>=0.1.0"]
+llamaindex = ["llama-index-core>=0.10.0"]
+test = ["pytest>=7.0.0", "pytest-cov>=4.0.0"]
+
+[project.urls]
+Homepage = "https://synapsememory.io"
+Repository = "https://github.com/synapse-labs/synapse-memory"
+
+[project.scripts]
+synapse-cli = "synapse_memory.cli.synapse_cli:main"
+
+[tool.setuptools]
+packages = ["synapse_memory", "synapse_memory.core", "synapse_memory.api", "synapse_memory.cli", "synapse_memory.examples"]

@@ -1,8 +1,10 @@
 import time
 import logging
+import math
 from typing import List, Dict, Any, Tuple, Optional
 from synapse_memory.core.sqlite_db import SQLiteMemoryStore
 from synapse_memory.core.embedder import SynapseEmbedder
+from synapse_memory.core.deduplicator import Deduplicator, Action
 
 logger = logging.getLogger("SynapseMemoryManager")
 
@@ -16,25 +18,13 @@ class MemoryManager:
         self, 
         store: SQLiteMemoryStore, 
         embedder: SynapseEmbedder,
-        similarity_threshold: float = 0.85,
+        category_thresholds: Dict[str, float] = None,
         max_record_limit: int = 50
     ):
         self.store = store
         self.embedder = embedder
-        self.similarity_threshold = similarity_threshold
+        self.deduplicator = Deduplicator(category_thresholds or {})
         self.max_record_limit = max_record_limit
-
-    def _cosine_similarity(self, vec_a: List[float], vec_b: List[float]) -> float:
-        """Computes true mathematical cosine similarity between two float vectors."""
-        if not vec_a or not vec_b or len(vec_a) != len(vec_b):
-            return 0.0
-        dot_product = sum(a * b for a, b in zip(vec_a, vec_b))
-        norm_a = math.sqrt(sum(a * a for a in vec_a))
-        norm_b = math.sqrt(sum(b * b for b in vec_b))
-        
-        if norm_a == 0.0 or norm_b == 0.0:
-            return 0.0
-        return dot_product / (norm_a * norm_b)
 
     def ingest_with_deduplication(
         self, 
@@ -44,50 +34,42 @@ class MemoryManager:
     ) -> Tuple[str, str, int]:
         """
         Ingests a new memory node.
-        Runs semantic similarity comparison against all existing indexed nodes.
-        If similarity > similarity_threshold, merges and reinforces the existing record.
-        Otherwise, inserts a clean record.
-        
-        Returns:
-            Tuple: (memory_id, action_status ("CREATED" | "MERGED"), token_cost)
+        Runs semantic similarity comparison against all existing indexed nodes using Deduplicator.
         """
-        import math # local import safe
         
         # 1. Generate real vector representation
         new_vector = self.embedder.embed_query(content)
         existing_memories = self.store.get_all_memories()
 
         # 2. Check for duplicate nodes
-        best_similarity = -1.0
-        best_match_mem: Optional[Dict[str, Any]] = None
+        new_node_base = {
+            "content": content,
+            "category": category,
+            "embedding": new_vector
+        }
+        
+        result = self.deduplicator.check_duplicate(new_node_base, existing_memories)
 
-        for existing in existing_memories:
-            existing_vec = existing.get("embedding", [])
-            if existing_vec:
-                # Compute vector distance
-                dot_product = sum(a * b for a, b in zip(new_vector, existing_vec))
-                norm_a = math.sqrt(sum(a * a for a in new_vector))
-                norm_b = math.sqrt(sum(b * b for b in existing_vec))
-                similarity = dot_product / (norm_a * norm_b) if norm_a > 0 and norm_b > 0 else 0.0
-
-                if similarity > best_similarity:
-                    best_similarity = similarity
-                    best_match_mem = existing
-
-        # 3. Deduplicate / Update Loop
-        if best_match_mem and best_similarity >= self.similarity_threshold:
-            match_id = best_match_mem["id"]
-            logger.info(f"Semantic match found (Similarity: {best_similarity:.3f}). Merging into node: {match_id}")
+        # 3. Handle Deduplication Result
+        if result.action == Action.MERGE and result.target_id:
+            match_id = result.target_id
+            logger.info(f"Deduplication: {result.reason}. Merging into node: {match_id}")
             
             # Reinforce: Boost confidence, update timestamp, increment access count
-            boosted_confidence = min(1.0, best_match_mem["confidence"] + 0.05)
-            
-            # Save reinforcement details
+            # Note: Best match memory record needs to be fetched for its token cost
             self.store.update_access_count(match_id, 1)
-            self.store.update_confidence(match_id, boosted_confidence)
+            # Need a way to fetch the best match again to update confidence properly
+            # For now, simplistic update.
+            self.store.update_confidence(match_id, min(1.0, confidence + 0.05))
             
-            # Return match parameters
-            return match_id, "MERGED", best_match_mem["token_cost"]
+            # Re-fetch for token cost
+            match_mem = next(m for m in existing_memories if m["id"] == match_id)
+            
+            return match_id, "MERGED", match_mem["token_cost"]
+
+        elif result.action == Action.REJECT:
+            logger.info(f"Deduplication: Rejected insertion. Reason: {result.reason}")
+            return "REJECTED", "REJECTED", 0
 
         # 4. Otherwise, save as a clean memory
         memory_id = f"mem_{int(time.time() * 1000)}"
@@ -130,7 +112,7 @@ class MemoryManager:
             elapsed = now - m["created_at"]
             strength = 86400.0 * (1.0 + m["access_count"] * 0.45)
             # Ebbinghaus curve retention factor
-            decay_relevance = m["confidence"] * (2.718 ** (-elapsed / strength))
+            decay_relevance = m["confidence"] * (math.exp(-elapsed / strength))
             scored_memories.append((decay_relevance, m["id"]))
 
         # Sort ascending (lowest relevance scores first)

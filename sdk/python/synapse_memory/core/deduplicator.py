@@ -1,0 +1,72 @@
+from typing import List, Dict, Any, Optional, Tuple
+import math
+import logging
+from dataclasses import dataclass
+from enum import Enum
+
+logger = logging.getLogger("Deduplicator")
+
+class Action(Enum):
+    CREATE = "CREATE"
+    MERGE = "MERGE"
+    REJECT = "REJECT"
+
+@dataclass
+class MergeResult:
+    action: Action
+    target_id: Optional[str]
+    reason: str
+    provenance: Dict[str, Any]
+
+class Deduplicator:
+    def __init__(self, category_thresholds: Dict[str, float], default_threshold: float = 0.85):
+        self.category_thresholds = category_thresholds
+        self.default_threshold = default_threshold
+
+    def _get_threshold(self, category: str) -> float:
+        return self.category_thresholds.get(category, self.default_threshold)
+
+    def _jaccard_similarity(self, content_a: str, content_b: str) -> float:
+        set_a = set(content_a.lower().split())
+        set_b = set(content_b.lower().split())
+        intersection = len(set_a.intersection(set_b))
+        union = len(set_a.union(set_b))
+        return intersection / union if union > 0 else 0.0
+
+    def _cosine_similarity(self, vec_a: List[float], vec_b: List[float]) -> float:
+        if not vec_a or not vec_b or len(vec_a) != len(vec_b):
+            return 0.0
+        dot_product = sum(a * b for a, b in zip(vec_a, vec_b))
+        norm_a = math.sqrt(sum(a * a for a in vec_a))
+        norm_b = math.sqrt(sum(b * b for b in vec_b))
+        if norm_a == 0.0 or norm_b == 0.0:
+            return 0.0
+        return dot_product / (norm_a * norm_b)
+
+    def check_duplicate(self, new_mem: Dict[str, Any], existing_mems: List[Dict[str, Any]]) -> MergeResult:
+        threshold = self._get_threshold(new_mem.get("category", "interaction"))
+        
+        for existing in existing_mems:
+            # 1. Exact Match Check (e.g., hash of content or specific ID)
+            if new_mem.get("id") == existing.get("id"):
+                return MergeResult(Action.REJECT, existing["id"], "Exact ID match", {"type": "exact"})
+
+            # 2. Lexical Similarity (Jaccard)
+            lexical_sim = self._jaccard_similarity(new_mem["content"], existing["content"])
+            
+            # 3. Semantic Similarity (Cosine)
+            semantic_sim = self._cosine_similarity(new_mem.get("embedding", []), existing.get("embedding", []))
+            
+            # 4. Conflict Detection Heuristic (Adversarial)
+            # Simplistic check for strongly opposed lexical terms if category matches
+            if new_mem.get("category") == existing.get("category"):
+                if ("true" in new_mem["content"] and "false" in existing["content"]) or \
+                   ("false" in new_mem["content"] and "true" in existing["content"]):
+                   return MergeResult(Action.REJECT, None, "Contradiction detected", {"type": "conflict"})
+
+            # 5. Threshold Decision
+            if semantic_sim >= threshold or (lexical_sim > 0.9 and semantic_sim > 0.7):
+                return MergeResult(Action.MERGE, existing["id"], "Semantic/Lexical similarity threshold exceeded", 
+                                   {"semantic_sim": semantic_sim, "lexical_sim": lexical_sim})
+        
+        return MergeResult(Action.CREATE, None, "No duplicates found", {})
