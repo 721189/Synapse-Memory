@@ -4,6 +4,9 @@ setup(
     name="synapse-memory",
     version="0.1.0",
     description="Sovereign, active RAG & cognitive long-term memory engine for AI agents",
+    author="Synapse Cognitive Systems",
+    author_email="singhshivam20009@gmail.com",
+    url="https://github.com/721189/Synapse-Memory",
     packages=find_packages(),
     python_requires=">=3.9",
     install_requires=[

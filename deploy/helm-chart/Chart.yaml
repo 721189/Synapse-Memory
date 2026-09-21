@@ -6,6 +6,7 @@ version: 0.1.0
 appVersion: "1.2.0"
 maintainers:
   - name: Synapse Cognitive Systems
-    email: support@synapse-memory.internal
+    email: singhshivam20009@gmail.com
+home: https://github.com/721189/Synapse-Memory
 sources:
-  - https://github.com/synapse-memory/synapse_memory
+  - https://github.com/721189/Synapse-Memory

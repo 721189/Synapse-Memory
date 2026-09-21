@@ -6,10 +6,10 @@ We take the security of the Synapse Cognitive Substrate seriously. If you discov
 
 Instead, please report vulnerabilities through one of our private channels:
 
-1. **GitHub Private Vulnerability Reporting (Preferred)**: Navigate to the [Security Advisories page](https://github.com/synapse-memory/synapse_memory/security/advisories) and select **"Report a vulnerability"** to open a confidential discussion directly with the core maintainers.
-2. **Dedicated Security Mailbox**: Send a detailed encrypted report to:
-   - **`security@synapse-memory.dev`** (GPG Key fingerprint: `4A9F B12D 87C4 E551 90A3  7E1B 23F8 910D C4A1 8E3B`)
-   - For sensitive cryptographic or multi-tenant isolation vulnerabilities, please encrypt your transmission using our official public PGP key published in the repository keys directory.
+1. **GitHub Private Vulnerability Reporting (Preferred)**: Navigate to the [Security Advisories page](https://github.com/721189/Synapse-Memory/security/advisories) and select **"Report a vulnerability"** to open a confidential discussion directly with the core maintainers.
+2. **Dedicated Security Contact**: Send a detailed report directly to:
+   - **`singhshivam20009@gmail.com`**
+   - For sensitive cryptographic or multi-tenant isolation vulnerabilities, please include reproduction steps, expected vs. actual behavior, and affected versions.
 
 ### What to Include
 To help us triage and resolve the issue quickly, please include:

@@ -6,7 +6,7 @@ build-backend = "setuptools.build_meta"
 name = "synapse-memory"
 version = "0.1.0"
 authors = [
-  { name="Synapse Cognitive Systems", email="support@synapse-memory.internal" },
+  { name = "Synapse Cognitive Systems", email = "singhshivam20009@gmail.com" },
 ]
 description = "A sovereign, secure, and performant cognitive memory engine for AI agents."
 readme = "README.md"
@@ -31,9 +31,10 @@ synapse = "synapse_memory.cli.synapse_cli:main"
 synapse-cli = "synapse_memory.cli.synapse_cli:main"
 
 [project.urls]
-"Homepage" = "https://github.com/synapse-memory/synapse_memory"
-"Bug Tracker" = "https://github.com/synapse-memory/synapse_memory/issues"
-"Documentation" = "https://github.com/synapse-memory/synapse_memory#readme"
+"Homepage" = "https://github.com/721189/Synapse-Memory"
+"Bug Tracker" = "https://github.com/721189/Synapse-Memory/issues"
+"Documentation" = "https://github.com/721189/Synapse-Memory#readme"
+"Repository" = "https://github.com/721189/Synapse-Memory.git"
 
 [tool.setuptools.packages.find]
 where = ["sdk/python"]
