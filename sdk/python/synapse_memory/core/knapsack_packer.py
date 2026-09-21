@@ -87,4 +87,3 @@ class KnapsackPacker:
                 selected.append(MemoryNodeResult(m))
                 current_cost += cost
         return selected
-

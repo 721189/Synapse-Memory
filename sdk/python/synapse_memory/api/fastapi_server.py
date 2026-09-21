@@ -24,18 +24,21 @@ from synapse_memory.core.auth import SecurityManager, APIKeyRecord
 logger = logging.getLogger("SynapseGateway")
 logging.basicConfig(level=logging.INFO)
 
-# Security & Identity Engine
-security_manager = SecurityManager(db_path="synapse_memory.db")
-
 # Detect Canonical Database Storage Backend
 DATABASE_URL = os.environ.get("DATABASE_URL") or os.environ.get("POSTGRES_URL")
 STORAGE_BACKEND = os.environ.get("SYNAPSE_STORAGE_BACKEND", "auto").lower()
+
+# Security & Distributed Identity Engine
+security_manager = SecurityManager(
+    db_path="synapse_memory.db",
+    connection_string=DATABASE_URL if (DATABASE_URL and STORAGE_BACKEND in ["pgvector", "auto"]) else None
+)
 
 if STORAGE_BACKEND == "pgvector" or (STORAGE_BACKEND == "auto" and DATABASE_URL):
     try:
         store = PGVectorMemoryStore(connection_string=DATABASE_URL)
         ACTIVE_BACKEND = "pgvector"
-        logger.info(f"Canonical Production Engine using PostgreSQL + pgvector (HNSW) at {DATABASE_URL[:20]}...")
+        logger.info(f"Canonical Production Engine using PostgreSQL + pgvector (HNSW) at {str(DATABASE_URL)[:20]}...")
     except Exception as e:
         logger.warning(f"Could not connect to PostgreSQL ({e}); initializing SQLiteMemoryStore.")
         store = SQLiteMemoryStore("synapse_memory.db")

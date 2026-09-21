@@ -6,12 +6,13 @@ import os
 # Align python sys path to resolve absolute imports correctly
 sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
-from synapse_memory.core.sqlite_db import SQLiteMemoryStore
+from synapse_memory.core.decay_engine import DecayEngine
 from synapse_memory.core.embedder import SynapseEmbedder
-from synapse_memory.core.memory_manager import MemoryManager
 from synapse_memory.core.hybrid_search import HybridSearch
 from synapse_memory.core.knapsack_packer import KnapsackPacker
-from synapse_memory.core.decay_engine import DecayEngine
+from synapse_memory.core.memory_manager import MemoryManager
+from synapse_memory.core.sqlite_db import SQLiteMemoryStore
+
 
 def main():
     parser = argparse.ArgumentParser(
@@ -105,6 +106,7 @@ def main():
 
     else:
         parser.print_help()
+
 
 if __name__ == "__main__":
     main()

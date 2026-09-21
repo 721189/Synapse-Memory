@@ -5,6 +5,7 @@ from typing import List, Dict, Any, Tuple, Optional
 def _tokenize(text: str) -> List[str]:
     return [w for w in re.findall(r'[a-zA-Z0-9_]+', text.lower()) if len(w) > 1]
 
+
 class HybridSearch:
     """
     State-of-the-art Hybrid Information Retrieval Engine.
@@ -195,4 +196,3 @@ class HybridSearch:
             category_filter=category_filter,
             tenant_filter=tenant_filter
         )
-

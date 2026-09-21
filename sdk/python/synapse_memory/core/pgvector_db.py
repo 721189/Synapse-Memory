@@ -47,7 +47,8 @@ class PGVectorMemoryStore:
         m: int = 16,
         ef_construction: int = 64,
         encryption_provider: Optional[Any] = None,
-        auto_init: bool = True
+        auto_init: bool = True,
+        fail_closed: bool = False
     ):
         self.connection_string = connection_string or (
             "postgresql://synapse_admin:synapse_secure_pass@127.0.0.1:5432/synapse_cognitive"
@@ -55,6 +56,7 @@ class PGVectorMemoryStore:
         self.dimension = dimension
         self.m = m
         self.ef_construction = ef_construction
+        self.fail_closed = fail_closed
         self._pool: Optional[Any] = None
         self._connected = False
 
@@ -64,11 +66,15 @@ class PGVectorMemoryStore:
             key = KeyManagementProvider.get_encryption_key()
             self.encryption_provider = FernetEncryptionProvider(key)
 
-        # In-memory shadow cache for non-Postgres environments or fallback
+        # In-memory shadow cache for local development/testing fallback
         self._fallback_cache: Dict[str, Dict[str, Any]] = {}
 
         if HAS_PSYCOPG2 and auto_init:
             self._connect()
+
+    @property
+    def is_connected(self) -> bool:
+        return self._connected
 
     def _connect(self) -> None:
         try:
@@ -81,6 +87,9 @@ class PGVectorMemoryStore:
             logger.info("PGVectorMemoryStore successfully connected to PostgreSQL.")
         except Exception as e:
             self._connected = False
+            if self.fail_closed:
+                logger.error(f"PostgreSQL/pgvector connection failed in fail-closed mode: {e}")
+                raise RuntimeError(f"PostgreSQL connection failed: {e}")
             logger.warning(
                 f"PostgreSQL/pgvector connection unviable ({e}); operating in fallback mode."
             )
@@ -141,6 +150,7 @@ class PGVectorMemoryStore:
 
                 # 6. Database Row-Level Security (RLS)
                 cur.execute("ALTER TABLE memories ENABLE ROW LEVEL SECURITY;")
+                cur.execute("ALTER TABLE memories FORCE ROW LEVEL SECURITY;")
                 cur.execute("""
                     DO $$
                     BEGIN
@@ -150,14 +160,10 @@ class PGVectorMemoryStore:
                             CREATE POLICY tenant_isolation_policy ON memories
                             FOR ALL
                             USING (
-                                current_setting('app.current_tenant', true) IS NULL
-                                OR current_setting('app.current_tenant', true) = ''
-                                OR tenant_id = current_setting('app.current_tenant', true)
+                                tenant_id = NULLIF(current_setting('app.current_tenant', true), '')
                             )
                             WITH CHECK (
-                                current_setting('app.current_tenant', true) IS NULL
-                                OR current_setting('app.current_tenant', true) = ''
-                                OR tenant_id = current_setting('app.current_tenant', true)
+                                tenant_id = NULLIF(current_setting('app.current_tenant', true), '')
                             );
                         END IF;
                     END $$;

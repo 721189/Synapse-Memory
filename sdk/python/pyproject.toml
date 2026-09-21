@@ -8,7 +8,7 @@ version = "0.1.0"
 authors = [{name = "Synapse Cognitive Systems", email = "singhshivam20009@gmail.com"}]
 description = "Production-grade active RAG & cognitive memory engine with multi-tenancy, pgvector HNSW indexing, semantic deduplication, decay-based pruning, and token-aware context packing."
 readme = "README.md"
-requires-python = ">=3.9"
+requires-python = ">=3.10"
 dependencies = [
     "fastapi>=0.95.0",
     "pydantic>=2.0.0",

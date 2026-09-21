@@ -1,15 +1,18 @@
-from typing import List, Dict, Any, Optional, Tuple
-import math
-import logging
 from dataclasses import dataclass
 from enum import Enum
+import logging
+import math
+from typing import Any, Dict, List, Optional
+
 
 logger = logging.getLogger("Deduplicator")
+
 
 class Action(Enum):
     CREATE = "CREATE"
     MERGE = "MERGE"
     REJECT = "REJECT"
+
 
 @dataclass
 class MergeResult:
@@ -18,8 +21,10 @@ class MergeResult:
     reason: str
     provenance: Dict[str, Any]
 
+
 # Alias for backwards compatibility
 DeduplicationResult = MergeResult
+
 
 class Deduplicator:
     def __init__(self, category_thresholds: Dict[str, float], default_threshold: float = 0.85):
@@ -68,17 +73,27 @@ class Deduplicator:
 
                 # If new memory has significantly higher confidence, suggest supersession (merge)
                 if new_conf > old_conf + 0.1:
-                     return MergeResult(Action.MERGE, existing["id"], "Higher confidence supersession",
-                                        {"new_conf": new_conf, "old_conf": old_conf})
+                    return MergeResult(
+                        Action.MERGE,
+                        existing["id"],
+                        "Higher confidence supersession",
+                        {"new_conf": new_conf, "old_conf": old_conf}
+                    )
 
                 # Check for explicit contradiction in content
-                if ("true" in new_mem["content"].lower() and "false" in existing["content"].lower()) or \
-                   ("false" in new_mem["content"].lower() and "true" in existing["content"].lower()):
-                   return MergeResult(Action.REJECT, None, "Direct contradiction detected", {"type": "conflict"})
+                content_new = new_mem["content"].lower()
+                content_old = existing["content"].lower()
+                if ("true" in content_new and "false" in content_old) or ("false" in content_new and "true" in content_old):
+                    return MergeResult(Action.REJECT, None, "Direct contradiction detected", {"type": "conflict"})
 
             # 5. Threshold Decision
             if semantic_sim >= threshold or (lexical_sim > 0.9 and semantic_sim > 0.7):
-                return MergeResult(Action.MERGE, existing["id"], "Semantic/Lexical similarity threshold exceeded",
-                                   {"semantic_sim": semantic_sim, "lexical_sim": lexical_sim})
+                return MergeResult(
+                    Action.MERGE,
+                    existing["id"],
+                    "Semantic/Lexical similarity threshold exceeded",
+                    {"semantic_sim": semantic_sim, "lexical_sim": lexical_sim}
+                )
 
         return MergeResult(Action.CREATE, None, "No duplicates found", {})
+

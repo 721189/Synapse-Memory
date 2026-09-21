@@ -8,7 +8,7 @@ setup(
     author_email="singhshivam20009@gmail.com",
     url="https://github.com/721189/Synapse-Memory",
     packages=find_packages(include=["synapse_memory*"]),
-    python_requires=">=3.9",
+    python_requires=">=3.10",
     install_requires=[
         "fastapi>=0.95.0",
         "pydantic>=2.0.0",
