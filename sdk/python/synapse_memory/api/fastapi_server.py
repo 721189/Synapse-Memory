@@ -37,7 +37,7 @@ app = FastAPI(
 )
 
 # Tighten CORS to production-appropriate origins
-ALLOWED_ORIGINS = os.environ.get("ALLOWED_ORIGINS", "https://app.synapse-memory.example.com").split(",")
+ALLOWED_ORIGINS = os.environ.get("ALLOWED_ORIGINS", "http://localhost:3000,https://app.synapse-memory.internal").split(",")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=ALLOWED_ORIGINS,

@@ -48,6 +48,9 @@ class KeyManagementProvider:
             logger.warning(f"Could not persist encryption key to {target_file}: {e}")
         return new_key
 
+# Aliases for backwards compatibility
+FernetKeyManager = KeyManagementProvider
+
 
 class FernetEncryptionProvider:
     """
@@ -126,4 +129,7 @@ class FernetEncryptionProvider:
                 encrypted_data.encode("utf-8")
             ).decode("utf-8")
         raise ValueError("Decryption failed: invalid key or payload")
+
+# Aliases for backwards compatibility
+EncryptedMemoryStore = FernetEncryptionProvider
 

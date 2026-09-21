@@ -31,8 +31,9 @@ synapse = "synapse_memory.cli.synapse_cli:main"
 synapse-cli = "synapse_memory.cli.synapse_cli:main"
 
 [project.urls]
-"Homepage" = "https://github.com/example/synapse_memory"
-"Bug Tracker" = "https://github.com/example/synapse_memory/issues"
+"Homepage" = "https://github.com/synapse-memory/synapse_memory"
+"Bug Tracker" = "https://github.com/synapse-memory/synapse_memory/issues"
+"Documentation" = "https://github.com/synapse-memory/synapse_memory#readme"
 
 [tool.setuptools.packages.find]
 where = ["sdk/python"]

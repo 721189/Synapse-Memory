@@ -12,16 +12,19 @@ class HybridSearch:
     vector similarity, fused via Reciprocal Rank Fusion (RRF).
     """
 
-    def __init__(self, k1: float = 1.5, b: float = 0.75, rrf_k: int = 60):
+    def __init__(self, k1: float = 1.5, b: float = 0.75, rrf_k: int = 60, alpha: float = 0.5, k: Optional[int] = None, **kwargs: Any):
         """
         Args:
             k1: BM25 term frequency saturation parameter.
             b: BM25 document length normalization parameter.
             rrf_k: Constant used to smooth Reciprocal Rank Fusion ranks.
+            alpha: Hybrid fusion weight between dense (alpha) and sparse (1 - alpha).
+            k: Alias for rrf_k or top_k fallback.
         """
         self.k1 = k1
         self.b = b
-        self.rrf_k = rrf_k
+        self.rrf_k = k if k is not None else rrf_k
+        self.alpha = alpha
 
     def _calculate_bm25_scores(self, query_terms: List[str], corpus: List[Dict[str, Any]]) -> Dict[str, float]:
         """
@@ -168,3 +171,28 @@ class HybridSearch:
         # 5. Final Ranking
         results.sort(key=lambda x: x["relevance_score"], reverse=True)
         return results[:top_k]
+
+    def search(
+        self,
+        query: str,
+        corpus: Optional[List[Dict[str, Any]]] = None,
+        documents: Optional[List[Dict[str, Any]]] = None,
+        query_vector: Optional[List[float]] = None,
+        top_k: int = 10,
+        category_filter: Optional[str] = None,
+        tenant_filter: Optional[str] = None,
+        **kwargs: Any
+    ) -> List[Dict[str, Any]]:
+        """
+        Intuitive alias for fused_search supporting both 'corpus' and 'documents' arguments.
+        """
+        target_docs = corpus if corpus is not None else (documents or [])
+        return self.fused_search(
+            query=query,
+            documents=target_docs,
+            query_vector=query_vector,
+            top_k=top_k,
+            category_filter=category_filter,
+            tenant_filter=tenant_filter
+        )
+

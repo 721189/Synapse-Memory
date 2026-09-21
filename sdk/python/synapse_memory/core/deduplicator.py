@@ -18,6 +18,9 @@ class MergeResult:
     reason: str
     provenance: Dict[str, Any]
 
+# Alias for backwards compatibility
+DeduplicationResult = MergeResult
+
 class Deduplicator:
     def __init__(self, category_thresholds: Dict[str, float], default_threshold: float = 0.85):
         self.category_thresholds = category_thresholds

@@ -8,4 +8,4 @@ maintainers:
   - name: Synapse Cognitive Systems
     email: support@synapse-memory.internal
 sources:
-  - https://github.com/example/synapse_memory
+  - https://github.com/synapse-memory/synapse_memory

@@ -6,3 +6,33 @@ coverage/
 *.log
 .env*
 !.env.example
+
+# Python Bytecode & Environments
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+.venv/
+ENV/
+*.egg-info/
+*.egg
+.eggs/
+
+# Testing & Type-Checking Caches
+.pytest_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+.tox/
+
+# Local SQLite databases & cryptographic keys
+*.db
+*.sqlite
+*.sqlite3
+.synapse_key
+test_*.db
+bench_*.db
+
