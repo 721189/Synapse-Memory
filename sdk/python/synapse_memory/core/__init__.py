@@ -19,9 +19,15 @@ from synapse_memory.core.embedding_provider import (
     OpenAIEmbeddingProvider,
 )
 from synapse_memory.core.encryption import EncryptedMemoryStore, FernetKeyManager
+from synapse_memory.core.pgvector_db import PGVectorMemoryStore
+from synapse_memory.core.auth import SecurityManager, APIKeyRecord, AuthAuditLog
 
 __all__ = [
     "SQLiteMemoryStore",
+    "PGVectorMemoryStore",
+    "SecurityManager",
+    "APIKeyRecord",
+    "AuthAuditLog",
     "SynapseEmbedder",
     "MemoryManager",
     "HybridSearch",
