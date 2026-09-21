@@ -39,8 +39,8 @@ embedder = SynapseEmbedder(provider="local")
 manager = MemoryManager(store=store, embedder=embedder)
 
 # Core Engine Instances
-packer = KnapsackPacker()
-decay = DecayEngine()
+packer = KnapsackPacker(token_budget=32000)
+decay = DecayEngine(category_configs={})
 searcher = HybridSearch()
 
 
@@ -121,11 +121,14 @@ def query_memory(payload: QueryRequest):
     # 2. Dynamic temporal decay adjustment
     decayed_candidates = []
     for m in candidates:
-        current_relevance = decay.calculate_retention(
-            base_relevance=m["relevance_score"],
-            created_epoch=m["created_at"],
-            access_count=m["access_count"]
-        )
+        # Prepare memory dict for DecayEngine
+        mem_node = {
+            "created_at": m["created_at"],
+            "access_count": m["access_count"],
+            "confidence": m.get("confidence", 0.5),
+            "category": m.get("category", "interaction")
+        }
+        current_relevance = decay.calculate_relevance(mem_node)
         m_copy = m.copy()
         m_copy["relevance_score"] = current_relevance
         decayed_candidates.append(m_copy)

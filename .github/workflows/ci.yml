@@ -14,7 +14,7 @@ jobs:
         pip install -r sdk/python/requirements.txt
         pip install -r requirements-dev.txt
         pip install -e sdk/python
-        pip install bandit
+        pip install flake8 bandit mypy pytest
     - name: Lint with flake8
       run: flake8 sdk/python
     - name: Security audit with bandit

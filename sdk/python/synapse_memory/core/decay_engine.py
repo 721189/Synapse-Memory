@@ -37,6 +37,11 @@ class DecayEngine:
         # Exponential decay
         return memory.get("confidence", 0.5) * math.exp(-elapsed / strength)
 
+    def compute_feedback_boost(self, current_confidence: float, feedback_type: str) -> float:
+        """Helper to adjust confidence based on feedback."""
+        boost = 0.05 if feedback_type == "positive" else -0.1
+        return max(0.1, min(1.0, current_confidence + boost))
+
     def reinforce(self, memory: Dict[str, Any], feedback_value: float = 1.0) -> Dict[str, Any]:
         """
         Applies reinforcement to a memory node.

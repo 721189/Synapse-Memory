@@ -2,9 +2,29 @@ import express from "express";
 import path from "path";
 import { createServer as createViteServer } from "vite";
 import { GoogleGenAI } from "@google/genai";
+import { spawn } from "child_process";
+import httpProxy from "http-proxy";
 
 const app = express();
 const PORT = 3000;
+const proxy = httpProxy.createProxyServer();
+
+// Spawn Python FastAPI backend
+const pythonBackend = spawn("python3", ["-m", "uvicorn", "synapse_memory.api.fastapi_server:app", "--port", "8000"], {
+  cwd: "./sdk/python",
+  stdio: 'inherit',
+  env: { ...process.env, PYTHONPATH: "./" }
+});
+
+console.log("Python backend spawned on port 8000");
+
+// API Proxy routes
+app.use("/api", (req, res) => {
+  proxy.web(req, res, { target: 'http://localhost:8000' }, (err) => {
+    console.error('Proxy error:', err);
+    res.status(502).json({ error: "Bad Gateway" });
+  });
+});
 
 app.use(express.json());
 
