@@ -1,5 +1,9 @@
 import math
+import re
 from typing import List, Dict, Any, Tuple, Optional
+
+def _tokenize(text: str) -> List[str]:
+    return [w for w in re.findall(r'[a-zA-Z0-9_]+', text.lower()) if len(w) > 1]
 
 class HybridSearch:
     """
@@ -28,13 +32,14 @@ class HybridSearch:
             return scores
 
         N = len(corpus)
-        doc_lengths = {doc["id"]: len(doc.get("content", "").lower().split()) for doc in corpus}
+        tokenized_corpus = {doc["id"]: _tokenize(doc.get("content", "")) for doc in corpus}
+        doc_lengths = {doc_id: len(words) for doc_id, words in tokenized_corpus.items()}
         avgdl = sum(doc_lengths.values()) / max(1, N)
 
         # 1. Compute Document Frequency (df) for each query term
         df = {}
         for term in query_terms:
-            df[term] = sum(1 for doc in corpus if term in doc.get("content", "").lower().split())
+            df[term] = sum(1 for words in tokenized_corpus.values() if term in words)
 
         # 2. Compute BM25 scores for each document
         for term in query_terms:
@@ -45,8 +50,8 @@ class HybridSearch:
 
             for doc in corpus:
                 doc_id = doc["id"]
-                content_words = doc.get("content", "").lower().split()
-                tf = content_words.count(term)
+                words = tokenized_corpus[doc_id]
+                tf = words.count(term)
                 
                 if tf > 0:
                     dl = doc_lengths[doc_id]
@@ -119,7 +124,7 @@ class HybridSearch:
         if not filtered_docs:
             return []
 
-        query_terms = [t for t in query.lower().split() if len(t) > 1]
+        query_terms = _tokenize(query)
         
         # 2. Compute pure Lexical BM25 scores and sort to get Sparse ranks
         bm25_scores = self._calculate_bm25_scores(query_terms, filtered_docs)

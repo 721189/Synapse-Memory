@@ -1,0 +1,15 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "synapse-memory.fullname" . }}-config
+  labels:
+    {{- include "synapse-memory.labels" . | nindent 4 }}
+data:
+  NODE_ENV: {{ .Values.config.nodeEnv | quote }}
+  TOKEN_BUDGET_MAX: {{ .Values.config.tokenBudgetMax | quote }}
+  HYBRID_DECAY_RATE: {{ .Values.config.hybridDecayRate | quote }}
+  DB_HOST: {{ .Values.config.dbHost | quote }}
+  DB_PORT: {{ .Values.config.dbPort | quote }}
+  DB_USER: {{ .Values.config.dbUser | quote }}
+  DB_NAME: {{ .Values.config.dbName | quote }}
+  REDIS_URL: "redis://{{ .Values.config.redisHost }}:{{ .Values.config.redisPort }}/0"

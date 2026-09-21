@@ -3,13 +3,25 @@ requires = ["setuptools>=61.0"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "synapse_memory"
+name = "synapse-memory"
 version = "0.1.0"
-authors = [{name = "AI Studio Agent", email = "assistant@google.com"}]
-description = "Production-grade semantic memory engine with semantic deduplication, decay-based pruning, and token-aware context packing."
+authors = [{name = "Synapse Cognitive Systems", email = "support@synapse-memory.internal"}]
+description = "Production-grade active RAG & cognitive memory engine with semantic deduplication, decay-based pruning, and token-aware context packing."
 readme = "README.md"
 requires-python = ">=3.9"
-dependencies = []
+dependencies = [
+    "fastapi>=0.95.0",
+    "pydantic>=2.0.0",
+    "uvicorn>=0.20.0",
+    "cryptography>=3.4.0",
+    "requests>=2.25.0",
+    "numpy>=1.20.0"
+]
+
+[project.scripts]
+synapse-memory = "synapse_memory.cli.synapse_cli:main"
+synapse = "synapse_memory.cli.synapse_cli:main"
+synapse-cli = "synapse_memory.cli.synapse_cli:main"
 
 [tool.setuptools.packages.find]
 where = ["."]

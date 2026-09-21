@@ -1,4 +1,6 @@
-flake8
-mypy
-pytest
+flake8>=6.0.0
+mypy>=1.0.0
+bandit>=1.7.0
+pytest>=7.0.0
 types-cryptography
+types-requests

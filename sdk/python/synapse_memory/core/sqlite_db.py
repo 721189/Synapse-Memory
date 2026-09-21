@@ -177,3 +177,44 @@ class SQLiteMemoryStore:
             cursor.execute("SELECT count(*) FROM memories")
             return int(cursor.fetchone()[0])
 
+    def query_candidates(
+        self,
+        category: Optional[str] = None,
+        min_confidence: float = 0.0,
+        limit: int = 100,
+        order_by: str = "last_accessed_at DESC"
+    ) -> List[Dict[str, Any]]:
+        """
+        Retrieves a bounded candidate set directly using SQL indexes
+        instead of loading the entire corpus into application memory.
+        """
+        query = "SELECT * FROM memories WHERE confidence >= ?"
+        params: List[Any] = [min_confidence]
+        if category:
+            query += " AND category = ?"
+            params.append(category)
+
+        safe_orders = {
+            "last_accessed_at DESC": "last_accessed_at DESC",
+            "created_at DESC": "created_at DESC",
+            "access_count DESC": "access_count DESC",
+            "confidence DESC": "confidence DESC"
+        }
+        order_clause = safe_orders.get(order_by, "last_accessed_at DESC")
+        query += f" ORDER BY {order_clause} LIMIT ?"
+        params.append(limit)
+
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(query, tuple(params))
+            rows = cursor.fetchall()
+            memories = []
+            for row in rows:
+                mem = dict(row)
+                mem["content"] = self.encryption_provider.decrypt(mem["content"])
+                mem["embedding"] = json.loads(
+                    self.encryption_provider.decrypt(mem["embedding"])
+                )
+                memories.append(mem)
+            return memories
+

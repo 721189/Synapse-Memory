@@ -1,0 +1,11 @@
+apiVersion: v2
+name: synapse-memory
+description: Production-grade Helm chart for SynapseMemory Active RAG & Cognitive Substrate
+type: application
+version: 0.1.0
+appVersion: "1.2.0"
+maintainers:
+  - name: Synapse Cognitive Systems
+    email: support@synapse-memory.internal
+sources:
+  - https://github.com/example/synapse_memory

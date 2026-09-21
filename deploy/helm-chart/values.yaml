@@ -1,4 +1,4 @@
-# Default Helm Chart Values for SynapseMemory Cognitive Substrate Cluster
+# Production Helm Chart Values for SynapseMemory
 replicaCount: 3
 
 image:
@@ -7,7 +7,7 @@ image:
   tag: "v1.2.0"
 
 service:
-  type: LoadBalancer
+  type: ClusterIP
   port: 80
   targetPort: 3000
 
@@ -17,11 +17,16 @@ ingress:
   annotations:
     cert-manager.io/cluster-issuer: "letsencrypt-prod"
     nginx.ingress.kubernetes.io/ssl-redirect: "true"
+    nginx.ingress.kubernetes.io/proxy-body-size: "16m"
   hosts:
-    - host: synapse.enterprise-internal.net
+    - host: synapse.internal.domain
       paths:
         - path: /
-          pathType: ImplementationSpecific
+          pathType: Prefix
+  tls:
+    - secretName: synapse-tls-cert
+      hosts:
+        - synapse.internal.domain
 
 resources:
   limits:
@@ -38,12 +43,29 @@ autoscaling:
   targetCPUUtilizationPercentage: 80
   targetMemoryUtilizationPercentage: 80
 
-env:
-  NODE_ENV: "production"
-  TOKEN_BUDGET_MAX: "1500"
-  HYBRID_DECAY_RATE: "0.08"
-  DB_HOST: "synapse-postgresql.default.svc.cluster.local"
-  REDIS_URL: "redis://synapse-redis-master.default.svc.cluster.local:6379/0"
+# Secrets: Inject from existing Kubernetes secrets or ExternalSecrets operator
+# NEVER commit production plaintext credentials to source control.
+secrets:
+  # Name of an existing Secret containing sensitive credentials
+  # Expected keys: GEMINI_API_KEY, SYNAPSE_ENCRYPTION_KEY, POSTGRES_PASSWORD, REDIS_PASSWORD
+  existingSecret: "synapse-credentials"
+  createSecret: false
+  # If createSecret is true (e.g. dev/staging testing only):
+  geminiApiKey: ""
+  encryptionKey: ""
+  postgresPassword: ""
+  redisPassword: ""
+
+config:
+  nodeEnv: "production"
+  tokenBudgetMax: "1500"
+  hybridDecayRate: "0.08"
+  dbHost: "synapse-postgresql.default.svc.cluster.local"
+  dbPort: "5432"
+  dbUser: "synapse_admin"
+  dbName: "synapse_cognitive"
+  redisHost: "synapse-redis-master.default.svc.cluster.local"
+  redisPort: "6379"
 
 postgresql:
   enabled: true
@@ -52,15 +74,13 @@ postgresql:
     tag: pg16
   auth:
     username: synapse_admin
-    password: synapse_secure_pass
     database: synapse_cognitive
+    existingSecret: "synapse-credentials"
+    secretKeys:
+      adminPasswordKey: "POSTGRES_PASSWORD"
+      userPasswordKey: "POSTGRES_PASSWORD"
   primary:
     persistence:
       enabled: true
       size: 100Gi
-
-redis:
-  enabled: true
-  architecture: replication
-  replica:
-    replicaCount: 2
+      storageClass: ""

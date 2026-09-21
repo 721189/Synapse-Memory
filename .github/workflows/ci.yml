@@ -9,20 +9,27 @@ jobs:
       uses: actions/setup-python@v4
       with:
         python-version: '3.10'
-    - name: Install dependencies
+    - name: 1. Clean Install
       run: |
-        pip install -r sdk/python/requirements.txt
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
         pip install -r requirements-dev.txt
         pip install -e sdk/python
-        pip install flake8 bandit mypy pytest
-    - name: Lint with flake8
-      run: flake8 sdk/python
-    - name: Security audit with bandit
+    - name: 2. Clean Import Verification
+      run: |
+        python -c "import synapse_memory; from synapse_memory.core import SQLiteMemoryStore, SynapseEmbedder, HybridSearch, KnapsackPacker, DecayEngine; print('SynapseMemory core modules cleanly imported!')"
+    - name: 3. Lint with flake8
+      run: flake8 sdk/python --config=setup.cfg
+    - name: 4. Security audit with bandit
       run: bandit -r sdk/python -s B101,B104,B311
-    - name: Type-check with mypy
+    - name: 5. Type-check with mypy
       run: mypy sdk/python --config-file setup.cfg
-    - name: Test with pytest
+    - name: 6. Unit Tests
       env:
         SYNAPSE_ENCRYPTION_KEY: "c3luYXBzZS1lbmNyeXB0aW9uLWtleS1kZW1vLTEyMzQ1Ng=="
-      run: pytest sdk/python
+      run: pytest sdk/python/tests -k "not test_integration"
+    - name: 7. Integration Tests
+      env:
+        SYNAPSE_ENCRYPTION_KEY: "c3luYXBzZS1lbmNyeXB0aW9uLWtleS1kZW1vLTEyMzQ1Ng=="
+      run: pytest sdk/python/tests/test_integration.py
 
