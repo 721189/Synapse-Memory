@@ -228,6 +228,28 @@ app.post("/api/memories/add", (req, res) => {
   res.json({ success: true, memory: newNode });
 });
 
+// Alias for /api/memories/add
+app.post("/api/memories/create", (req, res) => {
+  const { category, content, source } = req.body;
+  if (!content) {
+    return res.status(400).json({ error: "Content is required" });
+  }
+
+  const newNode: MemoryNode = {
+    id: `mem_${Date.now()}`,
+    category: category || 'fact',
+    content,
+    confidence: 0.90,
+    source: source || 'Manual API addition',
+    timestamp: new Date().toISOString(),
+    accessCount: 1,
+    status: 'active'
+  };
+
+  memoryStore.unshift(newNode);
+  res.json({ success: true, memory: newNode });
+});
+
 app.post("/api/memories/clear", (req, res) => {
   memoryStore = [];
   res.json({ success: true, message: "Memory store cleared." });
@@ -442,6 +464,28 @@ ${memoryContextStr || "No prior memories stored yet."}
 
 // Enterprise Security: PII Scrubbing endpoint
 app.post("/api/security/scrub-pii", (req, res) => {
+  const { text } = req.body;
+  if (!text) return res.status(400).json({ error: "Text is required" });
+
+  let scrubbed = text
+    .replace(/\b(sk-[a-zA-Z0-9]{20,})\b/g, '[REDACTED_API_KEY]')
+    .replace(/\b(\d{3}[-]?\d{2}[-]?\d{4})\b/g, '[REDACTED_SSN]')
+    .replace(/\b(4\d{3}[\s-]?\d{4}[\s-]?\d{4}[\s-]?\d{4})\b/g, '[REDACTED_CREDIT_CARD]')
+    .replace(/password\s*[:=]\s*([^\s]+)/gi, 'password=[REDACTED]');
+
+  const detectedPII = scrubbed !== text;
+
+  res.json({
+    success: true,
+    originalText: text,
+    scrubbedText: scrubbed,
+    detectedPII,
+    encryptionCMEK: "aes-256-gcm-kam-verified"
+  });
+});
+
+// Alias for /api/security/scrub-pii
+app.post("/api/security/scrub", (req, res) => {
   const { text } = req.body;
   if (!text) return res.status(400).json({ error: "Text is required" });
 
