@@ -48,6 +48,14 @@ class TestPGVectorMemoryStore(unittest.TestCase):
         self.assertEqual(results[0]["id"], "mem_close")
         self.assertAlmostEqual(results[0]["cosine_similarity"], 1.0, places=3)
 
+    def test_fail_closed_mode_raises_on_connection_failure(self):
+        with self.assertRaises(RuntimeError):
+            PGVectorMemoryStore(
+                connection_string="postgresql://invalid_user:invalid_pass@127.0.0.1:9999/nonexistent",
+                fail_closed=True,
+                auto_init=True
+            )
+
 
 if __name__ == "__main__":
     unittest.main()

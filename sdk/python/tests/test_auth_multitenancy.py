@@ -87,6 +87,14 @@ class TestAuthAndMultiTenancy(unittest.TestCase):
         gamma_mems = self.store.get_all_memories(tenant_id="tenant_gamma")
         self.assertEqual(len(gamma_mems), 0)
 
+    def test_security_manager_fail_closed_on_postgres_unavailable(self):
+        with self.assertRaises(RuntimeError):
+            SecurityManager(
+                db_path="test_auth_fail_closed.db",
+                connection_string="postgresql://invalid:invalid@127.0.0.1:9999/nonexistent",
+                fail_closed=True
+            )
+
 
 if __name__ == "__main__":
     unittest.main()

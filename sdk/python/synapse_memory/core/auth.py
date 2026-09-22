@@ -13,6 +13,8 @@ import time
 from dataclasses import dataclass, asdict
 from typing import Any, Dict, List, Optional, Set, Tuple
 
+logger = logging.getLogger("SynapseSecurity")
+
 try:
     import psycopg2
     from psycopg2 import pool
@@ -62,9 +64,15 @@ class SecurityManager:
     Supports centralized PostgreSQL cluster storage and SQLite local storage.
     """
 
-    def __init__(self, db_path: str = "synapse_memory.db", connection_string: Optional[str] = None):
+    def __init__(
+        self,
+        db_path: str = "synapse_memory.db",
+        connection_string: Optional[str] = None,
+        fail_closed: bool = False
+    ):
         self.db_path = db_path
         self.connection_string = connection_string
+        self.fail_closed = fail_closed
         self._pool: Optional[Any] = None
         self._is_postgres = False
 
@@ -74,9 +82,15 @@ class SecurityManager:
                 self._is_postgres = True
                 logger.info("SecurityManager connected to centralized PostgreSQL authentication datastore.")
             except Exception as e:
-                logger.warning(f"Could not connect SecurityManager to PostgreSQL ({e}); falling back to SQLite {db_path}.")
                 self._is_postgres = False
                 self._pool = None
+                if self.fail_closed:
+                    raise RuntimeError(
+                        f"Central PostgreSQL authentication datastore unavailable: {e}"
+                    ) from e
+                logger.warning(
+                    f"Could not connect SecurityManager to PostgreSQL ({e}); falling back to SQLite {db_path}."
+                )
 
         self._initialize_auth_tables()
         self._bootstrap_root_key()
@@ -170,11 +184,13 @@ class SecurityManager:
                 cur.execute("CREATE INDEX IF NOT EXISTS idx_audit_time ON auth_audit_logs(timestamp DESC)")
                 conn.commit()
         except Exception as e:
-            logger.warning(f"Error initializing auth tables: {e}")
             try:
                 conn.rollback()
             except Exception:
                 pass
+            if self.fail_closed:
+                raise RuntimeError(f"Failed to initialize centralized authentication tables: {e}") from e
+            logger.warning(f"Error initializing auth tables: {e}")
         finally:
             self._return_connection(conn)
 

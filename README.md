@@ -4,8 +4,8 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![GitHub Repository](https://img.shields.io/badge/GitHub-721189%2FSynapse--Memory-181717?logo=github)](https://github.com/721189/Synapse-Memory)
-[![Python Version](https://img.shields.io/badge/python-3.9%2B-blue.svg)](https://www.python.org/)
-[![Node Version](https://img.shields.io/badge/node-18%2B-green.svg)](https://nodejs.org/)
+[![Python Version](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://www.python.org/)
+[![Node Version](https://img.shields.io/badge/node-20.19%2B-green.svg)](https://nodejs.org/)
 [![PostgreSQL](https://img.shields.io/badge/pgvector-HNSW-336791.svg)](https://github.com/pgvector/pgvector)
 
 ---

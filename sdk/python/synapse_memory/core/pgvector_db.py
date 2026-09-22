@@ -172,9 +172,26 @@ class PGVectorMemoryStore:
                 conn.commit()
         except Exception as e:
             conn.rollback()
-            logger.warning(f"Error during PGVector initialization: {e}")
+            if self.fail_closed:
+                raise RuntimeError(
+                    f"PostgreSQL/pgvector initialization failed: {e}"
+                ) from e
+            logger.warning(
+                f"PostgreSQL initialization failed; using fallback mode: {e}"
+            )
         finally:
             self._return_connection(conn)
+
+    def _handle_db_error(self, operation: str, error: Exception) -> None:
+        if self.fail_closed:
+            raise RuntimeError(
+                f"PostgreSQL operation failed: {operation}: {error}"
+            ) from error
+        logger.error(
+            "PostgreSQL operation failed: %s: %s",
+            operation,
+            error
+        )
 
     def _get_connection(self) -> Any:
         if self._pool is not None:
@@ -244,7 +261,7 @@ class PGVectorMemoryStore:
                 conn.commit()
         except Exception as e:
             conn.rollback()
-            logger.error(f"PostgreSQL insertion error: {e}")
+            self._handle_db_error("insert_memory", e)
         finally:
             self._return_connection(conn)
 
@@ -273,6 +290,9 @@ class PGVectorMemoryStore:
                             pass
                     return mem
                 return None
+        except Exception as e:
+            self._handle_db_error("get_memory", e)
+            return None
         finally:
             self._return_connection(conn)
 
@@ -302,6 +322,9 @@ class PGVectorMemoryStore:
                             pass
                     results.append(mem)
                 return results
+        except Exception as e:
+            self._handle_db_error("get_memories_by_category", e)
+            return []
         finally:
             self._return_connection(conn)
 
@@ -332,6 +355,9 @@ class PGVectorMemoryStore:
                         WHERE id = %s
                     """, (count_increment, time.time(), memory_id))
                 conn.commit()
+        except Exception as e:
+            conn.rollback()
+            self._handle_db_error("update_access_count", e)
         finally:
             self._return_connection(conn)
 
@@ -351,6 +377,9 @@ class PGVectorMemoryStore:
                 else:
                     cur.execute("UPDATE memories SET confidence = %s WHERE id = %s", (new_confidence, memory_id))
                 conn.commit()
+        except Exception as e:
+            conn.rollback()
+            self._handle_db_error("update_confidence", e)
         finally:
             self._return_connection(conn)
 
@@ -422,6 +451,9 @@ class PGVectorMemoryStore:
                     mem["relevance_score"] = mem.get("cosine_similarity", 0.0)
                     results.append(mem)
                 return results
+        except Exception as e:
+            self._handle_db_error("vector_search", e)
+            return []
         finally:
             self._return_connection(conn)
 
@@ -439,6 +471,9 @@ class PGVectorMemoryStore:
                 else:
                     cur.execute("SELECT count(*) FROM memories;")
                 return int(cur.fetchone()[0])
+        except Exception as e:
+            self._handle_db_error("count_memories", e)
+            return 0
         finally:
             self._return_connection(conn)
 
@@ -457,6 +492,9 @@ class PGVectorMemoryStore:
                     cur.execute("SELECT * FROM memories ORDER BY created_at DESC;")
                 rows = cur.fetchall()
                 return [dict(r) for r in rows]
+        except Exception as e:
+            self._handle_db_error("get_all_memories", e)
+            return []
         finally:
             self._return_connection(conn)
 
@@ -473,6 +511,9 @@ class PGVectorMemoryStore:
                 else:
                     cur.execute("DELETE FROM memories WHERE id = %s;", (memory_id,))
                 conn.commit()
+        except Exception as e:
+            conn.rollback()
+            self._handle_db_error("delete_memory", e)
         finally:
             self._return_connection(conn)
 
@@ -493,5 +534,8 @@ class PGVectorMemoryStore:
                 else:
                     cur.execute("DELETE FROM memories;")
                 conn.commit()
+        except Exception as e:
+            conn.rollback()
+            self._handle_db_error("clear_memories", e)
         finally:
             self._return_connection(conn)

@@ -27,19 +27,38 @@ logging.basicConfig(level=logging.INFO)
 # Detect Canonical Database Storage Backend
 DATABASE_URL = os.environ.get("DATABASE_URL") or os.environ.get("POSTGRES_URL")
 STORAGE_BACKEND = os.environ.get("SYNAPSE_STORAGE_BACKEND", "auto").lower()
+IS_PRODUCTION = os.environ.get("NODE_ENV", "").lower() == "production"
 
 # Security & Distributed Identity Engine
 security_manager = SecurityManager(
     db_path="synapse_memory.db",
-    connection_string=DATABASE_URL if (DATABASE_URL and STORAGE_BACKEND in ["pgvector", "auto"]) else None
+    connection_string=DATABASE_URL if (DATABASE_URL and STORAGE_BACKEND in ["pgvector", "auto"]) else None,
+    fail_closed=IS_PRODUCTION and bool(DATABASE_URL)
 )
 
-if STORAGE_BACKEND == "pgvector" or (STORAGE_BACKEND == "auto" and DATABASE_URL):
+if STORAGE_BACKEND == "pgvector":
     try:
-        store = PGVectorMemoryStore(connection_string=DATABASE_URL)
+        store = PGVectorMemoryStore(
+            connection_string=DATABASE_URL,
+            fail_closed=True
+        )
         ACTIVE_BACKEND = "pgvector"
         logger.info(f"Canonical Production Engine using PostgreSQL + pgvector (HNSW) at {str(DATABASE_URL)[:20]}...")
     except Exception as e:
+        logger.exception(f"PostgreSQL startup failed in pgvector mode: {e}")
+        raise
+elif STORAGE_BACKEND == "auto" and DATABASE_URL:
+    try:
+        store = PGVectorMemoryStore(
+            connection_string=DATABASE_URL,
+            fail_closed=IS_PRODUCTION
+        )
+        ACTIVE_BACKEND = "pgvector"
+        logger.info(f"Canonical Production Engine using PostgreSQL + pgvector (HNSW) at {str(DATABASE_URL)[:20]}...")
+    except Exception as e:
+        if IS_PRODUCTION:
+            logger.exception(f"PostgreSQL startup failed in production mode: {e}")
+            raise
         logger.warning(f"Could not connect to PostgreSQL ({e}); initializing SQLiteMemoryStore.")
         store = SQLiteMemoryStore("synapse_memory.db")
         ACTIVE_BACKEND = "sqlite"

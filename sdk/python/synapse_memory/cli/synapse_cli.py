@@ -57,7 +57,7 @@ def main():
             category=args.category,
             confidence=args.confidence
         )
-        print(f"[+] Ingestion Finished:")
+        print("[+] Ingestion Finished:")
         print(f"    - Memory ID  : {mem_id}")
         print(f"    - Event Type : {action}")
         print(f"    - Token Cost : {cost} tokens")
