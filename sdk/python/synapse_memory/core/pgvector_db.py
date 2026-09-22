@@ -134,6 +134,24 @@ class PGVectorMemoryStore:
                     END $$;
                 """)
 
+                # 3b. Vector dimension migration if column dimension differs from configured target
+                try:
+                    cur.execute("""
+                        SELECT atttypmod FROM pg_attribute
+                        WHERE attrelid = 'memories'::regclass AND attname = 'embedding';
+                    """)
+                    row = cur.fetchone()
+                    if row:
+                        current_dim = row[0] if isinstance(row, (tuple, list)) else row.get("atttypmod")
+                        if current_dim and current_dim > 0 and current_dim != self.dimension:
+                            logger.warning(
+                                f"Migrating PostgreSQL 'memories.embedding' column dimension from {current_dim} to {self.dimension}..."
+                            )
+                            cur.execute("DROP INDEX IF EXISTS idx_memories_hnsw;")
+                            cur.execute(f"ALTER TABLE memories ALTER COLUMN embedding TYPE vector({self.dimension});")
+                except Exception as mig_err:
+                    logger.warning(f"Vector dimension check/migration skipped: {mig_err}")
+
                 # 4. HNSW vector index
                 cur.execute(f"""
                     CREATE INDEX IF NOT EXISTS idx_memories_hnsw
@@ -539,3 +557,33 @@ class PGVectorMemoryStore:
             self._handle_db_error("clear_memories", e)
         finally:
             self._return_connection(conn)
+
+    def reembed_all_memories(self, embedder: Any) -> int:
+        """Regenerates vector embeddings for all stored memory records using the active embedder."""
+        if not self._connected or not HAS_PSYCOPG2:
+            return 0
+
+        conn = self._get_connection()
+        updated_count = 0
+        try:
+            with conn.cursor() as cur:
+                cur.execute("SELECT id, content FROM memories;")
+                rows = cur.fetchall()
+                for row in rows:
+                    mem_id = row[0] if isinstance(row, (tuple, list)) else row["id"]
+                    content = row[1] if isinstance(row, (tuple, list)) else row["content"]
+                    new_vector = embedder.embed_query(content)
+                    vec_str = f"[{','.join(str(x) for x in new_vector)}]"
+                    cur.execute(
+                        "UPDATE memories SET embedding = %s WHERE id = %s;",
+                        (vec_str, mem_id)
+                    )
+                    updated_count += 1
+                conn.commit()
+                logger.info(f"Re-embedded {updated_count} memories to dimension {embedder.dimension}.")
+        except Exception as e:
+            conn.rollback()
+            self._handle_db_error("reembed_all_memories", e)
+        finally:
+            self._return_connection(conn)
+        return updated_count

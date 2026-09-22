@@ -83,7 +83,7 @@ class SentenceTransformerEmbeddingProvider(EmbeddingProvider):
     Production-grade local neural semantic embedding provider using sentence-transformers.
     Requires: sentence-transformers (pip install 'synapse-memory[local-models]')
     """
-    def __init__(self, model_name: str = "all-MiniLM-L6-v2", allow_fallback: bool = True):
+    def __init__(self, model_name: str = "all-MiniLM-L6-v2", allow_fallback: bool = False):
         self.model_name = model_name
         self._model = None
         self._fallback: Optional[DeterministicHashEmbeddingProvider] = None
@@ -98,12 +98,12 @@ class SentenceTransformerEmbeddingProvider(EmbeddingProvider):
         except Exception as err:
             if not allow_fallback:
                 raise ImportError(
-                    f"Failed to load sentence-transformers model '{model_name}': {err}. "
-                    "Install dependencies with: pip install 'synapse-memory[local-models]'"
+                    f"Failed to load semantic embedding model '{model_name}': {err}. "
+                    "For production neural embeddings, install sentence-transformers or set provider='deterministic'."
                 ) from err
             logger.warning(
                 f"[SynapseEmbedder Warning] sentence-transformers not installed ({err}). "
-                "Falling back to DeterministicHashEmbeddingProvider. "
+                "Falling back to DeterministicHashEmbeddingProvider for non-production development. "
                 "For production neural embeddings, install with: pip install sentence-transformers"
             )
             self._fallback = DeterministicHashEmbeddingProvider()

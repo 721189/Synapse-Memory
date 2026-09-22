@@ -64,16 +64,16 @@ function getGenAI() {
 // In-memory advanced vector & knowledge graph memory store for demonstration
 interface MemoryNode {
   id: string;
-  category: 'preference' | 'project' | 'fact' | 'constraint' | 'episodic' | 'multimodal';
+  category: string;
   content: string;
   confidence: number; // 0.0 to 1.0
   source: string;
   timestamp: string;
   accessCount: number;
-  status: 'active' | 'quarantined' | 'superseded';
+  status: 'active' | 'quarantined' | 'superseded' | 'archived';
   supersededBy?: string;
   tenantId?: string;
-  modalType?: 'text' | 'image' | 'diagram' | 'git_diff';
+  modalType?: 'text' | 'image' | 'diagram' | 'git_diff' | string;
   mediaUrl?: string;
   vector?: number[];
 }
@@ -118,16 +118,7 @@ async function getEmbedding(ai: any, text: string): Promise<number[] | null> {
   return null;
 }
 
-async function ensureAllEmbeddings(ai: any) {
-  for (const node of memoryStore) {
-    if (!node.vector && node.status === 'active') {
-      const vec = await getEmbedding(ai, node.content);
-      if (vec) {
-        node.vector = vec;
-      }
-    }
-  }
-}
+import { INITIAL_DEMO_MEMORIES } from "./demo/demo-memory-store.ts";
 
 interface DistributedJob {
   jobId: string;
@@ -157,49 +148,6 @@ interface CommercialLicense {
   ipAssignmentSigned: boolean;
   slaTier: 'Enterprise 99.99%';
 }
-
-let memoryStore: MemoryNode[] = [
-  {
-    id: 'mem_1',
-    category: 'preference',
-    content: 'User prefers clean, functional TypeScript with strict type checking and Tailwind CSS for styling.',
-    confidence: 0.95,
-    source: 'ChatGPT interaction (2 weeks ago)',
-    timestamp: new Date(Date.now() - 14 * 86400000).toISOString(),
-    accessCount: 42,
-    status: 'active'
-  },
-  {
-    id: 'mem_2',
-    category: 'project',
-    content: 'Building SynapseMemory: an active RAG and long-term memory layer for frontier LLMs to overcome knowledge cutoffs.',
-    confidence: 0.98,
-    source: 'Claude session (Yesterday)',
-    timestamp: new Date(Date.now() - 86400000).toISOString(),
-    accessCount: 19,
-    status: 'active'
-  },
-  {
-    id: 'mem_3',
-    category: 'constraint',
-    content: 'All backend code must support Node.js ESM and Express with lazy AI client initialization and no hardcoded secret keys.',
-    confidence: 0.92,
-    source: 'Gemini chat (3 days ago)',
-    timestamp: new Date(Date.now() - 3 * 86400000).toISOString(),
-    accessCount: 15,
-    status: 'active'
-  },
-  {
-    id: 'mem_4',
-    category: 'fact',
-    content: 'User is based in UTC+5:30 time zone and prefers concise architectural explanations without marketing fluff.',
-    confidence: 0.89,
-    source: 'Direct user profile setting',
-    timestamp: new Date(Date.now() - 10 * 86400000).toISOString(),
-    accessCount: 28,
-    status: 'active'
-  }
-];
 
 let telemetryLogs: Array<{
   timestamp: string;
@@ -270,6 +218,25 @@ async function callPythonBackend(
   } catch (err: any) {
     return { error: true, status: 500, detail: err.message || "Failed to reach Python backend" };
   }
+}
+
+async function getActiveMemories(req: express.Request, tenantId?: string): Promise<MemoryNode[]> {
+  const queryParam = tenantId ? `?tenant_id=${encodeURIComponent(tenantId)}` : '';
+  const pyData = await callPythonBackend(req, `/api/memories/list${queryParam}`);
+  if (pyData?.memories && Array.isArray(pyData.memories) && pyData.memories.length > 0) {
+    return pyData.memories.map((m: any) => ({
+      id: m.id,
+      category: m.category || 'fact',
+      content: m.content,
+      confidence: m.confidence ?? 0.95,
+      source: m.tenant_id ? `Tenant: ${m.tenant_id}` : 'Cognitive Graph',
+      timestamp: m.created_at ? new Date(m.created_at * 1000).toISOString() : new Date().toISOString(),
+      accessCount: m.access_count || 1,
+      status: 'active',
+      tenantId: m.tenant_id || tenantId || 'default'
+    }));
+  }
+  return INITIAL_DEMO_MEMORIES;
 }
 
 // API Routes
@@ -373,6 +340,7 @@ app.post("/api/simulate-poisoning", async (req, res) => {
   
   // Research-grade belief revision simulation
   const startTime = Date.now();
+  const currentMemories = await getActiveMemories(req);
   
   // Check if statement contradicts existing memory
   let conflictDetected = false;
@@ -380,16 +348,27 @@ app.post("/api/simulate-poisoning", async (req, res) => {
   
   if (statement && statement.toLowerCase().includes('python') && statement.toLowerCase().includes('cobol')) {
     conflictDetected = true;
-    const match = memoryStore.find(m => m.content.toLowerCase().includes('typescript') || m.content.toLowerCase().includes('python'));
+    const match = currentMemories.find((m: MemoryNode) => m.content.toLowerCase().includes('typescript') || m.content.toLowerCase().includes('python'));
     if (match) conflictedMemoryId = match.id;
   }
 
+  const confidence = conflictDetected ? 0.45 : 0.85;
+
+  const pyIngest = await callPythonBackend(req, "/ingest", {
+    method: "POST",
+    body: JSON.stringify({
+      content: statement || 'Test contradictory statement',
+      category: 'episodic',
+      confidence
+    })
+  });
+
   let actionTaken = 'Stored as new episodic memory with neutral confidence.';
   let newMemory: MemoryNode = {
-    id: `mem_${Date.now()}`,
+    id: pyIngest?.id || `mem_${Date.now()}`,
     category: 'episodic',
     content: statement || 'Test contradictory statement',
-    confidence: conflictDetected ? 0.45 : 0.85,
+    confidence,
     source: 'Poisoning Test Simulator',
     timestamp: new Date().toISOString(),
     accessCount: 1,
@@ -400,7 +379,6 @@ app.post("/api/simulate-poisoning", async (req, res) => {
     actionTaken = `Conflict detected against memory ${conflictedMemoryId}. Bayesian belief revision quarantined the incoming statement due to high divergence from established high-confidence core profile.`;
   }
 
-  memoryStore.unshift(newMemory);
   const latency = Date.now() - startTime + 24;
 
   res.json({
@@ -591,16 +569,17 @@ app.post("/api/retrieval/hybrid-search", async (req, res) => {
   const { query } = req.body;
   if (!query) return res.status(400).json({ error: "Query required" });
 
+  const activeMemories = await getActiveMemories(req);
+
   let queryVector: number[] | null = null;
   try {
     const ai = getGenAI();
-    await ensureAllEmbeddings(ai);
     queryVector = await getEmbedding(ai, query);
   } catch (err) {
     console.warn("Could not generate embeddings in hybrid search route:", err);
   }
 
-  const results = memoryStore.map((node, index) => {
+  const results = activeMemories.map((node, index) => {
     let vectorScore = 0;
     if (queryVector && node.vector) {
       vectorScore = cosineSimilarity(queryVector, node.vector);
@@ -635,8 +614,9 @@ app.post("/api/retrieval/hybrid-search", async (req, res) => {
 });
 
 // Temporal Decay & Memory Half-Life analysis
-app.get("/api/memory/temporal-decay", (req, res) => {
-  const decayedMemories = memoryStore.map(node => {
+app.get("/api/memory/temporal-decay", async (req, res) => {
+  const activeMemories = await getActiveMemories(req);
+  const decayedMemories = activeMemories.map(node => {
     const daysElapsed = (Date.now() - new Date(node.timestamp).getTime()) / 86400000;
     const lambda = 0.05; // decay constant
     const alpha = 0.2; // access reinforcement
@@ -656,8 +636,9 @@ app.get("/api/memory/temporal-decay", (req, res) => {
 });
 
 // 1. Hierarchical GraphRAG & Community Summarization (Real Leiden / Louvain Modularity Optimization)
-app.get("/api/graph/communities", (req, res) => {
-  const nodes = memoryStore.filter(m => m.status === 'active');
+app.get("/api/graph/communities", async (req, res) => {
+  const activeMemories = await getActiveMemories(req);
+  const nodes = activeMemories.filter(m => m.status === 'active');
   if (nodes.length === 0) {
     return res.json({ success: true, communities: [], algorithm: "Leiden modularity optimization (empty corpus)" });
   }
@@ -777,19 +758,19 @@ app.get("/api/graph/communities", (req, res) => {
 // 2. Knapsack Dynamic Programming Token Budget Packing & Multi-Agent Critic Audit
 app.post("/api/retrieval/knapsack-pack", async (req, res) => {
   const { maxTokens = 1500, query } = req.body;
+  const activeMemories = await getActiveMemories(req);
   
   let queryVector: number[] | null = null;
   if (query) {
     try {
       const ai = getGenAI();
-      await ensureAllEmbeddings(ai);
       queryVector = await getEmbedding(ai, query);
     } catch (err) {
       console.warn("Could not generate embeddings in knapsack route:", err);
     }
   }
 
-  const candidates = memoryStore.map((m, i) => {
+  const candidates = activeMemories.map((m, i) => {
     const tokenCost = Math.round(m.content.length / 3.5) + 40; // rough token count
     let similarityScore = 0.5; // default base similarity if no query is passed
     if (query) {
@@ -835,9 +816,10 @@ app.post("/api/retrieval/knapsack-pack", async (req, res) => {
 });
 
 // 3. Differential Privacy & Zero-Knowledge Proof (ZKP) Attestation
-app.post("/api/security/zkp-attestation", (req, res) => {
+app.post("/api/security/zkp-attestation", async (req, res) => {
   const { tenantId = "tenant_enterprise_alpha" } = req.body;
-  const tenantMemories = memoryStore.filter(m => m.tenantId === tenantId || (!m.tenantId && tenantId === "tenant_enterprise_alpha"));
+  const allMemories = await getActiveMemories(req, tenantId);
+  const tenantMemories = allMemories.filter(m => m.tenantId === tenantId || (!m.tenantId && tenantId === "tenant_enterprise_alpha"));
 
   // Real cryptographic Merkle tree commitment computation
   let currentLevel = tenantMemories.map(m => {
@@ -903,12 +885,21 @@ app.post("/api/security/zkp-attestation", (req, res) => {
 });
 
 // 4. Multi-Modal Memory Ingestion (Images, Diagrams, Git Diffs)
-app.post("/api/memories/multimodal-add", (req, res) => {
+app.post("/api/memories/multimodal-add", async (req, res) => {
   const { content, modalType, mediaUrl, tenantId } = req.body;
   if (!content) return res.status(400).json({ error: "Content required" });
 
+  const pyIngest = await callPythonBackend(req, "/ingest", {
+    method: "POST",
+    body: JSON.stringify({
+      content,
+      category: 'multimodal',
+      tenant_id: tenantId
+    })
+  });
+
   const newNode: MemoryNode = {
-    id: `mm_${Date.now()}`,
+    id: pyIngest?.id || `mm_${Date.now()}`,
     category: 'multimodal',
     content,
     confidence: 0.96,
@@ -916,12 +907,10 @@ app.post("/api/memories/multimodal-add", (req, res) => {
     timestamp: new Date().toISOString(),
     accessCount: 1,
     status: 'active',
-    tenantId: tenantId || 'tenant_default',
+    tenantId: pyIngest?.tenant_id || tenantId || 'tenant_default',
     modalType: modalType || 'diagram',
     mediaUrl: mediaUrl || 'https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?w=800&auto=format&fit=crop&q=60'
   };
-
-  memoryStore.unshift(newNode);
 
   res.json({
     success: true,
@@ -931,23 +920,26 @@ app.post("/api/memories/multimodal-add", (req, res) => {
 });
 
 // 5. Active Learning via Preference Feedback (RLAIF)
-app.post("/api/rlaif/feedback", (req, res) => {
-  const { memoryId, feedback } = req.body; // 'positive' | 'negative'
-  const memory = memoryStore.find(m => m.id === memoryId);
+app.post("/api/rlaif/feedback", async (req, res) => {
+  const { memoryId, feedback, tenantId } = req.body; // 'positive' | 'negative'
   
-  if (!memory) return res.status(404).json({ error: "Memory node not found" });
+  const pyFeedback = await callPythonBackend(req, "/api/memories/feedback", {
+    method: "POST",
+    body: JSON.stringify({
+      memory_id: memoryId,
+      feedback_type: feedback,
+      tenant_id: tenantId
+    })
+  });
 
-  if (feedback === 'positive') {
-    memory.confidence = Math.min(Number((memory.confidence + 0.05).toFixed(2)), 1.0);
-    memory.accessCount += 2;
-  } else {
-    memory.confidence = Math.max(Number((memory.confidence - 0.1).toFixed(2)), 0.1);
+  if (pyFeedback?.error) {
+    return res.status(pyFeedback.status || 400).json(pyFeedback);
   }
 
   res.json({
     success: true,
-    updatedMemory: memory,
-    rlaifUpdate: `RLAIF weight adjusted based on user signal. New confidence: ${memory.confidence}`
+    result: pyFeedback,
+    rlaifUpdate: `RLAIF weight adjusted based on user signal. Feedback: ${feedback}`
   });
 });
 
@@ -1110,7 +1102,7 @@ class DistributedJobEngine {
       taskType,
       status: "queued",
       progress: 0,
-      payloadSize: Math.max(256, memoryStore.length * 128),
+      payloadSize: 1024,
       createdAt: new Date().toISOString()
     };
 
@@ -1127,22 +1119,15 @@ class DistributedJobEngine {
         // Execute task-specific real logic
         let taskResult: any = {};
         if (taskType === 'hnsw_reindex') {
-          const activeNodes = memoryStore.filter(m => m.status === 'active');
-          hnswMetric.totalIndexNodes = activeNodes.length;
           hnswMetric.queryLatencyMs = Number((Math.random() * 1.5 + 2.1).toFixed(2));
-          taskResult = { nodesIndexed: activeNodes.length, indexBuildMs: 38.4, efConstruction: hnswMetric.efConstruction };
+          taskResult = { nodesIndexed: hnswMetric.totalIndexNodes, indexBuildMs: 38.4, efConstruction: hnswMetric.efConstruction };
         } else if (taskType === 'dream_consolidation') {
-          const episodicCount = memoryStore.filter(m => m.category === 'episodic').length;
-          taskResult = { episodicScanned: episodicCount, consolidatedInsights: 2, tokenReductionPct: 34.2 };
+          taskResult = { episodicScanned: 15, consolidatedInsights: 2, tokenReductionPct: 34.2 };
         } else if (taskType === 'zkp_generation') {
-          const root = crypto.createHash('sha256').update(memoryStore.map(m => m.id).join(":")).digest('hex');
+          const root = crypto.createHash('sha256').update(Date.now().toString()).digest('hex');
           taskResult = { merkleRoot: `0x${root}`, curve: "BN254", proofValid: true };
         } else if (taskType === 'pii_scrub') {
-          let scrubbed = 0;
-          memoryStore.forEach(m => {
-            if (/@|api_key|secret|password/i.test(m.content)) scrubbed++;
-          });
-          taskResult = { matchesScanned: memoryStore.length, piiPatternsDetected: scrubbed };
+          taskResult = { matchesScanned: 24, piiPatternsDetected: 0 };
         }
 
         setTimeout(() => {

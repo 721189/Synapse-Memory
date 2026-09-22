@@ -36,14 +36,19 @@ security_manager = SecurityManager(
     fail_closed=IS_PRODUCTION and bool(DATABASE_URL)
 )
 
+# Instantiate active embedder to establish canonical vector dimension
+embedder = SynapseEmbedder()
+embedding_dimension = embedder.dimension
+
 if STORAGE_BACKEND == "pgvector":
     try:
         store = PGVectorMemoryStore(
             connection_string=DATABASE_URL,
+            dimension=embedding_dimension,
             fail_closed=True
         )
         ACTIVE_BACKEND = "pgvector"
-        logger.info(f"Canonical Production Engine using PostgreSQL + pgvector (HNSW) at {str(DATABASE_URL)[:20]}...")
+        logger.info(f"Canonical Production Engine using PostgreSQL + pgvector ({embedding_dimension}-d HNSW) at {str(DATABASE_URL)[:20]}...")
     except Exception as e:
         logger.exception(f"PostgreSQL startup failed in pgvector mode: {e}")
         raise
@@ -51,10 +56,11 @@ elif STORAGE_BACKEND == "auto" and DATABASE_URL:
     try:
         store = PGVectorMemoryStore(
             connection_string=DATABASE_URL,
+            dimension=embedding_dimension,
             fail_closed=IS_PRODUCTION
         )
         ACTIVE_BACKEND = "pgvector"
-        logger.info(f"Canonical Production Engine using PostgreSQL + pgvector (HNSW) at {str(DATABASE_URL)[:20]}...")
+        logger.info(f"Canonical Production Engine using PostgreSQL + pgvector ({embedding_dimension}-d HNSW) at {str(DATABASE_URL)[:20]}...")
     except Exception as e:
         if IS_PRODUCTION:
             logger.exception(f"PostgreSQL startup failed in production mode: {e}")
@@ -66,7 +72,6 @@ else:
     store = SQLiteMemoryStore("synapse_memory.db")
     ACTIVE_BACKEND = "sqlite"
 
-embedder = SynapseEmbedder(provider="local")
 manager = MemoryManager(store=store, embedder=embedder)
 packer = KnapsackPacker(token_budget=32000)
 decay = DecayEngine(category_configs={})
