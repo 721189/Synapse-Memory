@@ -1,5 +1,5 @@
 import os
-from typing import List
+from typing import List, Optional
 from synapse_memory.core.embedding_provider import (
     EmbeddingManager,
     LocalEmbeddingProvider,

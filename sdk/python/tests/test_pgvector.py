@@ -49,6 +49,9 @@ class TestPGVectorMemoryStore(unittest.TestCase):
         self.assertAlmostEqual(results[0]["cosine_similarity"], 1.0, places=3)
 
     def test_fail_closed_mode_raises_on_connection_failure(self):
+        from synapse_memory.core.pgvector_db import HAS_PSYCOPG2
+        if not HAS_PSYCOPG2:
+            self.skipTest("psycopg2 not installed; skipping connection failure assertion.")
         with self.assertRaises(RuntimeError):
             PGVectorMemoryStore(
                 connection_string="postgresql://invalid_user:invalid_pass@127.0.0.1:9999/nonexistent",

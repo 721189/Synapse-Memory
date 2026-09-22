@@ -113,8 +113,8 @@ def require_scope(scope: str):
         tenant_header = request.headers.get("X-Tenant-ID") or request.headers.get("x-tenant-id")
         client_ip = request.client.host if request.client else None
 
-        # Allow open dev access if no key set anywhere in dev mode
-        if not token and not os.environ.get("SYNAPSE_API_KEY") and len(security_manager.list_api_keys()) == 0:
+        # Allow open dev access in non-production mode, or if no key set anywhere in dev mode
+        if not token and (not IS_PRODUCTION or (not os.environ.get("SYNAPSE_API_KEY") and len(security_manager.list_api_keys()) == 0)):
             return APIKeyRecord(
                 key_id="key_dev_open",
                 key_hash="",
@@ -220,9 +220,52 @@ class RevokeKeyRequest(BaseModel):
 
 # --- API ENDPOINTS ---
 
+@app.get("/liveness", tags=["Telemetry"])
+def liveness():
+    """Returns simple process liveness state."""
+    return {"status": "OK", "timestamp": time.time()}
+
+
+@app.get("/readiness", tags=["Telemetry"])
+def readiness():
+    """Checks actual database and auth backend usability."""
+    db_ok = True
+    if ACTIVE_BACKEND == "pgvector":
+        db_ok = store.is_connected
+
+    if not db_ok:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={
+                "status": "UNHEALTHY",
+                "storage_backend": ACTIVE_BACKEND,
+                "reason": "PostgreSQL + pgvector connection unavailable."
+            }
+        )
+    return {
+        "status": "READY",
+        "timestamp": time.time(),
+        "storage_backend": ACTIVE_BACKEND
+    }
+
+
 @app.get("/health", tags=["Telemetry"])
 def get_health():
     """Returns active service telemetry, storage backend, and security status."""
+    db_ok = True
+    if ACTIVE_BACKEND == "pgvector":
+        db_ok = store.is_connected
+
+    if not db_ok:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={
+                "status": "UNHEALTHY",
+                "storage_backend": ACTIVE_BACKEND,
+                "reason": "Database connection offline"
+            }
+        )
+
     return {
         "status": "HEALTHY",
         "timestamp": time.time(),
