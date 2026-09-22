@@ -304,13 +304,44 @@ def query_memory(
         return QueryResponse(fused_context="", injected_nodes_count=0, injected_nodes=[], active_storage_backend=ACTIVE_BACKEND)
 
     effective_tenant = resolve_tenant(principal, payload.tenant_id)
-    memories = store.get_all_memories(tenant_id=effective_tenant)
-    if not memories:
+    query_vector = embedder.embed_query(query_text)
+
+    # 1. Scalable Candidate Retrieval: Dense (HNSW pgvector) + Lexical (PostgreSQL tsvector)
+    dense_candidates = store.vector_search(
+        query_vec=query_vector,
+        top_k=100,
+        category=payload.category,
+        tenant_id=effective_tenant
+    )
+    lexical_candidates = store.lexical_search(
+        query=query_text,
+        top_k=100,
+        category=payload.category,
+        tenant_id=effective_tenant
+    )
+
+    # Deduplicate candidate nodes across dense and lexical retrieval pools
+    candidate_map = {m["id"]: m for m in dense_candidates}
+    for m in lexical_candidates:
+        if m["id"] not in candidate_map:
+            candidate_map[m["id"]] = m
+
+    candidate_docs = list(candidate_map.values())
+    if not candidate_docs:
+        candidate_docs = store.get_all_memories(tenant_id=effective_tenant)
+
+    if not candidate_docs:
         return QueryResponse(fused_context="", injected_nodes_count=0, injected_nodes=[], active_storage_backend=ACTIVE_BACKEND)
 
-    # 1. Hybrid semantic/lexical search
-    query_vector = embedder.embed_query(query_text)
-    candidates = searcher.fused_search(query_text, memories, query_vector=query_vector, top_k=25)
+    # 2. Reciprocal Rank Fusion (RRF)
+    candidates = searcher.fused_search(
+        query_text,
+        candidate_docs,
+        query_vector=query_vector,
+        top_k=25,
+        category_filter=payload.category,
+        tenant_filter=effective_tenant
+    )
 
     # 2. Dynamic temporal decay adjustment
     decayed_candidates = []

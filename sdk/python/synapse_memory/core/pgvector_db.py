@@ -166,6 +166,28 @@ class PGVectorMemoryStore:
                 cur.execute("CREATE INDEX IF NOT EXISTS idx_memories_created ON memories(created_at DESC);")
                 cur.execute("CREATE INDEX IF NOT EXISTS idx_memories_access ON memories(last_accessed_at DESC);")
 
+                # 5b. Generated Full-Text Search (tsvector) column and GIN index for scalable PostgreSQL lexical search
+                try:
+                    cur.execute("""
+                        DO $$
+                        BEGIN
+                            IF NOT EXISTS (
+                                SELECT 1 FROM information_schema.columns
+                                WHERE table_name='memories' AND column_name='search_vector'
+                            ) THEN
+                                ALTER TABLE memories
+                                ADD COLUMN search_vector tsvector
+                                GENERATED ALWAYS AS (to_tsvector('english', content)) STORED;
+                            END IF;
+                        END $$;
+                    """)
+                    cur.execute("""
+                        CREATE INDEX IF NOT EXISTS idx_memories_search_vector
+                        ON memories USING GIN(search_vector);
+                    """)
+                except Exception as fts_err:
+                    logger.warning(f"Full-Text Search column initialization deferred: {fts_err}")
+
                 # 6. Database Row-Level Security (RLS)
                 cur.execute("ALTER TABLE memories ENABLE ROW LEVEL SECURITY;")
                 cur.execute("ALTER TABLE memories FORCE ROW LEVEL SECURITY;")
@@ -228,8 +250,8 @@ class PGVectorMemoryStore:
                 pass
 
     def _set_tenant_context(self, cur: Any, tenant_id: Optional[str]) -> None:
-        if tenant_id:
-            cur.execute("SET LOCAL app.current_tenant = %s;", (tenant_id,))
+        ctx = tenant_id if tenant_id and tenant_id != "*" else ""
+        cur.execute("SET LOCAL app.current_tenant = %s;", (ctx,))
 
     def insert_memory(self, memory: Dict[str, Any]) -> None:
         """Inserts memory with embedding vector into pgvector table with tenant isolation."""
@@ -471,6 +493,73 @@ class PGVectorMemoryStore:
                 return results
         except Exception as e:
             self._handle_db_error("vector_search", e)
+            return []
+        finally:
+            self._return_connection(conn)
+
+    def lexical_search(
+        self,
+        query: str,
+        top_k: int = 100,
+        category: Optional[str] = None,
+        tenant_id: Optional[str] = None
+    ) -> List[Dict[str, Any]]:
+        """
+        Executes native PostgreSQL Full-Text Search ranking using GIN tsvector index:
+        ORDER BY ts_rank(search_vector, plainto_tsquery('english', query)) DESC
+        """
+        if not self._connected or not HAS_PSYCOPG2:
+            query_terms = set(query.lower().split())
+            results = []
+            for mem in self._fallback_cache.values():
+                if tenant_id and mem.get("tenant_id") != tenant_id:
+                    continue
+                if category and mem.get("category") != category:
+                    continue
+                words = set(mem.get("content", "").lower().split())
+                overlap = len(query_terms.intersection(words))
+                if overlap > 0:
+                    mem_copy = mem.copy()
+                    mem_copy["lexical_rank"] = float(overlap) / max(1.0, float(len(query_terms)))
+                    results.append(mem_copy)
+            results.sort(key=lambda x: x.get("lexical_rank", 0.0), reverse=True)
+            return results[:top_k]
+
+        conn = self._get_connection()
+        try:
+            with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                self._set_tenant_context(cur, tenant_id)
+                conditions = ["search_vector @@ plainto_tsquery('english', %s)"]
+                params: List[Any] = [query, query]
+                if tenant_id:
+                    conditions.append("tenant_id = %s")
+                    params.append(tenant_id)
+                if category:
+                    conditions.append("category = %s")
+                    params.append(category)
+
+                where_clause = "WHERE " + " AND ".join(conditions)
+                params.append(top_k)
+
+                sql = f"""
+                    SELECT id, tenant_id, content, category, confidence, created_at,
+                           last_accessed_at, access_count, token_cost, feedback_multiplier,
+                           ts_rank(search_vector, plainto_tsquery('english', %s)) AS lexical_rank
+                    FROM memories
+                    {where_clause}
+                    ORDER BY lexical_rank DESC
+                    LIMIT %s
+                """
+                cur.execute(sql, tuple(params))
+                rows = cur.fetchall()
+                results = []
+                for r in rows:
+                    mem = dict(r)
+                    mem["relevance_score"] = float(mem.get("lexical_rank", 0.0))
+                    results.append(mem)
+                return results
+        except Exception as e:
+            self._handle_db_error("lexical_search", e)
             return []
         finally:
             self._return_connection(conn)
