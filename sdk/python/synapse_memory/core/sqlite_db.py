@@ -202,15 +202,17 @@ class SQLiteMemoryStore:
                 cursor.execute("DELETE FROM memories WHERE id = ?", (memory_id,))
             conn.commit()
 
-    def clear_memories(self, tenant_id: Optional[str] = None) -> None:
-        """Clears memories for a given tenant or the entire store."""
+    def clear_memories(self, tenant_id: Optional[str] = None) -> int:
+        """Clears memories for a given tenant or the entire store and returns count of deleted rows."""
         with self._get_connection() as conn:
             cursor = conn.cursor()
             if tenant_id is not None:
                 cursor.execute("DELETE FROM memories WHERE tenant_id = ?", (tenant_id,))
             else:
                 cursor.execute("DELETE FROM memories")
+            deleted_count = cursor.rowcount
             conn.commit()
+            return deleted_count
 
     def get_memories_by_category(
         self, category: str, tenant_id: Optional[str] = None

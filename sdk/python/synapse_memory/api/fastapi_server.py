@@ -1,6 +1,7 @@
 import sys
 import os
 import time
+import datetime
 import logging
 from typing import List, Dict, Any, Optional
 from pydantic import BaseModel, Field
@@ -424,8 +425,49 @@ def clear_memories(
     """Flushes memory corpus for the authenticated tenant."""
     requested_tenant = payload.get("tenant_id") if payload else None
     effective_tenant = resolve_tenant(principal, requested_tenant)
-    store.clear_memories(tenant_id=effective_tenant)
-    return {"status": "CLEARED", "tenant_id": effective_tenant or "all"}
+    deleted_count = store.clear_memories(tenant_id=effective_tenant)
+    security_manager.log_audit_action(
+        actor_key_id=principal.key_id,
+        tenant_id=effective_tenant or "all",
+        action="MEMORIES_CLEAR",
+        resource="memories",
+        status="SUCCESS",
+        metadata={"deleted_count": deleted_count}
+    )
+    return {
+        "status": "CLEARED",
+        "tenant_id": effective_tenant or "all",
+        "deleted_count": deleted_count
+    }
+
+
+@app.post("/api/security/gdpr-delete", tags=["Security"])
+def gdpr_delete(
+    payload: Dict[str, Any],
+    principal: APIKeyRecord = Depends(require_scope("memories:delete"))
+):
+    """
+    Executes an authenticated GDPR Right to be Forgotten deletion path.
+    Performs PostgreSQL transaction DELETE on tenant memories and returns actual deleted row count.
+    """
+    requested_tenant = payload.get("tenant_id") or payload.get("tenantId")
+    effective_tenant = resolve_tenant(principal, requested_tenant)
+    deleted_count = store.clear_memories(tenant_id=effective_tenant)
+    security_manager.log_audit_action(
+        actor_key_id=principal.key_id,
+        tenant_id=effective_tenant or "all",
+        action="GDPR_RIGHT_TO_BE_FORGOTTEN_DELETE",
+        resource="memories",
+        status="SUCCESS",
+        metadata={"deleted_count": deleted_count}
+    )
+    return {
+        "status": "SUCCESS",
+        "tenant_id": effective_tenant or "all",
+        "deleted_count": deleted_count,
+        "timestamp": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+        "audit_logged": True
+    }
 
 
 # --- ENTERPRISE SECURITY & API KEY ENDPOINTS ---
@@ -489,16 +531,38 @@ def get_audit_trail(
 
 @app.post("/api/security/scrub-pii", tags=["Security"])
 @app.post("/api/security/scrub", tags=["Security"])
-def scrub_pii(payload: Dict[str, Any]):
-    """PII scrubbing endpoint."""
+def scrub_pii(
+    payload: Dict[str, Any],
+    principal: APIKeyRecord = Depends(require_scope("memories:read"))
+):
+    """
+    Authenticated PII scrubbing endpoint.
+    Returns scrubbed content and redaction count without echoing original sensitive input.
+    """
     text = payload.get("text", "")
+    if not text:
+        raise HTTPException(status_code=400, detail="Text field required.")
+
     import re
+    redaction_count = 0
+    patterns = [
+        r'[\w\.-]+@[\w\.-]+\.\w+',
+        r'\+?\d{1,4}[-.\s]?\(?\d{1,3}\)?[-.\s]?\d{1,4}[-.\s]?\d{1,4}[-.\s]?\d{1,9}',
+        r'(sk-proj-[a-zA-Z0-9]{20,})',
+        r'\b(\d{3}[-]?\d{2}[-]?\d{4})\b'
+    ]
+    for pat in patterns:
+        redaction_count += len(re.findall(pat, text))
+
     scrubbed = re.sub(r'[\w\.-]+@[\w\.-]+\.\w+', '[REDACTED_EMAIL]', text)
     scrubbed = re.sub(r'\+?\d{1,4}[-.\s]?\(?\d{1,3}\)?[-.\s]?\d{1,4}[-.\s]?\d{1,4}[-.\s]?\d{1,9}', '[REDACTED_PHONE]', scrubbed)
     scrubbed = re.sub(r'(sk-proj-[a-zA-Z0-9]{20,})', '[REDACTED_API_KEY]', scrubbed)
+    scrubbed = re.sub(r'\b(\d{3}[-]?\d{2}[-]?\d{4})\b', '[REDACTED_SSN]', scrubbed)
+
     return {
-        "detectedPII": scrubbed != text,
+        "detectedPII": redaction_count > 0 or scrubbed != text,
         "scrubbedText": scrubbed,
+        "redactionCount": redaction_count,
         "encryptionCMEK": "kms-key-aes256-synapse-active"
     }
 

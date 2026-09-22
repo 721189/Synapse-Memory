@@ -624,14 +624,19 @@ class PGVectorMemoryStore:
         finally:
             self._return_connection(conn)
 
-    def clear_memories(self, tenant_id: Optional[str] = None) -> None:
+    def clear_memories(self, tenant_id: Optional[str] = None) -> int:
+        deleted_count = 0
         if tenant_id:
+            before_len = len(self._fallback_cache)
             self._fallback_cache = {k: v for k, v in self._fallback_cache.items() if v.get("tenant_id") != tenant_id}
+            deleted_count = before_len - len(self._fallback_cache)
         else:
+            deleted_count = len(self._fallback_cache)
             self._fallback_cache.clear()
 
         if not self._connected or not HAS_PSYCOPG2:
-            return
+            return deleted_count
+
         conn = self._get_connection()
         try:
             with conn.cursor() as cur:
@@ -640,10 +645,13 @@ class PGVectorMemoryStore:
                     cur.execute("DELETE FROM memories WHERE tenant_id = %s;", (tenant_id,))
                 else:
                     cur.execute("DELETE FROM memories;")
+                deleted_count = cur.rowcount
                 conn.commit()
+                return deleted_count
         except Exception as e:
             conn.rollback()
             self._handle_db_error("clear_memories", e)
+            return deleted_count
         finally:
             self._return_connection(conn)
 

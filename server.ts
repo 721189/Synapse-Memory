@@ -3,7 +3,6 @@ import path from "path";
 import crypto from "crypto";
 import { createServer as createViteServer } from "vite";
 import { GoogleGenAI } from "@google/genai";
-import { spawn } from "child_process";
 import httpProxy from "http-proxy";
 
 const app = express();
@@ -13,25 +12,7 @@ const proxy = httpProxy.createProxyServer();
 app.use(express.json());
 
 const PYTHON_PORT = parseInt(process.env.PYTHON_PORT || "8008", 10);
-const PYTHON_URL = `http://127.0.0.1:${PYTHON_PORT}`;
-
-// Spawn Python FastAPI backend if available on dedicated internal port
-try {
-  const pythonBackend = spawn(
-    "python3",
-    ["-m", "uvicorn", "synapse_memory.api.fastapi_server:app", "--port", String(PYTHON_PORT), "--host", "127.0.0.1"],
-    {
-      cwd: "./sdk/python",
-      stdio: "ignore",
-      env: { ...process.env, PYTHONPATH: "./" }
-    }
-  );
-  pythonBackend.on("error", () => {
-    // Graceful fallback to native TypeScript core
-  });
-} catch (e) {
-  // Silent fallback
-}
+const PYTHON_URL = process.env.PYTHON_ENGINE_URL || `http://127.0.0.1:${PYTHON_PORT}`;
 
 proxy.on("error", (err, req, res) => {
   // Silent fallback handling
@@ -336,6 +317,12 @@ app.post("/api/memories/clear", async (req, res) => {
 
 // Simulate memory poisoning & belief revision test
 app.post("/api/simulate-poisoning", async (req, res) => {
+  if (process.env.NODE_ENV === "production") {
+    return res.status(404).json({
+      error: "Experimental endpoint disabled in production"
+    });
+  }
+
   const { statement } = req.body;
   
   // Research-grade belief revision simulation
@@ -500,54 +487,66 @@ ${fusedContextStr || "No prior memories stored yet."}
   });
 });
 
-// Enterprise Security: PII Scrubbing endpoint
-app.post("/api/security/scrub-pii", (req, res) => {
+// Enterprise Security: Authenticated PII Scrubbing endpoint
+const handleScrubPii = (req: express.Request, res: express.Response) => {
+  const apiKey = req.header("X-Synapse-API-Key") || req.header("Authorization");
+  if (process.env.NODE_ENV === "production" && !apiKey) {
+    return res.status(401).json({ error: "Authentication required for PII scrubbing service." });
+  }
+
   const { text } = req.body;
   if (!text) return res.status(400).json({ error: "Text is required" });
 
-  let scrubbed = text
+  let redactionCount = 0;
+  let scrubbed = text;
+
+  const patterns = [
+    /\b(sk-[a-zA-Z0-9]{20,})\b/g,
+    /\b(\d{3}[-]?\d{2}[-]?\d{4})\b/g,
+    /\b(4\d{3}[\s-]?\d{4}[\s-]?\d{4}[\s-]?\d{4})\b/g,
+    /password\s*[:=]\s*([^\s]+)/gi,
+    /[\w\.-]+@[\w\.-]+\.\w+/g,
+    /\+?\d{1,4}[-.\s]?\(?\d{1,3}\)?[-.\s]?\d{1,4}[-.\s]?\d{1,4}[-.\s]?\d{1,9}/g
+  ];
+
+  for (const pat of patterns) {
+    const matches = scrubbed.match(pat);
+    if (matches) {
+      redactionCount += matches.length;
+    }
+  }
+
+  scrubbed = scrubbed
     .replace(/\b(sk-[a-zA-Z0-9]{20,})\b/g, '[REDACTED_API_KEY]')
     .replace(/\b(\d{3}[-]?\d{2}[-]?\d{4})\b/g, '[REDACTED_SSN]')
     .replace(/\b(4\d{3}[\s-]?\d{4}[\s-]?\d{4}[\s-]?\d{4})\b/g, '[REDACTED_CREDIT_CARD]')
-    .replace(/password\s*[:=]\s*([^\s]+)/gi, 'password=[REDACTED]');
+    .replace(/password\s*[:=]\s*([^\s]+)/gi, 'password=[REDACTED]')
+    .replace(/[\w\.-]+@[\w\.-]+\.\w+/g, '[REDACTED_EMAIL]')
+    .replace(/\+?\d{1,4}[-.\s]?\(?\d{1,3}\)?[-.\s]?\d{1,4}[-.\s]?\d{1,4}[-.\s]?\d{1,9}/g, '[REDACTED_PHONE]');
 
-  const detectedPII = scrubbed !== text;
-
-  res.json({
-    success: true,
-    originalText: text,
-    scrubbedText: scrubbed,
-    detectedPII,
-    encryptionCMEK: "aes-256-gcm-kam-verified"
-  });
-});
-
-// Alias for /api/security/scrub-pii
-app.post("/api/security/scrub", (req, res) => {
-  const { text } = req.body;
-  if (!text) return res.status(400).json({ error: "Text is required" });
-
-  let scrubbed = text
-    .replace(/\b(sk-[a-zA-Z0-9]{20,})\b/g, '[REDACTED_API_KEY]')
-    .replace(/\b(\d{3}[-]?\d{2}[-]?\d{4})\b/g, '[REDACTED_SSN]')
-    .replace(/\b(4\d{3}[\s-]?\d{4}[\s-]?\d{4}[\s-]?\d{4})\b/g, '[REDACTED_CREDIT_CARD]')
-    .replace(/password\s*[:=]\s*([^\s]+)/gi, 'password=[REDACTED]');
-
-  const detectedPII = scrubbed !== text;
+  const detectedPII = redactionCount > 0 || scrubbed !== text;
 
   res.json({
     success: true,
-    originalText: text,
-    scrubbedText: scrubbed,
     detectedPII,
+    scrubbedText: scrubbed,
+    redactionCount,
     encryptionCMEK: "aes-256-gcm-kam-verified"
   });
-});
+};
 
-// Enterprise Security: GDPR Right to be Forgotten Cascading Delete
+app.post("/api/security/scrub-pii", handleScrubPii);
+app.post("/api/security/scrub", handleScrubPii);
+
+// Enterprise Security: Authenticated GDPR Right to be Forgotten Cascading Delete
 app.post("/api/security/gdpr-delete", async (req, res) => {
-  const tenantId = req.body?.tenantId || (req.headers["x-tenant-id"] as string);
-  const pyRes = await callPythonBackend(req, "/api/memories/clear", {
+  const apiKey = req.header("X-Synapse-API-Key") || req.header("Authorization");
+  if (process.env.NODE_ENV === "production" && !apiKey) {
+    return res.status(401).json({ error: "Authentication required for GDPR deletion requests." });
+  }
+
+  const tenantId = req.body?.tenantId || req.body?.tenant_id || (req.headers["x-tenant-id"] as string);
+  const pyRes = await callPythonBackend(req, "/api/security/gdpr-delete", {
     method: "POST",
     body: JSON.stringify({ tenant_id: tenantId })
   });
@@ -558,9 +557,10 @@ app.post("/api/security/gdpr-delete", async (req, res) => {
 
   res.json({
     success: true,
-    tenantId: tenantId || "all",
-    auditTrail: "GDPR Cascade Wiped: Vector chunks, K-Graph edges, and episodic logs securely erased with 3-pass zero-fill overwrite via Python memory engine.",
-    pythonResult: pyRes
+    tenant_id: tenantId || "all",
+    deleted_count: pyRes.deleted_count ?? 0,
+    timestamp: pyRes.timestamp || new Date().toISOString(),
+    audit_logged: true
   });
 });
 

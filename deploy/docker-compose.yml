@@ -11,10 +11,12 @@ services:
     restart: unless-stopped
     ports:
       - "${GATEWAY_PORT:-3000}:3000"
-      - "${ENGINE_PORT:-8000}:8000"
+      - "${ENGINE_PORT:-8008}:8008"
     environment:
       - NODE_ENV=production
       - PORT=3000
+      - PYTHON_PORT=8008
+      - PYTHON_ENGINE_URL=http://127.0.0.1:8008
       - GEMINI_API_KEY=${GEMINI_API_KEY:-}
       - SYNAPSE_API_KEY=${SYNAPSE_API_KEY:?SYNAPSE_API_KEY is required}
       - DATABASE_URL=postgresql://${POSTGRES_USER:-synapse_admin}:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}@postgres-pgvector:5432/${POSTGRES_DB:-synapse_cognitive}
