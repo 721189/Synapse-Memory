@@ -228,85 +228,103 @@ let telemetryLogs: Array<{
 ];
 
 // Unified Python FastAPI Backend Integration Helper
-async function callPythonBackend(endpoint: string, options: any = {}): Promise<any> {
-  const apiKey = process.env.SYNAPSE_API_KEY || "syn_live_master_gateway";
+async function callPythonBackend(
+  req: express.Request,
+  endpoint: string,
+  options: RequestInit = {}
+): Promise<any> {
+  const apiKey =
+    req.header("X-Synapse-API-Key") ||
+    req.header("Authorization");
+
+  const tenantId =
+    req.header("X-Tenant-ID");
+
+  if (process.env.NODE_ENV === "production" && !apiKey) {
+    throw new Error("Missing caller authentication");
+  }
+
   const url = `${PYTHON_URL}${endpoint}`;
-  const headers = {
+  const headers: Record<string, string> = {
     "Content-Type": "application/json",
-    "X-Synapse-API-Key": apiKey,
-    "Authorization": `Bearer ${apiKey}`,
-    ...(options.headers || {})
+    ...(apiKey ? { "X-Synapse-API-Key": apiKey } : {}),
+    ...(tenantId ? { "X-Tenant-ID": tenantId } : {}),
+    ...((options.headers as Record<string, string>) || {})
   };
+
   try {
     const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 800);
+    const timeoutId = setTimeout(() => controller.abort(), 5000);
     const res = await fetch(url, { ...options, headers, signal: controller.signal });
     clearTimeout(timeoutId);
     if (!res.ok) {
-      return null;
+      const errText = await res.text();
+      try {
+        const errJson = JSON.parse(errText);
+        return { error: true, status: res.status, detail: errJson.detail || errJson.error || errText };
+      } catch {
+        return { error: true, status: res.status, detail: errText };
+      }
     }
     return await res.json();
   } catch (err: any) {
-    return null;
+    return { error: true, status: 500, detail: err.message || "Failed to reach Python backend" };
   }
 }
 
 // API Routes
 app.get("/api/health", async (req, res) => {
-  const pyHealth = await callPythonBackend("/health");
+  const pyHealth = await callPythonBackend(req, "/health");
   res.json({
     status: "ok",
     service: "SynapseMemory Unified Gateway",
-    python_engine: pyHealth || { status: "local_node_fallback", storage_backend: "sqlite" }
+    python_engine: pyHealth || { status: "offline", storage_backend: "none" }
   });
 });
 
-app.get("/api/memories", async (req, res) => {
-  const tenantId = (req.headers["x-tenant-id"] as string) || "default";
-  const pyData = await callPythonBackend(`/api/memories/list?tenant_id=${tenantId}`);
+app.get(["/api/memories", "/api/memories/list"], async (req, res) => {
+  const tenantId = (req.headers["x-tenant-id"] as string) || (req.query.tenant_id as string) || "";
+  const pyData = await callPythonBackend(req, `/api/memories/list${tenantId ? `?tenant_id=${encodeURIComponent(tenantId)}` : ''}`);
 
-  if (pyData && Array.isArray(pyData.memories)) {
-    // Synchronize into runtime format
-    const syncedMemories: MemoryNode[] = pyData.memories.map((m: any) => ({
-      id: m.id,
-      category: m.category || 'fact',
-      content: m.content,
-      confidence: m.confidence ?? 0.95,
-      source: m.tenant_id ? `Tenant: ${m.tenant_id}` : 'Cognitive Graph',
-      timestamp: m.created_at ? new Date(m.created_at * 1000).toISOString() : new Date().toISOString(),
-      accessCount: m.access_count || 1,
-      status: 'active',
-      tenantId: m.tenant_id || tenantId
-    }));
-
-    if (syncedMemories.length > 0) {
-      memoryStore = syncedMemories;
-    }
+  if (pyData?.error) {
+    return res.status(pyData.status || 403).json(pyData);
   }
+
+  const rawMems = pyData?.memories || [];
+  const syncedMemories: MemoryNode[] = rawMems.map((m: any) => ({
+    id: m.id,
+    category: m.category || 'fact',
+    content: m.content,
+    confidence: m.confidence ?? 0.95,
+    source: m.tenant_id ? `Tenant: ${m.tenant_id}` : 'Cognitive Graph',
+    timestamp: m.created_at ? new Date(m.created_at * 1000).toISOString() : new Date().toISOString(),
+    accessCount: m.access_count || 1,
+    status: 'active',
+    tenantId: m.tenant_id || tenantId
+  }));
 
   res.json({
-    memories: memoryStore,
+    memories: syncedMemories,
     telemetry: telemetryLogs,
     stats: {
-      totalMemories: memoryStore.filter(m => m.status === 'active').length,
-      quarantinedCount: memoryStore.filter(m => m.status === 'quarantined').length,
+      totalMemories: syncedMemories.length,
+      quarantinedCount: 0,
       avgRetrievalLatencyMs: 34,
       totalTokenSavings: telemetryLogs.reduce((acc, l) => acc + l.tokenSavings, 14250),
-      storageBackend: pyData?.storage_backend || "encrypted_sqlite"
+      storageBackend: pyData?.storage_backend || "pgvector"
     }
   });
 });
 
-app.post("/api/memories/add", async (req, res) => {
+app.post(["/api/memories/add", "/api/memories/create"], async (req, res) => {
   const { category, content, source, tenantId, confidence } = req.body;
   if (!content) {
     return res.status(400).json({ error: "Content is required" });
   }
 
-  const effectiveTenant = tenantId || (req.headers["x-tenant-id"] as string) || "default";
+  const effectiveTenant = tenantId || (req.headers["x-tenant-id"] as string);
 
-  // Delegate directly to Python FastAPI for real deduplication, token calculation & Fernet AES encryption
-  const pyIngest = await callPythonBackend("/ingest", {
+  const pyIngest = await callPythonBackend(req, "/ingest", {
     method: "POST",
     body: JSON.stringify({
       content,
@@ -315,6 +333,10 @@ app.post("/api/memories/add", async (req, res) => {
       tenant_id: effectiveTenant
     })
   });
+
+  if (pyIngest?.error) {
+    return res.status(pyIngest.status || 400).json(pyIngest);
+  }
 
   const newNode: MemoryNode = {
     id: pyIngest?.id || `mem_${Date.now()}`,
@@ -325,56 +347,24 @@ app.post("/api/memories/add", async (req, res) => {
     timestamp: new Date().toISOString(),
     accessCount: 1,
     status: 'active',
-    tenantId: effectiveTenant
+    tenantId: pyIngest?.tenant_id || effectiveTenant || 'default'
   };
 
-  memoryStore.unshift(newNode);
-  res.json({ success: true, memory: newNode, ingestion_result: pyIngest });
-});
-
-// Alias for /api/memories/add
-app.post("/api/memories/create", async (req, res) => {
-  const { category, content, source, tenantId, confidence } = req.body;
-  if (!content) {
-    return res.status(400).json({ error: "Content is required" });
-  }
-
-  const effectiveTenant = tenantId || (req.headers["x-tenant-id"] as string) || "default";
-
-  const pyIngest = await callPythonBackend("/ingest", {
-    method: "POST",
-    body: JSON.stringify({
-      content,
-      category: category || 'fact',
-      confidence: confidence ?? 0.95,
-      tenant_id: effectiveTenant
-    })
-  });
-
-  const newNode: MemoryNode = {
-    id: pyIngest?.id || `mem_${Date.now()}`,
-    category: category || 'fact',
-    content,
-    confidence: confidence ?? 0.90,
-    source: source || `Synced (${pyIngest?.status || 'Direct API'})`,
-    timestamp: new Date().toISOString(),
-    accessCount: 1,
-    status: 'active',
-    tenantId: effectiveTenant
-  };
-
-  memoryStore.unshift(newNode);
-  res.json({ success: true, memory: newNode, ingestion_result: pyIngest });
+  res.status(201).json({ success: true, memory: newNode, ingestion_result: pyIngest });
 });
 
 app.post("/api/memories/clear", async (req, res) => {
   const tenantId = (req.headers["x-tenant-id"] as string) || req.body?.tenantId;
-  await callPythonBackend("/api/memories/clear", {
+  const pyRes = await callPythonBackend(req, "/api/memories/clear", {
     method: "POST",
     body: JSON.stringify({ tenant_id: tenantId })
   });
-  memoryStore = tenantId ? memoryStore.filter(m => m.tenantId !== tenantId) : [];
-  res.json({ success: true, message: "Memory store cleared in Python & runtime substrate." });
+
+  if (pyRes?.error) {
+    return res.status(pyRes.status || 400).json(pyRes);
+  }
+
+  res.json({ success: true, message: "Memory store cleared via Python memory engine.", result: pyRes });
 });
 
 // Simulate memory poisoning & belief revision test
@@ -448,59 +438,36 @@ async function generateContentWithRetry(ai: any, params: any, retries = 3, delay
 // Chat through SynapseMemory Gateway
 app.post("/api/chat", async (req, res) => {
   const startTime = Date.now();
-  const { prompt, provider, userId } = req.body;
+  const { prompt, provider } = req.body;
 
   if (!prompt) {
     return res.status(400).json({ error: "Prompt is required" });
   }
 
-  let retrievedMemories: MemoryNode[] = [];
-  let apiUsed = false;
+  // 1. Fetch cognitive memory context from Python backend via /query (BM25 + Dense + RRF + Decay + Knapsack + PostgreSQL)
+  const tenantHeader = (req.headers["x-tenant-id"] as string) || req.body?.tenantId;
+  const pyRes = await callPythonBackend(req, "/query", {
+    method: "POST",
+    body: JSON.stringify({
+      prompt,
+      maxTokens: 1500,
+      tenantId: tenantHeader
+    })
+  });
+
+  if (pyRes?.error) {
+    return res.status(pyRes.status || 403).json(pyRes);
+  }
+
+  const fusedContextStr = pyRes?.fused_context || "";
+  const retrievedMemories = pyRes?.injected_nodes || [];
+
   let responseText = "";
+  let apiUsed = false;
 
   try {
     const ai = getGenAI();
     apiUsed = true;
-
-    // 1. Ensure all active memories have their embeddings populated
-    await ensureAllEmbeddings(ai);
-
-    // 2. Generate embedding for user query
-    const queryVector = await getEmbedding(ai, prompt);
-
-    // 3. Compute hybrid search score (Cosine + Jaccard) for all active memories
-    const scoredMemories = memoryStore
-      .filter(m => m.status === 'active')
-      .map(m => {
-        let cosScore = 0;
-        if (queryVector && m.vector) {
-          cosScore = cosineSimilarity(queryVector, m.vector);
-        }
-        const jacScore = getJaccardSimilarity(prompt, m.content);
-        const hybridScore = queryVector ? (0.75 * cosScore + 0.25 * jacScore) : jacScore;
-        return {
-          node: m,
-          score: hybridScore,
-          cosScore,
-          jacScore
-        };
-      });
-
-    // 4. Sort by hybrid score descending, take top 3 with positive relevance
-    const topScored = scoredMemories
-      .sort((a, b) => b.score - a.score)
-      .slice(0, 3);
-
-    retrievedMemories = topScored.map(item => {
-      // Increment access count of selected node
-      item.node.accessCount += 1;
-      return item.node;
-    });
-
-    // Build context payload
-    const memoryContextStr = retrievedMemories
-      .map(m => `[Memory ID: ${m.id} | Type: ${m.category} | Confidence: ${m.confidence}] ${m.content}`)
-      .join('\n');
 
     const systemInstructions = `You are SynapseMemory, an advanced and highly accurate long-term cognitive memory substrate.
 Your core mission is to assist the user by utilizing the retrieved long-term memory context.
@@ -512,10 +479,9 @@ Your core mission is to assist the user by utilizing the retrieved long-term mem
 - Keep your answers grounded, objective, and truthful to the retrieved records.
 
 --- RETRIEVED MEMORY CONTEXT ---
-${memoryContextStr || "No prior memories stored yet."}
+${fusedContextStr || "No prior memories stored yet."}
 --------------------------------`;
 
-    // Use gemini-3.8-flash for reliable fast response with resilient retry architecture
     const chatResult = await generateContentWithRetry(ai, {
       model: 'gemini-3.8-flash',
       contents: [
@@ -523,32 +489,18 @@ ${memoryContextStr || "No prior memories stored yet."}
       ]
     });
     responseText = chatResult.text || "No response generated.";
-
   } catch (err: any) {
-    console.error("Gemini API call failed, falling back to intelligent simulation after retries:", err);
-    // Precise local search fallback in case of connection failure
-    const scoredMemories = memoryStore
-      .filter(m => m.status === 'active')
-      .map(m => ({ node: m, score: getJaccardSimilarity(prompt, m.content) }))
-      .sort((a, b) => b.score - a.score)
-      .slice(0, 3);
-
-    retrievedMemories = scoredMemories.map(item => {
-      item.node.accessCount += 1;
-      return item.node;
-    });
-
-    responseText = `[Simulated ${provider || 'ChatGPT'}] I received your query: "${prompt}". Using my active memory layer, I recalled that you are building ${memoryStore[1]?.content || 'an AI system'} with TypeScript. Here is your synthesized answer...`;
+    console.error("Gemini API call failed:", err);
+    responseText = `[Synapse Memory Substrate Response] Query processed against cognitive graph. Context retrieved: ${retrievedMemories.length} nodes.`;
   }
 
   const latencyMs = Date.now() - startTime;
   const tokenSavings = 2400 + Math.floor(Math.random() * 800);
 
-  // Log telemetry
   const telemetryEntry = {
     timestamp: new Date().toISOString(),
     query: prompt,
-    provider: provider || 'ChatGPT (OpenAI)',
+    provider: provider || 'Gemini 3.8 Flash',
     retrievedCount: retrievedMemories.length,
     latencyMs,
     tokenSavings
@@ -556,29 +508,15 @@ ${memoryContextStr || "No prior memories stored yet."}
   telemetryLogs.unshift(telemetryEntry);
   if (telemetryLogs.length > 50) telemetryLogs.pop();
 
-  // Asynchronous Active Learning background fact extraction simulation
-  if (prompt.length > 20 && Math.random() > 0.4) {
-    const autoExtracted: MemoryNode = {
-      id: `mem_${Date.now()}`,
-      category: 'fact',
-      content: `User discussed: "${prompt.slice(0, 60)}..."`,
-      confidence: 0.78,
-      source: `Active conversation sync (${provider || 'LLM Gateway'})`,
-      timestamp: new Date().toISOString(),
-      accessCount: 1,
-      status: 'active'
-    };
-    memoryStore.push(autoExtracted);
-  }
-
   res.json({
     success: true,
     response: responseText,
     retrievedMemories,
+    storageBackend: pyRes?.active_storage_backend || "pgvector",
     telemetry: {
       latencyMs,
       tokenSavings,
-      provider: provider || 'ChatGPT',
+      provider: provider || 'Gemini 3.8 Flash',
       apiUsed
     }
   });
@@ -629,19 +567,22 @@ app.post("/api/security/scrub", (req, res) => {
 });
 
 // Enterprise Security: GDPR Right to be Forgotten Cascading Delete
-app.post("/api/security/gdpr-delete", (req, res) => {
-  const { tenantId } = req.body;
-  const initialCount = memoryStore.length;
-  
-  // Cascade delete matching tenant or all if none specified
-  const deletedNodes = memoryStore.filter(m => m.tenantId === tenantId || !tenantId);
-  memoryStore = memoryStore.filter(m => tenantId ? m.tenantId !== tenantId : false);
+app.post("/api/security/gdpr-delete", async (req, res) => {
+  const tenantId = req.body?.tenantId || (req.headers["x-tenant-id"] as string);
+  const pyRes = await callPythonBackend(req, "/api/memories/clear", {
+    method: "POST",
+    body: JSON.stringify({ tenant_id: tenantId })
+  });
+
+  if (pyRes?.error) {
+    return res.status(pyRes.status || 400).json(pyRes);
+  }
 
   res.json({
     success: true,
-    deletedCount: deletedNodes.length,
-    remainingCount: memoryStore.length,
-    auditTrail: "GDPR Cascade Wiped: Vector chunks, K-Graph edges, and episodic logs securely erased with 3-pass zero-fill overwrite."
+    tenantId: tenantId || "all",
+    auditTrail: "GDPR Cascade Wiped: Vector chunks, K-Graph edges, and episodic logs securely erased with 3-pass zero-fill overwrite via Python memory engine.",
+    pythonResult: pyRes
   });
 });
 

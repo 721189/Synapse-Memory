@@ -76,20 +76,31 @@ class SecurityManager:
         self._pool: Optional[Any] = None
         self._is_postgres = False
 
-        if self.connection_string and HAS_PSYCOPG2 and pool is not None:
-            try:
-                self._pool = pool.SimpleConnectionPool(1, 10, self.connection_string)
-                self._is_postgres = True
-                logger.info("SecurityManager connected to centralized PostgreSQL authentication datastore.")
-            except Exception as e:
+        if self.connection_string:
+            if HAS_PSYCOPG2 and pool is not None:
+                try:
+                    self._pool = pool.SimpleConnectionPool(1, 10, self.connection_string)
+                    self._is_postgres = True
+                    logger.info("SecurityManager connected to centralized PostgreSQL authentication datastore.")
+                except Exception as e:
+                    self._is_postgres = False
+                    self._pool = None
+                    if self.fail_closed:
+                        raise RuntimeError(
+                            f"Central PostgreSQL authentication datastore unavailable: {e}"
+                        ) from e
+                    logger.warning(
+                        f"Could not connect SecurityManager to PostgreSQL ({e}); falling back to SQLite {db_path}."
+                    )
+            else:
                 self._is_postgres = False
                 self._pool = None
                 if self.fail_closed:
                     raise RuntimeError(
-                        f"Central PostgreSQL authentication datastore unavailable: {e}"
-                    ) from e
+                        "Central PostgreSQL authentication datastore requested but psycopg2 database driver is unavailable."
+                    )
                 logger.warning(
-                    f"Could not connect SecurityManager to PostgreSQL ({e}); falling back to SQLite {db_path}."
+                    f"psycopg2 unavailable; falling back to SQLite {db_path}."
                 )
 
         self._initialize_auth_tables()
