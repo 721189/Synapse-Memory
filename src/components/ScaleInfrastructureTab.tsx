@@ -1,6 +1,8 @@
 import React, { useState, useEffect } from 'react';
 import { Database, Cpu, Activity, Zap, RefreshCw, Send, CheckCircle2, AlertCircle, Play } from 'lucide-react';
 import { DistributedJob, HNSWIndexMetric } from '../types';
+import { apiGetDemo, apiPostDemo, isSimulated } from '../lib/api';
+import { DemoBanner } from './DemoBanner';
 
 export const ScaleInfrastructureTab: React.FC = () => {
   const [jobs, setJobs] = useState<DistributedJob[]>([]);
@@ -8,17 +10,16 @@ export const ScaleInfrastructureTab: React.FC = () => {
   const [loading, setLoading] = useState(true);
   const [tuning, setTuning] = useState(false);
   const [dispatching, setDispatching] = useState(false);
+  const [unavailable, setUnavailable] = useState(false);
 
   const [mValue, setMValue] = useState(16);
   const [efConstruction, setEfConstruction] = useState(64);
 
   const fetchJobs = async () => {
     try {
-      const res = await fetch('/api/infrastructure/jobs');
-      const data = await res.json();
-      if (data.success) {
-        setJobs(data.jobs);
-      }
+      const data = await apiGetDemo('/api/infrastructure/jobs');
+      if (isSimulated(data)) return setUnavailable(true);
+      if (data?.jobs) setJobs(data.jobs);
     } catch (err) {
       console.error(err);
     }
@@ -26,9 +27,9 @@ export const ScaleInfrastructureTab: React.FC = () => {
 
   const fetchMetrics = async () => {
     try {
-      const res = await fetch('/api/infrastructure/hnsw-metrics');
-      const data = await res.json();
-      if (data.success) {
+      const data = await apiGetDemo('/api/infrastructure/hnsw-metrics');
+      if (isSimulated(data)) return setUnavailable(true);
+      if (data?.metrics) {
         setMetrics(data.metrics);
         setMValue(data.metrics.m);
         setEfConstruction(data.metrics.efConstruction);
@@ -43,15 +44,9 @@ export const ScaleInfrastructureTab: React.FC = () => {
   const tuneMetrics = async () => {
     setTuning(true);
     try {
-      const res = await fetch('/api/infrastructure/hnsw-metrics/tune', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ m: mValue, efConstruction })
-      });
-      const data = await res.json();
-      if (data.success) {
-        setMetrics(data.metrics);
-      }
+      const data = await apiPostDemo('/api/infrastructure/hnsw-metrics/tune', { m: mValue, efConstruction });
+      if (isSimulated(data)) return setUnavailable(true);
+      if (data?.metrics) setMetrics(data.metrics);
     } catch (err) {
       console.error(err);
     } finally {
@@ -62,15 +57,9 @@ export const ScaleInfrastructureTab: React.FC = () => {
   const dispatchTask = async (taskType: string) => {
     setDispatching(true);
     try {
-      const res = await fetch('/api/infrastructure/jobs/dispatch', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ taskType })
-      });
-      const data = await res.json();
-      if (data.success) {
-        fetchJobs();
-      }
+      const data = await apiPostDemo('/api/infrastructure/jobs/dispatch', { taskType });
+      if (isSimulated(data)) return setUnavailable(true);
+      if (data) fetchJobs();
     } catch (err) {
       console.error(err);
     } finally {
@@ -100,6 +89,10 @@ export const ScaleInfrastructureTab: React.FC = () => {
 
     return () => clearInterval(interval);
   }, []);
+
+  if (unavailable) {
+    return <DemoBanner feature="Scale-Out Infrastructure & HNSW Optimization" />;
+  }
 
   return (
     <div className="space-y-8">

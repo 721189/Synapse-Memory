@@ -1,34 +1,60 @@
 version: '3.8'
 
-# Production-grade Docker Compose for SynapseMemory Enterprise Cognitive Substrate
+# Production-grade Docker Compose for SynapseMemory Enterprise Cognitive Substrate.
+# Runs the cognitive engine and the API gateway as SEPARATE services (split
+# images) so each scales, restarts, and is health-checked independently.
+
 services:
+  # ── Python cognitive engine (FastAPI + pgvector) ──────────────────────────
+  synapse-memory-engine:
+    build:
+      context: ..
+      dockerfile: Dockerfile.engine
+    image: synapse-memory/engine:${GATEWAY_VERSION:-v1.2.0}
+    container_name: synapse-engine
+    restart: unless-stopped
+    environment:
+      - NODE_ENV=production
+      - SYNAPSE_API_KEY=${SYNAPSE_API_KEY:?SYNAPSE_API_KEY is required}
+      - SYNAPSE_ENCRYPTION_KEY=${SYNAPSE_ENCRYPTION_KEY:?SYNAPSE_ENCRYPTION_KEY is required}
+      - DATABASE_URL=postgresql://${POSTGRES_USER:-synapse_admin}:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}@postgres-pgvector:5432/${POSTGRES_DB:-synapse_cognitive}
+      - SYNAPSE_STORAGE_BACKEND=${SYNAPSE_STORAGE_BACKEND:-pgvector}
+      - SYNAPSE_SQLITE_DB_PATH=/data/synapse_memory.db
+      - SYNAPSE_ALLOW_DB_FALLBACK=${SYNAPSE_ALLOW_DB_FALLBACK:-false}
+      - TOKEN_BUDGET_MAX=${TOKEN_BUDGET_MAX:-1500}
+      - RATE_LIMIT_PER_MIN=${RATE_LIMIT_PER_MIN:-120}
+      - ALLOWED_ORIGINS=${ALLOWED_ORIGINS:-http://localhost:3000,http://127.0.0.1:3000}
+      - GEMINI_API_KEY=${GEMINI_API_KEY:-}
+    volumes:
+      - synapse-engine-data:/data
+    depends_on:
+      postgres-pgvector:
+        condition: service_healthy
+    networks:
+      - synapse-internal
+
+  # ── Node API gateway + React dashboard ─────────────────────────────────────
   synapse-memory-gateway:
     build:
       context: ..
-      dockerfile: Dockerfile
+      dockerfile: Dockerfile.gateway
     image: synapse-memory/gateway:${GATEWAY_VERSION:-v1.2.0}
     container_name: synapse-gateway
     restart: unless-stopped
     ports:
       - "${GATEWAY_PORT:-3000}:3000"
-      - "${ENGINE_PORT:-8008}:8008"
     environment:
       - NODE_ENV=production
       - PORT=3000
-      - PYTHON_PORT=8008
-      - PYTHON_ENGINE_URL=http://127.0.0.1:8008
+      - PYTHON_ENGINE_URL=http://synapse-memory-engine:8008
       - GEMINI_API_KEY=${GEMINI_API_KEY:-}
-      - SYNAPSE_API_KEY=${SYNAPSE_API_KEY:?SYNAPSE_API_KEY is required}
-      - DATABASE_URL=postgresql://${POSTGRES_USER:-synapse_admin}:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}@postgres-pgvector:5432/${POSTGRES_DB:-synapse_cognitive}
-      - SYNAPSE_STORAGE_BACKEND=pgvector
-      - REDIS_URL=redis://:${REDIS_PASSWORD:-}@redis-state:6379/0
-      - TOKEN_BUDGET_MAX=${TOKEN_BUDGET_MAX:-1500}
-      - HYBRID_DECAY_RATE=${HYBRID_DECAY_RATE:-0.08}
-      - SYNAPSE_ENCRYPTION_KEY=${SYNAPSE_ENCRYPTION_KEY:?SYNAPSE_ENCRYPTION_KEY is required}
+      - ENABLE_DEMO_ROUTES=${ENABLE_DEMO_ROUTES:-false}
+      - RATE_LIMIT_PER_MIN=${RATE_LIMIT_PER_MIN:-120}
+      - ALLOWED_ORIGINS=${ALLOWED_ORIGINS:-http://localhost:3000,http://127.0.0.1:3000}
     depends_on:
+      synapse-memory-engine:
+        condition: service_started
       postgres-pgvector:
-        condition: service_healthy
-      redis-state:
         condition: service_healthy
     networks:
       - synapse-internal
@@ -82,3 +108,4 @@ networks:
 volumes:
   synapse-db-data:
   synapse-redis-data:
+  synapse-engine-data:

@@ -15,6 +15,50 @@ app.use(express.json());
 const PYTHON_PORT = parseInt(process.env.PYTHON_PORT || "8008", 10);
 const PYTHON_URL = process.env.PYTHON_ENGINE_URL || `http://127.0.0.1:${PYTHON_PORT}`;
 
+// Gate demo/simulated routes. These are NOT backed by the real cognitive engine
+// (they use in-memory mocks / fake progress timers) and must be disabled in
+// production. Default: enabled in dev, disabled when NODE_ENV=production, and
+// always overridable via ENABLE_DEMO_ROUTES.
+const ENABLE_DEMO_ROUTES =
+  process.env.ENABLE_DEMO_ROUTES != null
+    ? process.env.ENABLE_DEMO_ROUTES.toLowerCase() === "true"
+    : process.env.NODE_ENV !== "production";
+
+// Route prefixes that are demonstration-only and should 404 when gated off.
+const DEMO_ROUTE_PREFIXES = [
+  "/api/infrastructure",
+  "/api/licensing",
+  "/api/dreaming",
+  "/api/memfs",
+  "/api/graph",
+  "/api/temporal",
+  "/api/memory/temporal-decay",
+  "/api/simulate-poisoning",
+];
+
+// Exact demo-only paths that live under a prefix which also serves REAL
+// endpoints (e.g. /api/security/* also backs scrub + gdpr-delete).
+const DEMO_ROUTE_EXACT = [
+  "/api/security/zkp-attestation",
+  "/api/memories/multimodal-add",
+];
+
+app.use((req, res, next) => {
+  if (!ENABLE_DEMO_ROUTES) {
+    const isDemo =
+      DEMO_ROUTE_PREFIXES.some((p) => req.path.startsWith(p)) ||
+      DEMO_ROUTE_EXACT.includes(req.path);
+    if (isDemo) {
+      return res.status(404).json({
+        success: false,
+        simulated: true,
+        error: "This endpoint is demonstration-only and disabled in this deployment.",
+      });
+    }
+  }
+  next();
+});
+
 proxy.on("error", (err, req, res) => {
   // Silent fallback handling
 });
@@ -193,12 +237,18 @@ async function callPythonBackend(
       const errText = await res.text();
       try {
         const errJson = JSON.parse(errText);
-        return { error: true, status: res.status, detail: errJson.detail || errJson.error || errText };
+        return { error: true, status: res.status, detail: errJson.detail || errJson.error || errJson.data?.error || errText };
       } catch {
         return { error: true, status: res.status, detail: errText };
       }
     }
-    return await res.json();
+    const body = await res.json();
+    // Transparently unwrap the canonical Python envelope {success, data, request_id}
+    // so downstream Node consumers keep reading the flat payload shape.
+    if (body && typeof body === "object" && "success" in body && "data" in body) {
+      return body.data;
+    }
+    return body;
   } catch (err: any) {
     const errStr = String(err?.message || err || "");
     if (err?.code === 'ECONNREFUSED' || err?.cause?.code === 'ECONNREFUSED' || errStr.includes('fetch failed') || err?.name === 'AbortError') {
@@ -347,6 +397,36 @@ app.post("/api/memories/clear", async (req, res) => {
   }
 
   res.json({ success: true, message: "Memory store cleared successfully.", result: pyRes || { status: "cleared_locally" } });
+});
+
+// Proxy real-engine retrieval (hybrid + decay + knapsack) to the Python gateway.
+app.post("/query", async (req, res) => {
+  const pyQuery = await callPythonBackend(req, "/query", {
+    method: "POST",
+    body: JSON.stringify(req.body || {}),
+  });
+  if (!pyQuery || pyQuery.error) {
+    return res.status(pyQuery?.status || 503).json({
+      success: false,
+      error: pyQuery?.detail || "Retrieval engine unavailable.",
+    });
+  }
+  res.json({ success: true, data: pyQuery });
+});
+
+// Proxy RLAIF feedback to the Python engine.
+app.post("/feedback", async (req, res) => {
+  const pyFeedback = await callPythonBackend(req, "/feedback", {
+    method: "POST",
+    body: JSON.stringify(req.body || {}),
+  });
+  if (!pyFeedback || pyFeedback.error) {
+    return res.status(pyFeedback?.status || 503).json({
+      success: false,
+      error: pyFeedback?.detail || "Feedback engine unavailable.",
+    });
+  }
+  res.json({ success: true, data: pyFeedback });
 });
 
 // Simulate memory poisoning & belief revision test

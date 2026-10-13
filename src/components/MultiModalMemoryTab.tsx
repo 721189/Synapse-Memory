@@ -1,5 +1,7 @@
 import React, { useState } from 'react';
 import { Image as ImageIcon, Code, FileText, Plus, CheckCircle2 } from 'lucide-react';
+import { apiPostDemo, isSimulated } from '../lib/api';
+import { DemoBanner } from './DemoBanner';
 
 export const MultiModalMemoryTab: React.FC<{ onRefresh: () => void }> = ({ onRefresh }) => {
   const [content, setContent] = useState("Architecture Diagram: React frontend communicating with Express gateway via secure WebSocket and gRPC.");
@@ -7,18 +9,18 @@ export const MultiModalMemoryTab: React.FC<{ onRefresh: () => void }> = ({ onRef
   const [mediaUrl, setMediaUrl] = useState("https://images.unsplash.com/photo-1551288049-bebda4e38f71?w=800&auto=format&fit=crop&q=60");
   const [loading, setLoading] = useState(false);
   const [result, setResult] = useState<any>(null);
+  const [unavailable, setUnavailable] = useState(false);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setLoading(true);
     try {
-      const res = await fetch('/api/memories/multimodal-add', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ content, modalType, mediaUrl, tenantId: 'tenant_enterprise_alpha' })
-      });
-      const data = await res.json();
-      if (data.success) {
+      const data = await apiPostDemo('/api/memories/multimodal-add', { content, modalType, mediaUrl, tenantId: 'tenant_enterprise_alpha' });
+      if (isSimulated(data)) {
+        setUnavailable(true);
+        return;
+      }
+      if (data) {
         setResult(data);
         onRefresh();
       }
@@ -28,6 +30,10 @@ export const MultiModalMemoryTab: React.FC<{ onRefresh: () => void }> = ({ onRef
       setLoading(false);
     }
   };
+
+  if (unavailable) {
+    return <DemoBanner feature="Multi-Modal Memory Ingestion" />;
+  }
 
   return (
     <div className="space-y-6">

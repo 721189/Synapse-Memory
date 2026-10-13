@@ -53,6 +53,7 @@ secrets:
   # If createSecret is true (e.g. dev/staging testing only):
   geminiApiKey: ""
   encryptionKey: ""
+  apiKey: ""
   postgresPassword: ""
   redisPassword: ""
 
@@ -66,6 +67,13 @@ config:
   dbName: "synapse_cognitive"
   redisHost: "synapse-redis-master.default.svc.cluster.local"
   redisPort: "6379"
+  storageBackend: "pgvector"
+  pythonEngineUrl: "http://127.0.0.1:8008"
+  pythonPort: "8008"
+  enableDemoRoutes: "false"
+  rateLimitPerMin: "120"
+  allowedOrigins: "http://localhost:3000"
+  sqliteDbPath: "/data/synapse_memory.db"
 
 postgresql:
   enabled: true

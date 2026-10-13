@@ -1,5 +1,6 @@
 import React from 'react';
-import { Brain, Sparkles, ShieldCheck, Zap, Database, Code, Activity, Cpu, Award } from 'lucide-react';
+import { Brain, Sparkles, ShieldCheck, Zap, Database, Code, Activity, Cpu, Award, Settings2 } from 'lucide-react';
+import { getApiKey, getTenant } from '../lib/api';
 
 interface HeaderProps {
   activeTab: string;
@@ -10,9 +11,14 @@ interface HeaderProps {
     avgRetrievalLatencyMs: number;
     totalTokenSavings: number;
   };
+  onOpenSettings: () => void;
 }
 
-export const Header: React.FC<HeaderProps> = ({ activeTab, setActiveTab, stats }) => {
+export const Header: React.FC<HeaderProps> = ({ activeTab, setActiveTab, stats, onOpenSettings }) => {
+  const apiKey = getApiKey();
+  const tenant = getTenant();
+  const connected = Boolean(apiKey);
+
   return (
     <header className="bg-slate-900 border-b border-slate-800 text-white sticky top-0 z-50">
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
@@ -47,6 +53,29 @@ export const Header: React.FC<HeaderProps> = ({ activeTab, setActiveTab, stats }
               <ShieldCheck className="w-4 h-4 text-emerald-400" />
               <span>Tokens Saved: <strong className="text-white">{stats.totalTokenSavings.toLocaleString()}</strong></span>
             </div>
+          </div>
+
+          {/* Connection status + settings */}
+          <div className="flex items-center space-x-2 ml-2">
+            <div
+              className={`hidden sm:flex items-center space-x-1.5 text-xs px-2.5 py-1 rounded-full border font-medium ${
+                connected
+                  ? 'bg-emerald-500/10 text-emerald-300 border-emerald-500/30'
+                  : 'bg-amber-500/10 text-amber-300 border-amber-500/30'
+              }`}
+              title={connected ? `Connected${tenant ? ` to tenant "${tenant}"` : ''}` : 'No API key configured'}
+            >
+              <span className={`w-1.5 h-1.5 rounded-full ${connected ? 'bg-emerald-400' : 'bg-amber-400'}`}></span>
+              <span>{connected ? 'Authenticated' : 'No Key'}</span>
+            </div>
+            <button
+              onClick={onOpenSettings}
+              className="flex items-center space-x-1.5 text-xs px-3 py-1.5 rounded-lg border border-slate-700 bg-slate-800/80 text-slate-300 hover:text-white hover:bg-slate-700/70 transition cursor-pointer"
+              title="Configure engine connection"
+            >
+              <Settings2 className="w-4 h-4" />
+              <span className="hidden md:inline">Connection</span>
+            </button>
           </div>
         </div>
 

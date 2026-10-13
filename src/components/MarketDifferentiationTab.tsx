@@ -1,6 +1,8 @@
 import React, { useState, useEffect } from 'react';
 import { Sparkles, GitPullRequest, Moon, Clock, Save, Play, RefreshCw, FileText, CheckCircle2, ShieldCheck, History } from 'lucide-react';
 import { MemFSFile, DreamSession, TemporalObservation } from '../types';
+import { apiGetDemo, apiPostDemo, isSimulated } from '../lib/api';
+import { DemoBanner } from './DemoBanner';
 
 export const MarketDifferentiationTab: React.FC = () => {
   const [files, setFiles] = useState<MemFSFile[]>([]);
@@ -9,6 +11,7 @@ export const MarketDifferentiationTab: React.FC = () => {
   const [commitMsg, setCommitMsg] = useState('');
   const [dreamingSessions, setDreamingSessions] = useState<DreamSession[]>([]);
   const [temporalTimeline, setTemporalTimeline] = useState<TemporalObservation[]>([]);
+  const [unavailable, setUnavailable] = useState(false);
   
   const [loadingFiles, setLoadingFiles] = useState(true);
   const [dreamingActive, setDreamingActive] = useState(false);
@@ -17,9 +20,9 @@ export const MarketDifferentiationTab: React.FC = () => {
 
   const fetchFiles = async () => {
     try {
-      const res = await fetch('/api/memfs/files');
-      const data = await res.json();
-      if (data.success) {
+      const data = await apiGetDemo('/api/memfs/files');
+      if (isSimulated(data)) return setUnavailable(true);
+      if (data?.files) {
         setFiles(data.files);
         if (!activeFile && data.files.length > 0) {
           setActiveFile(data.files[0]);
@@ -35,11 +38,9 @@ export const MarketDifferentiationTab: React.FC = () => {
 
   const fetchDreamSessions = async () => {
     try {
-      const res = await fetch('/api/dreaming/sessions');
-      const data = await res.json();
-      if (data.success) {
-        setDreamingSessions(data.sessions);
-      }
+      const data = await apiGetDemo('/api/dreaming/sessions');
+      if (isSimulated(data)) return setUnavailable(true);
+      if (data?.sessions) setDreamingSessions(data.sessions);
     } catch (err) {
       console.error(err);
     }
@@ -47,11 +48,9 @@ export const MarketDifferentiationTab: React.FC = () => {
 
   const fetchTimeline = async () => {
     try {
-      const res = await fetch('/api/temporal/timeline');
-      const data = await res.json();
-      if (data.success) {
-        setTemporalTimeline(data.timeline);
-      }
+      const data = await apiGetDemo('/api/temporal/timeline');
+      if (isSimulated(data)) return setUnavailable(true);
+      if (data?.timeline) setTemporalTimeline(data.timeline);
     } catch (err) {
       console.error(err);
     } finally {
@@ -64,17 +63,13 @@ export const MarketDifferentiationTab: React.FC = () => {
     if (!activeFile) return;
     setSavingFile(true);
     try {
-      const res = await fetch('/api/memfs/commit', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          path: activeFile.path,
-          content: fileContent,
-          commitMessage: commitMsg || "Manual profile updates via Letta MemFS visual editor"
-        })
+      const data = await apiPostDemo('/api/memfs/commit', {
+        path: activeFile.path,
+        content: fileContent,
+        commitMessage: commitMsg || "Manual profile updates via Letta MemFS visual editor"
       });
-      const data = await res.json();
-      if (data.success) {
+      if (isSimulated(data)) return setUnavailable(true);
+      if (data) {
         setCommitMsg('');
         fetchFiles();
       }
@@ -88,11 +83,9 @@ export const MarketDifferentiationTab: React.FC = () => {
   const triggerDreaming = async () => {
     setDreamingActive(true);
     try {
-      const res = await fetch('/api/dreaming/consolidate', { method: 'POST' });
-      const data = await res.json();
-      if (data.success) {
-        fetchDreamSessions();
-      }
+      const data = await apiPostDemo('/api/dreaming/consolidate', {});
+      if (isSimulated(data)) return setUnavailable(true);
+      if (data) fetchDreamSessions();
     } catch (err) {
       console.error(err);
     } finally {
@@ -110,6 +103,10 @@ export const MarketDifferentiationTab: React.FC = () => {
     setActiveFile(f);
     setFileContent(f.content);
   };
+
+  if (unavailable) {
+    return <DemoBanner feature="Market-Dominance Suite (MemFS, Dreaming, Temporal Timeline)" />;
+  }
 
   return (
     <div className="space-y-8">

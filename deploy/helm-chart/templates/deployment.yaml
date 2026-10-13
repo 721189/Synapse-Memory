@@ -37,11 +37,17 @@ spec:
                 secretKeyRef:
                   name: {{ .Values.secrets.existingSecret | default (printf "%s-secret" (include "synapse-memory.fullname" .)) }}
                   key: GEMINI_API_KEY
+                  optional: true
             - name: SYNAPSE_ENCRYPTION_KEY
               valueFrom:
                 secretKeyRef:
                   name: {{ .Values.secrets.existingSecret | default (printf "%s-secret" (include "synapse-memory.fullname" .)) }}
                   key: SYNAPSE_ENCRYPTION_KEY
+            - name: SYNAPSE_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.secrets.existingSecret | default (printf "%s-secret" (include "synapse-memory.fullname" .)) }}
+                  key: SYNAPSE_API_KEY
             - name: DB_PASSWORD
               valueFrom:
                 secretKeyRef:

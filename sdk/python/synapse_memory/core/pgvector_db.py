@@ -5,6 +5,7 @@ and PostgreSQL Row-Level Security (RLS).
 
 import json
 import logging
+import os
 import time
 from typing import Any, Dict, List, Optional
 
@@ -50,9 +51,15 @@ class PGVectorMemoryStore:
         auto_init: bool = True,
         fail_closed: bool = False
     ):
-        self.connection_string = connection_string or (
-            "postgresql://synapse_admin:synapse_secure_pass@127.0.0.1:5432/synapse_cognitive"
+        # SECURITY: never ship a default password. Require explicit DATABASE_URL in prod.
+        # Local dev convenience default uses an obviously-insecure placeholder and logs a warning.
+        self.connection_string = connection_string or os.environ.get(
+            "DATABASE_URL", "postgresql://synapse_admin:CHANGEME_dev_only@127.0.0.1:5432/synapse_cognitive"
         )
+        if "CHANGEME" in self.connection_string:
+            logger.warning(
+                "Using insecure dev-only Postgres credentials. Set DATABASE_URL with a strong password for any shared deployment."
+            )
         self.dimension = dimension
         self.m = m
         self.ef_construction = ef_construction

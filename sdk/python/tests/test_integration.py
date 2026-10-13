@@ -11,8 +11,13 @@ class TestIntegration(unittest.TestCase):
         self.manager = MemoryManager(store=self.store, embedder=self.embedder, max_record_limit=5)
 
     def tearDown(self):
-        if os.path.exists(self.db_path):
-            os.remove(self.db_path)
+        for suffix in ("", "-wal", "-shm"):
+            path = self.db_path + suffix
+            if os.path.exists(path):
+                try:
+                    os.remove(path)
+                except OSError:
+                    pass
 
     def test_full_pipeline(self):
         # 1. Ingest

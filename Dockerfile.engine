@@ -1,0 +1,39 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# SynapseMemory — Python Cognitive Engine image (FastAPI + pgvector)
+# The real memory substrate: hybrid retrieval, Ebbinghaus decay, knapsack
+# packing, encryption, multi-tenant RBAC. Deploy as its own service; the Node
+# gateway proxies to it over SYNAPSE_ENGINE_URL.
+# ─────────────────────────────────────────────────────────────────────────────
+FROM python:3.11-slim AS base
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PYTHONPATH=/app/sdk/python \
+    PIP_NO_CACHE_DIR=1
+
+# System deps: libpq for psycopg2/pgvector; curl for healthcheck.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        build-essential \
+        libpq-dev \
+        curl \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+# Install the engine + production dependencies (pgvector driver).
+# Heavy neural-embedding extras are opt-in via [local-models] at build time.
+COPY sdk/python ./sdk/python
+RUN pip install --no-cache-dir -e "sdk/python[pgvector]"
+
+# Non-root runtime.
+RUN groupadd --system synapse && useradd --system --gid synapse --home /app synapse \
+    && mkdir -p /data && chown -R synapse:synapse /app /data
+USER synapse
+
+ENV SYNAPSE_SQLITE_DB_PATH=/data/synapse_memory.db
+EXPOSE 8008
+
+HEALTHCHECK --interval=30s --timeout=5s --start-period=25s --retries=3 \
+    CMD curl -fsS http://127.0.0.1:8008/liveness || exit 1
+
+CMD ["uvicorn", "synapse_memory.api.fastapi_server:app", "--host", "0.0.0.0", "--port", "8008"]

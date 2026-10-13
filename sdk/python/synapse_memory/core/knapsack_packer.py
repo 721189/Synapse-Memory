@@ -23,9 +23,13 @@ class KnapsackPacker:
     """
     Robust 0/1 Knapsack optimizer for packing memory nodes into a token budget.
     Implements a memory-efficient Dynamic Programming solution with a greedy fallback.
+    Auto-switches to greedy when n*budget exceeds threshold to bound latency.
     """
+    MAX_BUDGET = 8000
+    DP_OPS_THRESHOLD = 2_000_000
+
     def __init__(self, token_budget: int = 4096):
-        self.token_budget = token_budget
+        self.token_budget = min(token_budget, self.MAX_BUDGET)
 
     def pack(
         self,
@@ -43,8 +47,18 @@ class KnapsackPacker:
             List of packed memory nodes that maximize total relevance score within budget.
         """
         budget = token_budget if token_budget is not None else self.token_budget
+        budget = min(budget, self.MAX_BUDGET)
         if not memories or budget <= 0:
             return []
+
+        # Guard: DP is O(n*budget). Fall back to greedy for huge inputs to keep p99 low.
+        if len(memories) * budget > self.DP_OPS_THRESHOLD:
+            logger.warning(
+                "Knapsack DP input too large (n=%d, budget=%d); using greedy fallback.",
+                len(memories),
+                budget,
+            )
+            return self.greedy_pack(memories, token_budget=budget)
 
         n = len(memories)
         weights = [max(1, int(m.get("token_cost", 1))) for m in memories]

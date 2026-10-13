@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { Database, Plus, Trash2, Search, ShieldCheck, Tag, RefreshCw, Cpu, Layers } from 'lucide-react';
 import { MemoryNode } from '../types';
+import { apiPost } from '../lib/api';
 
 interface MemoryManagerProps {
   memories: MemoryNode[];
@@ -27,17 +28,10 @@ export const MemoryManager: React.FC<MemoryManagerProps> = ({ memories, onRefres
     if (!newContent.trim()) return;
     setSubmitting(true);
     try {
-      const res = await fetch('/api/memories/add', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ category: newCategory, content: newContent, source: newSource })
-      });
-      const data = await res.json();
-      if (data.success) {
-        setNewContent('');
-        setShowAddModal(false);
-        onRefresh();
-      }
+      await apiPost('/api/memories/add', { category: newCategory, content: newContent, source: newSource });
+      setNewContent('');
+      setShowAddModal(false);
+      onRefresh();
     } catch (err) {
       console.error(err);
     } finally {
@@ -48,7 +42,7 @@ export const MemoryManager: React.FC<MemoryManagerProps> = ({ memories, onRefres
   const handleClearStore = async () => {
     if (!window.confirm('Are you sure you want to clear all memory nodes?')) return;
     try {
-      await fetch('/api/memories/clear', { method: 'POST' });
+      await apiPost('/api/memories/clear', {});
       onRefresh();
     } catch (err) {
       console.error(err);

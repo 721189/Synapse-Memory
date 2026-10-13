@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { Search, Cpu, Zap, Layers, CheckCircle2, ArrowRight } from 'lucide-react';
+import { apiPost } from '../lib/api';
 
 export const AdvancedRetrievalTab: React.FC = () => {
   const [query, setQuery] = useState("TypeScript styling and backend requirements");
@@ -11,13 +12,8 @@ export const AdvancedRetrievalTab: React.FC = () => {
     if (!query.trim() || loading) return;
     setLoading(true);
     try {
-      const res = await fetch('/api/retrieval/hybrid-search', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ query })
-      });
-      const json = await res.json();
-      if (json.success) setData(json);
+      const json = await apiPost('/query', { prompt: query });
+      setData(json);
     } catch (err) {
       console.error(err);
     } finally {

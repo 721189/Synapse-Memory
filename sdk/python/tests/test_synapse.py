@@ -29,12 +29,15 @@ class TestSynapseCore(unittest.TestCase):
         self.searcher = HybridSearch(alpha=0.6, k=60)
 
     def tearDown(self):
-        # Erase test DB artifacts cleanly
-        if os.path.exists(self.test_db_path):
-            try:
-                os.remove(self.test_db_path)
-            except OSError:
-                pass
+        # Erase test DB artifacts cleanly, including WAL/SHM sidecars created
+        # by journal_mode=WAL (otherwise Windows holds file locks on cleanup).
+        for suffix in ("", "-wal", "-shm"):
+            path = self.test_db_path + suffix
+            if os.path.exists(path):
+                try:
+                    os.remove(path)
+                except OSError:
+                    pass
 
     def test_knapsack_packer_dp(self):
         """Tests optimal dynamic programming allocation under tight budgets."""

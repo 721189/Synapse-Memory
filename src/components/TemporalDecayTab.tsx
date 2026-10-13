@@ -1,19 +1,22 @@
 import React, { useState, useEffect } from 'react';
 import { Clock, TrendingDown, RefreshCw, Database } from 'lucide-react';
 import { MemoryNode } from '../types';
+import { apiGetDemo, isSimulated } from '../lib/api';
+import { DemoBanner } from './DemoBanner';
 
 export const TemporalDecayTab: React.FC = () => {
   const [decayData, setDecayData] = useState<any[]>([]);
   const [formula, setFormula] = useState('');
   const [loading, setLoading] = useState(true);
+  const [unavailable, setUnavailable] = useState(false);
 
   const fetchDecay = async () => {
     try {
-      const res = await fetch('/api/memory/temporal-decay');
-      const data = await res.json();
-      if (data.success) {
-        setDecayData(data.memories);
-        setFormula(data.decayFormula);
+      const data = await apiGetDemo('/api/memory/temporal-decay');
+      if (isSimulated(data)) return setUnavailable(true);
+      if (data) {
+        setDecayData(data.memories || []);
+        setFormula(data.decayFormula || '');
       }
     } catch (err) {
       console.error(err);
@@ -25,6 +28,10 @@ export const TemporalDecayTab: React.FC = () => {
   useEffect(() => {
     fetchDecay();
   }, []);
+
+  if (unavailable) {
+    return <DemoBanner feature="Temporal Decay Visualization" />;
+  }
 
   return (
     <div className="space-y-6">

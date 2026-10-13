@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { ThumbsUp, ThumbsDown, Sparkles, CheckCircle2 } from 'lucide-react';
 import { MemoryNode } from '../types';
+import { apiPost } from '../lib/api';
 
 export const RLAIFFeedbackTab: React.FC<{ memories: MemoryNode[]; onRefresh: () => void }> = ({ memories, onRefresh }) => {
   const [loadingId, setLoadingId] = useState<string | null>(null);
@@ -9,16 +10,9 @@ export const RLAIFFeedbackTab: React.FC<{ memories: MemoryNode[]; onRefresh: () 
   const handleFeedback = async (memoryId: string, feedback: 'positive' | 'negative') => {
     setLoadingId(memoryId);
     try {
-      const res = await fetch('/api/rlaif/feedback', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ memoryId, feedback })
-      });
-      const data = await res.json();
-      if (data.success) {
-        setFeedbackLog(data.rlaifUpdate);
-        onRefresh();
-      }
+      const data = await apiPost('/feedback', { memory_id: memoryId, feedback_type: feedback });
+      setFeedbackLog(`Confidence updated: ${data.old_confidence} → ${data.new_confidence}`);
+      onRefresh();
     } catch (err) {
       console.error(err);
     } finally {

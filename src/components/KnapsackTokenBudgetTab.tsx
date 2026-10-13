@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { Cpu, CheckCircle2, Sliders, Zap, DollarSign } from 'lucide-react';
+import { apiPost } from '../lib/api';
 
 export const KnapsackTokenBudgetTab: React.FC = () => {
   const [maxTokens, setMaxTokens] = useState(1200);
@@ -9,15 +10,8 @@ export const KnapsackTokenBudgetTab: React.FC = () => {
   const runKnapsackPacking = async () => {
     setLoading(true);
     try {
-      const res = await fetch('/api/retrieval/knapsack-pack', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ maxTokens })
-      });
-      const data = await res.json();
-      if (data.success) {
-        setPackingData(data);
-      }
+      const data = await apiPost('/api/retrieval/knapsack-pack', { prompt: 'context', maxTokens });
+      setPackingData(data);
     } catch (err) {
       console.error(err);
     } finally {

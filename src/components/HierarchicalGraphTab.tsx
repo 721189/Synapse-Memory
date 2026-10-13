@@ -1,5 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { Network, ShieldCheck, Cpu, Layers, CheckCircle2, RefreshCw } from 'lucide-react';
+import { apiGetDemo, apiPostDemo, isSimulated } from '../lib/api';
+import { DemoBanner } from './DemoBanner';
 
 export const HierarchicalGraphTab: React.FC = () => {
   const [communities, setCommunities] = useState<any[]>([]);
@@ -7,14 +9,15 @@ export const HierarchicalGraphTab: React.FC = () => {
   const [zkpData, setZkpData] = useState<any>(null);
   const [loadingZkp, setLoadingZkp] = useState(false);
   const [loadingGraph, setLoadingGraph] = useState(true);
+  const [unavailable, setUnavailable] = useState(false);
 
   const fetchCommunities = async () => {
     try {
-      const res = await fetch('/api/graph/communities');
-      const data = await res.json();
-      if (data.success) {
-        setCommunities(data.communities);
-        setAlgorithm(data.algorithm);
+      const data = await apiGetDemo('/api/graph/communities');
+      if (isSimulated(data)) return setUnavailable(true);
+      if (data) {
+        setCommunities(data.communities || []);
+        setAlgorithm(data.algorithm || '');
       }
     } catch (err) {
       console.error(err);
@@ -26,12 +29,8 @@ export const HierarchicalGraphTab: React.FC = () => {
   const generateZkpAttestation = async () => {
     setLoadingZkp(true);
     try {
-      const res = await fetch('/api/security/zkp-attestation', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ tenantId: 'tenant_enterprise_alpha' })
-      });
-      const data = await res.json();
+      const data = await apiPostDemo('/api/security/zkp-attestation', { tenantId: 'tenant_enterprise_alpha' });
+      if (isSimulated(data)) return setUnavailable(true);
       setZkpData(data);
     } catch (err) {
       console.error(err);
@@ -44,6 +43,10 @@ export const HierarchicalGraphTab: React.FC = () => {
     fetchCommunities();
     generateZkpAttestation();
   }, []);
+
+  if (unavailable) {
+    return <DemoBanner feature="Hierarchical GraphRAG & Zero-Knowledge Compliance" />;
+  }
 
   return (
     <div className="space-y-6">

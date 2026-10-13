@@ -15,6 +15,8 @@ import { ScaleInfrastructureTab } from './components/ScaleInfrastructureTab';
 import { CommercialBuyoutTab } from './components/CommercialBuyoutTab';
 import { DeveloperDocs } from './components/DeveloperDocs';
 import { MemoryNode, SystemStats } from './types';
+import { apiGet } from './lib/api';
+import { ConnectionSettings } from './components/ConnectionSettings';
 
 export default function App() {
   const [activeTab, setActiveTab] = useState<'gateway' | 'memories' | 'poisoning' | 'security' | 'retrieval' | 'decay' | 'graph' | 'knapsack' | 'multimodal' | 'rlaif' | 'differentiation' | 'infrastructure' | 'buyout' | 'docs'>('gateway');
@@ -26,11 +28,11 @@ export default function App() {
     totalTokenSavings: 14250
   });
   const [loading, setLoading] = useState(true);
+  const [settingsOpen, setSettingsOpen] = useState(false);
 
   const fetchAppData = async () => {
     try {
-      const res = await fetch('/api/memories');
-      const data = await res.json();
+      const data = await apiGet('/api/memories');
       if (data.memories) {
         setMemories(data.memories);
       }
@@ -50,7 +52,8 @@ export default function App() {
 
   return (
     <div className="min-h-screen bg-slate-50 text-slate-900 font-sans antialiased flex flex-col">
-      <Header activeTab={activeTab} setActiveTab={setActiveTab} stats={stats} />
+      <Header activeTab={activeTab} setActiveTab={setActiveTab} stats={stats} onOpenSettings={() => setSettingsOpen(true)} />
+      <ConnectionSettings open={settingsOpen} onClose={() => { setSettingsOpen(false); fetchAppData(); }} />
 
       <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-8">
         {activeTab === 'gateway' && <GatewayPlayground onRefreshStats={fetchAppData} />}

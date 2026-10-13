@@ -9,6 +9,34 @@ from synapse_memory.core.encryption import (
 )
 
 
+class _AutoClosingConnection(sqlite3.Connection):
+    """SQLite connection whose context manager COMMITS + CLOSES.
+
+    Stock sqlite3 `with conn:` only commits/rollbacks but leaves the file handle
+    open — on Windows that locks test .db files (PermissionError on cleanup) and
+    leaks WAL handles under FastAPI workers. This subclass closes on __exit__.
+    """
+
+    def __exit__(self, exc_type, exc_val, exc_tb):  # type: ignore
+        try:
+            if exc_type is None:
+                try:
+                    self.commit()
+                except Exception:
+                    pass
+            else:
+                try:
+                    self.rollback()
+                except Exception:
+                    pass
+        finally:
+            try:
+                self.close()
+            except Exception:
+                pass
+        return False
+
+
 class SQLiteMemoryStore:
     """
     Sovereign SQLite persistence backend with mandatory authenticated encryption at rest
@@ -29,9 +57,39 @@ class SQLiteMemoryStore:
         self._initialize_database()
 
     def _get_connection(self) -> sqlite3.Connection:
-        conn = sqlite3.connect(self.db_path)
+        # WAL mode + busy timeout: required for concurrent FastAPI workers.
+        # NOTE: SQLite is single-node dev/local only. Use pgvector for teams.
+        # Uses _AutoClosingConnection so `with` blocks commit AND close the handle
+        # (stock sqlite3 leaves it open -> Windows file locks + WAL handle leaks).
+        conn = sqlite3.connect(
+            self.db_path,
+            timeout=10.0,
+            check_same_thread=False,
+            factory=_AutoClosingConnection,
+        )
         conn.row_factory = sqlite3.Row
+        try:
+            # checkpoint on close keeps test -wal/-shm sidecars from lingering
+            conn.execute("PRAGMA journal_mode=WAL;")
+            conn.execute("PRAGMA busy_timeout=5000;")
+            conn.execute("PRAGMA synchronous=NORMAL;")
+        except Exception:
+            pass
         return conn
+
+    def close(self) -> None:
+        """Checkpoint WAL so no -wal/-shm sidecars linger after tests or shutdown."""
+        if self.db_path == ":memory:":
+            return
+        try:
+            conn = sqlite3.connect(self.db_path, timeout=5.0)
+            try:
+                conn.execute("PRAGMA wal_checkpoint(TRUNCATE);")
+                conn.commit()
+            finally:
+                conn.close()
+        except Exception:
+            pass
 
     def _initialize_database(self) -> None:
         """Creates the memory table with tenant isolation and index constraints on creation."""
@@ -240,6 +298,82 @@ class SQLiteMemoryStore:
                 )
                 memories.append(mem)
             return memories
+
+    def vector_search(
+        self,
+        query_vec: List[float],
+        top_k: int = 10,
+        category: Optional[str] = None,
+        tenant_id: Optional[str] = None
+    ) -> List[Dict[str, Any]]:
+        """
+        Dense retrieval over the SQLite corpus using cosine similarity.
+
+        NOTE: SQLite is a single-node dev/local backend. This is an exact O(N)
+        in-memory scan, not an approximate HNSW index. For team/production scale
+        use the pgvector backend which pushes `embedding <=> query` down to SQL.
+        Results match the PGVectorMemoryStore.vector_search contract:
+        each node carries `cosine_similarity` and `relevance_score`.
+        """
+        memories = (
+            self.get_memories_by_category(category, tenant_id=tenant_id)
+            if category
+            else self.get_all_memories(tenant_id=tenant_id)
+        )
+
+        mag_q = sum(a * a for a in query_vec) ** 0.5
+        results: List[Dict[str, Any]] = []
+        for mem in memories:
+            vec = mem.get("embedding", [])
+            if vec and len(vec) == len(query_vec):
+                dot = sum(a * b for a, b in zip(query_vec, vec))
+                mag_v = sum(b * b for b in vec) ** 0.5
+                sim = dot / (mag_q * mag_v) if mag_q * mag_v > 0 else 0.0
+            else:
+                sim = 0.0
+            mem_copy = mem.copy()
+            mem_copy["cosine_similarity"] = sim
+            mem_copy["relevance_score"] = sim
+            results.append(mem_copy)
+
+        results.sort(key=lambda x: x["cosine_similarity"], reverse=True)
+        return results[:top_k]
+
+    def lexical_search(
+        self,
+        query: str,
+        top_k: int = 100,
+        category: Optional[str] = None,
+        tenant_id: Optional[str] = None
+    ) -> List[Dict[str, Any]]:
+        """
+        Sparse (lexical) retrieval over the SQLite corpus using token-overlap
+        ranking — the exact-scan analogue of PostgreSQL tsvector GIN ranking.
+        Matches the PGVectorMemoryStore.lexical_search contract: each node
+        carries `lexical_rank` and `relevance_score`.
+        """
+        memories = (
+            self.get_memories_by_category(category, tenant_id=tenant_id)
+            if category
+            else self.get_all_memories(tenant_id=tenant_id)
+        )
+
+        query_terms = set(query.lower().split())
+        if not query_terms:
+            return []
+
+        results: List[Dict[str, Any]] = []
+        for mem in memories:
+            words = set(str(mem.get("content", "")).lower().split())
+            overlap = len(query_terms.intersection(words))
+            if overlap > 0:
+                mem_copy = mem.copy()
+                mem_copy["lexical_rank"] = float(overlap) / float(len(query_terms))
+                mem_copy["relevance_score"] = mem_copy["lexical_rank"]
+                results.append(mem_copy)
+
+        results.sort(key=lambda x: x.get("lexical_rank", 0.0), reverse=True)
+        return results[:top_k]
 
     def count_memories(self, tenant_id: Optional[str] = None) -> int:
         with self._get_connection() as conn:

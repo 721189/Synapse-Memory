@@ -5,6 +5,8 @@ import {
   Lock, Zap, Play, Terminal, HelpCircle, RefreshCw, Copy, CheckSquare
 } from 'lucide-react';
 import { CommercialLicense } from '../types';
+import { apiGetDemo, apiPostDemo, isSimulated } from '../lib/api';
+import { DemoBanner } from './DemoBanner';
 
 export const CommercialBuyoutTab: React.FC = () => {
   // Main checkout states
@@ -13,6 +15,7 @@ export const CommercialBuyoutTab: React.FC = () => {
   const [loading, setLoading] = useState(true);
   const [buying, setBuying] = useState(false);
   const [signing, setSigning] = useState(false);
+  const [unavailable, setUnavailable] = useState(false);
 
   // Clipboard copies
   const [copiedDocker, setCopiedDocker] = useState(false);
@@ -53,11 +56,9 @@ export const CommercialBuyoutTab: React.FC = () => {
 
   const fetchLicense = async () => {
     try {
-      const res = await fetch('/api/licensing/details');
-      const data = await res.json();
-      if (data.success && data.license) {
-        setLicense(data.license);
-      }
+      const data = await apiGetDemo('/api/licensing/details');
+      if (isSimulated(data)) { setUnavailable(true); return; }
+      if (data?.license) setLicense(data.license);
     } catch (err) {
       console.error(err);
     } finally {
@@ -70,15 +71,9 @@ export const CommercialBuyoutTab: React.FC = () => {
     if (!licensedTo) return;
     setBuying(true);
     try {
-      const res = await fetch('/api/licensing/buyout', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ licensedTo })
-      });
-      const data = await res.json();
-      if (data.success) {
-        setLicense(data.license);
-      }
+      const data = await apiPostDemo('/api/licensing/buyout', { licensedTo });
+      if (isSimulated(data)) { setUnavailable(true); return; }
+      if (data?.license) setLicense(data.license);
     } catch (err) {
       console.error(err);
     } finally {
@@ -89,11 +84,9 @@ export const CommercialBuyoutTab: React.FC = () => {
   const signContract = async () => {
     setSigning(true);
     try {
-      const res = await fetch('/api/licensing/sign-contract', { method: 'POST' });
-      const data = await res.json();
-      if (data.success) {
-        setLicense(data.license);
-      }
+      const data = await apiPostDemo('/api/licensing/sign-contract', {});
+      if (isSimulated(data)) { setUnavailable(true); return; }
+      if (data?.license) setLicense(data.license);
     } catch (err) {
       console.error(err);
     } finally {
@@ -230,6 +223,10 @@ context = client.retrieve_memories(
   const scrollToCheckout = () => {
     checkoutRef.current?.scrollIntoView({ behavior: 'smooth' });
   };
+
+  if (unavailable) {
+    return <DemoBanner feature="Enterprise GTM & Licensing Console" />;
+  }
 
   return (
     <div className="space-y-16 bg-slate-50/50 -mt-8 -mx-4 px-4 py-12 rounded-t-[32px] border-t border-slate-200">

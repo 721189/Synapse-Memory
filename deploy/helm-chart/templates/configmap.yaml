@@ -13,3 +13,17 @@ data:
   DB_USER: {{ .Values.config.dbUser | quote }}
   DB_NAME: {{ .Values.config.dbName | quote }}
   REDIS_URL: "redis://{{ .Values.config.redisHost }}:{{ .Values.config.redisPort }}/0"
+  # Storage backend for the cognitive engine: pgvector (team/prod) or sqlite (dev)
+  SYNAPSE_STORAGE_BACKEND: {{ .Values.config.storageBackend | quote }}
+  # Database connection string the Python engine uses to reach pgvector.
+  # Password is injected via the DB_PASSWORD env var (from Secret) in the Deployment.
+  DATABASE_URL: "postgresql://{{ .Values.config.dbUser }}:$(DB_PASSWORD)@{{ .Values.config.dbHost }}:{{ .Values.config.dbPort }}/{{ .Values.config.dbName }}"
+  PYTHON_ENGINE_URL: {{ .Values.config.pythonEngineUrl | quote }}
+  PYTHON_PORT: {{ .Values.config.pythonPort | quote }}
+  # Fail-closed: never silently fall back to in-memory storage in production.
+  SYNAPSE_ALLOW_DB_FALLBACK: "false"
+  # Disable demo/simulated routes in production.
+  ENABLE_DEMO_ROUTES: {{ .Values.config.enableDemoRoutes | quote }}
+  RATE_LIMIT_PER_MIN: {{ .Values.config.rateLimitPerMin | quote }}
+  ALLOWED_ORIGINS: {{ .Values.config.allowedOrigins | quote }}
+  SYNAPSE_SQLITE_DB_PATH: {{ .Values.config.sqliteDbPath | quote }}

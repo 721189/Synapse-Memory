@@ -1,7 +1,8 @@
 import time
 import logging
 import asyncio
-from typing import List, Dict, Any, Tuple, Optional, Union
+import uuid
+from typing import Dict, Any, Tuple, Optional, Union
 from synapse_memory.core.sqlite_db import SQLiteMemoryStore
 from synapse_memory.core.pgvector_db import PGVectorMemoryStore
 from synapse_memory.core.embedder import SynapseEmbedder
@@ -11,6 +12,20 @@ from synapse_memory.core.decay_engine import DecayEngine
 from synapse_memory.core.observability import log_event, instrument_operation
 
 logger = logging.getLogger("SynapseMemoryManager")
+
+
+def estimate_token_cost(content: str) -> int:
+    """Production token estimator: prefers tiktoken when installed, else safe heuristic.
+    Heuristic calibrated to ~4 chars/token (OpenAI/Gemini average for English).
+    """
+    try:
+        import tiktoken  # type: ignore
+
+        enc = tiktoken.get_encoding("cl100k_base")
+        return max(15, len(enc.encode(content)) + 8)
+    except Exception:
+        # Fallback: chars/4 + overhead. More accurate than words*1.35 for code/CJK.
+        return max(15, int(len(content) / 4) + 10)
 
 
 class MemoryManager:
@@ -79,8 +94,8 @@ class MemoryManager:
 
         # 4. Otherwise, save as a clean memory
         log_event("memory_deduplication", "CREATED", {"tenant_id": tenant_id})
-        memory_id = f"mem_{int(time.time() * 1000)}"
-        token_cost = max(15, int(len(content.split()) * 1.35) + 10)
+        memory_id = f"mem_{uuid.uuid4().hex[:16]}"
+        token_cost = estimate_token_cost(content)
 
         new_node = {
             "id": memory_id,

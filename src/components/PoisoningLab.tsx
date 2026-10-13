@@ -1,6 +1,8 @@
 import React, { useState } from 'react';
 import { ShieldCheck, AlertTriangle, Cpu, CheckCircle2, RefreshCw, Zap, Flame } from 'lucide-react';
 import { MemoryNode } from '../types';
+import { apiPostDemo, isSimulated } from '../lib/api';
+import { DemoBanner } from './DemoBanner';
 
 interface PoisoningLabProps {
   onRefresh: () => void;
@@ -9,6 +11,7 @@ interface PoisoningLabProps {
 export const PoisoningLab: React.FC<PoisoningLabProps> = ({ onRefresh }) => {
   const [statement, setStatement] = useState('I decided to rewrite the entire project in COBOL and abandon TypeScript completely.');
   const [loading, setLoading] = useState(false);
+  const [unavailable, setUnavailable] = useState(false);
   const [result, setResult] = useState<{
     conflictDetected: boolean;
     actionTaken: string;
@@ -31,13 +34,12 @@ export const PoisoningLab: React.FC<PoisoningLabProps> = ({ onRefresh }) => {
     setResult(null);
 
     try {
-      const res = await fetch('/api/simulate-poisoning', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ statement })
-      });
-      const data = await res.json();
-      if (data.success) {
+      const data = await apiPostDemo('/api/simulate-poisoning', { statement });
+      if (isSimulated(data)) {
+        setUnavailable(true);
+        return;
+      }
+      if (data) {
         setResult(data);
         onRefresh();
       }
@@ -47,6 +49,10 @@ export const PoisoningLab: React.FC<PoisoningLabProps> = ({ onRefresh }) => {
       setLoading(false);
     }
   };
+
+  if (unavailable) {
+    return <DemoBanner feature="Memory Poisoning & Belief Revision Lab" />;
+  }
 
   return (
     <div className="space-y-6">
