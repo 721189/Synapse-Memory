@@ -22,17 +22,17 @@ try:
     from langchain_core.messages import HumanMessage, AIMessage, BaseMessage
     HAS_LANGCHAIN = True
 except ImportError:
-    class BaseMemory:
+    class BaseMemory:  # type: ignore[no-redef]
         pass
 
-    class BaseMessage:
+    class BaseMessage:  # type: ignore[no-redef]
         def __init__(self, content: str):
             self.content = content
 
-    class HumanMessage(BaseMessage):
+    class HumanMessage(BaseMessage):  # type: ignore[no-redef]
         pass
 
-    class AIMessage(BaseMessage):
+    class AIMessage(BaseMessage):  # type: ignore[no-redef]
         pass
 
     HAS_LANGCHAIN = False

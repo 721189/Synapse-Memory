@@ -8,6 +8,7 @@ from synapse_memory.core.embedding_provider import (
     SentenceTransformerEmbeddingProvider
 )
 
+
 class SynapseEmbedder:
     """
     Multi-model embedding client. Provides seamless failover between Google Gemini API,

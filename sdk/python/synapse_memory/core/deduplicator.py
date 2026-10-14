@@ -96,4 +96,3 @@ class Deduplicator:
                 )
 
         return MergeResult(Action.CREATE, None, "No duplicates found", {})
-

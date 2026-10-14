@@ -7,8 +7,7 @@ import threading
 from typing import List, Dict, Any, Optional
 from pydantic import BaseModel, Field
 import uvicorn
-from fastapi import FastAPI, HTTPException, status, Security, Header, Request, Depends
-from fastapi.security import APIKeyHeader
+from fastapi import FastAPI, HTTPException, status, Header, Request, Depends
 from fastapi.middleware.cors import CORSMiddleware
 
 # Adjust path to enable absolute imports when running as standalone script
@@ -53,6 +52,7 @@ security_manager = SecurityManager(
 embedder = SynapseEmbedder()
 embedding_dimension = embedder.dimension
 
+store: Any
 if STORAGE_BACKEND == "pgvector":
     try:
         store = PGVectorMemoryStore(
@@ -269,11 +269,13 @@ class IngestRequest(BaseModel):
     confidence: float = Field(0.95, ge=0.0, le=1.0, description="Confidence alignment coefficient")
     tenant_id: Optional[str] = Field(None, alias="tenantId", description="Target tenant ID for isolation")
 
+
 class IngestResponse(BaseModel):
     id: str
     status: str
     token_cost: int
     tenant_id: str
+
 
 class QueryRequest(BaseModel):
     prompt: Optional[str] = Field(None, description="Active user prompt")
@@ -282,16 +284,19 @@ class QueryRequest(BaseModel):
     category: Optional[str] = Field(None, description="Optional category filter")
     tenant_id: Optional[str] = Field(None, alias="tenantId", description="Target tenant ID")
 
+
 class QueryResponse(BaseModel):
     fused_context: str
     injected_nodes_count: int
     injected_nodes: List[Dict[str, Any]]
     active_storage_backend: str
 
+
 class FeedbackRequest(BaseModel):
     memory_id: str
     feedback_type: str = Field(..., description="Must be either 'positive' (boost) or 'negative' (hallucination alert)")
     tenant_id: Optional[str] = Field(None, alias="tenantId")
+
 
 class CreateKeyRequest(BaseModel):
     name: str
@@ -301,6 +306,7 @@ class CreateKeyRequest(BaseModel):
     scopes: List[str] = ["memories:read", "memories:write"]
     role: str = "developer"
     ttl_days: Optional[int] = 365
+
 
 class RevokeKeyRequest(BaseModel):
     key_id: str

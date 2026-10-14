@@ -2,13 +2,12 @@ import json
 import logging
 import math
 import re
-import time
 import urllib.request
 from abc import ABC, abstractmethod
 from functools import lru_cache
 from typing import List, Optional
 
-from synapse_memory.core.observability import instrument_operation, log_event
+from synapse_memory.core.observability import instrument_operation
 
 logger = logging.getLogger("EmbeddingProvider")
 

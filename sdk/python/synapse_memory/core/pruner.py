@@ -1,10 +1,11 @@
 from abc import ABC, abstractmethod
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any
 import time
 import logging
 from synapse_memory.core.decay_engine import DecayEngine
 
 logger = logging.getLogger("Pruner")
+
 
 class PruningPolicy(ABC):
     """Abstract base class for memory pruning policies."""
@@ -13,6 +14,7 @@ class PruningPolicy(ABC):
     def identify_targets(self, memories: List[Dict[str, Any]]) -> List[str]:
         """Returns list of memory IDs to be pruned based on the policy."""
         pass
+
 
 class TTLPruningPolicy(PruningPolicy):
     """Prunes memories older than a specified duration in seconds."""
@@ -23,6 +25,7 @@ class TTLPruningPolicy(PruningPolicy):
         now = time.time()
         return [m["id"] for m in memories if now - m["created_at"] > self.ttl_seconds]
 
+
 class ConfidencePruningPolicy(PruningPolicy):
     """Prunes memories below a certain confidence threshold."""
     def __init__(self, confidence_threshold: float):
@@ -30,6 +33,7 @@ class ConfidencePruningPolicy(PruningPolicy):
 
     def identify_targets(self, memories: List[Dict[str, Any]]) -> List[str]:
         return [m["id"] for m in memories if m.get("confidence", 0.0) < self.confidence_threshold]
+
 
 class CapacityPruningPolicy(PruningPolicy):
     """Prunes lowest-relevance memories to maintain capacity."""
@@ -50,6 +54,7 @@ class CapacityPruningPolicy(PruningPolicy):
         scored.sort(key=lambda x: x[0])
         excess = len(memories) - self.max_records
         return [m_id for _, m_id in scored[:excess]]
+
 
 class PruningEngine:
     """Engine to orchestrate multiple pruning policies."""

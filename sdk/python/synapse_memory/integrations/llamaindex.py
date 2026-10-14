@@ -21,15 +21,15 @@ try:
     from llama_index.core.llms import ChatMessage, MessageRole
     HAS_LLAMAINDEX = True
 except ImportError:
-    class BaseMemory:
+    class BaseMemory:  # type: ignore[no-redef]
         pass
 
-    class MessageRole:
+    class MessageRole:  # type: ignore[no-redef]
         USER = "user"
         ASSISTANT = "assistant"
         SYSTEM = "system"
 
-    class ChatMessage:
+    class ChatMessage:  # type: ignore[no-redef]
         def __init__(self, role: str = MessageRole.USER, content: str = "", additional_kwargs: Optional[Dict[str, Any]] = None):
             self.role = role
             self.content = content

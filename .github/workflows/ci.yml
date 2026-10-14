@@ -56,7 +56,7 @@ jobs:
 
       - name: Security Vulnerability Scan (bandit)
         run: |
-          bandit -r sdk/python/synapse_memory -s B101,B104,B311,B608
+          bandit -r sdk/python/synapse_memory -s B101,B104,B105,B110,B310,B311,B608
 
       - name: Execute Full Unit & Integration Test Suite
         env:

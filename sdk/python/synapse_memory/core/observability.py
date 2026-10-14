@@ -1,11 +1,12 @@
 import logging
 import json
 import time
-from typing import Dict, Any, Optional
+from typing import Dict, Any
 from functools import wraps
 
 # Structured Logger Setup
 logger = logging.getLogger("SynapseObservability")
+
 
 def log_event(event_name: str, status: str, details: Dict[str, Any], level: int = logging.INFO):
     """Logs structured JSON events for production analysis."""
@@ -16,6 +17,7 @@ def log_event(event_name: str, status: str, details: Dict[str, Any], level: int 
         "details": details
     }
     logger.log(level, json.dumps(log_record))
+
 
 def instrument_operation(operation_name: str):
     """Decorator to instrument method execution times and failures."""
@@ -32,6 +34,7 @@ def instrument_operation(operation_name: str):
                 raise e
         return wrapper
     return decorator
+
 
 class MetricsCollector:
     """Simple in-memory metrics collector."""

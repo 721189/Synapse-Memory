@@ -3,6 +3,7 @@ from synapse_memory.core.knapsack_packer import KnapsackPacker
 from synapse_memory.core.decay_engine import DecayEngine
 from synapse_memory.core.hybrid_search import HybridSearch
 
+
 def run_production_demo():
     print("=" * 70)
     print("      SYNAPSEMEMORY: UNIVERSAL ACTIVE RAG CORE DEMO & TESTS")
@@ -105,6 +106,7 @@ def run_production_demo():
     print("\n" + "=" * 70)
     print("      DEMONSTRATION RUN COMPLETE - STATUS: PRODUCTION READY")
     print("=" * 70)
+
 
 if __name__ == "__main__":
     run_production_demo()

@@ -15,7 +15,7 @@ class MemoryNodeResult(dict):
             return self.get("id") == other
         return super().__eq__(other)
 
-    def __hash__(self) -> int:
+    def __hash__(self) -> int:  # type: ignore[override]
         return hash(self.get("id", ""))
 
 
