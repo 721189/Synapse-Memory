@@ -93,8 +93,10 @@ class PGVectorMemoryStore:
     def _connect(self) -> None:
         try:
             if pool is not None:
-                self._pool = pool.SimpleConnectionPool(
-                    1, 10, self.connection_string
+                # Thread-safe pool: FastAPI handles requests on worker threads.
+                pool_cls = getattr(pool, "ThreadedConnectionPool", None) or pool.SimpleConnectionPool
+                self._pool = pool_cls(
+                    1, 10, self.connection_string, connect_timeout=5
                 )
             self._connected = True
             self._initialize_database()
@@ -180,8 +182,24 @@ class PGVectorMemoryStore:
                 cur.execute("CREATE INDEX IF NOT EXISTS idx_memories_created ON memories(created_at DESC);")
                 cur.execute("CREATE INDEX IF NOT EXISTS idx_memories_access ON memories(last_accessed_at DESC);")
 
-                # 5b. Generated Full-Text Search (tsvector) column and GIN index for scalable PostgreSQL lexical search
+                # 5b. Combined protection: `content` holds Fernet ciphertext;
+                # `content_plain` is the searchable projection feeding the
+                # tsvector index. Threat model: volume/database encryption
+                # protects everything at rest; field encryption protects the
+                # authoritative content column. Embeddings + tsvector remain
+                # readable derivatives by design (required for HNSW + BM25).
                 try:
+                    cur.execute("""
+                        DO $$
+                        BEGIN
+                            IF NOT EXISTS (
+                                SELECT 1 FROM information_schema.columns
+                                WHERE table_name='memories' AND column_name='content_plain'
+                            ) THEN
+                                ALTER TABLE memories ADD COLUMN content_plain TEXT NOT NULL DEFAULT '';
+                            END IF;
+                        END $$;
+                    """)
                     cur.execute("""
                         DO $$
                         BEGIN
@@ -191,7 +209,7 @@ class PGVectorMemoryStore:
                             ) THEN
                                 ALTER TABLE memories
                                 ADD COLUMN search_vector tsvector
-                                GENERATED ALWAYS AS (to_tsvector('english', content)) STORED;
+                                GENERATED ALWAYS AS (to_tsvector('english', content_plain)) STORED;
                             END IF;
                         END $$;
                     """)
@@ -271,6 +289,37 @@ class PGVectorMemoryStore:
             error
         )
 
+    def _encrypt_field(self, plaintext: str) -> str:
+        try:
+            return self.encryption_provider.encrypt(plaintext)
+        except Exception as e:
+            logger.error("Field encryption failed: %s", e)
+            raise RuntimeError(f"Field encryption failed: {e}") from e
+
+    def _decrypt_field(self, ciphertext: str) -> str:
+        try:
+            return self.encryption_provider.decrypt(ciphertext)
+        except Exception as e:
+            logger.error("Field decryption failed (wrong key or corrupt payload).")
+            raise RuntimeError("Field decryption failed: wrong key or corrupt payload.") from e
+
+    def _decrypt_row(self, row: Dict[str, Any]) -> Dict[str, Any]:
+        mem = dict(row)
+        content = mem.get("content")
+        if isinstance(content, str) and content:
+            try:
+                mem["content"] = self._decrypt_field(content)
+            except Exception:
+                # Fail safe: do not return ciphertext as if it were plaintext.
+                raise
+        if isinstance(mem.get("embedding"), str):
+            try:
+                mem["embedding"] = json.loads(mem["embedding"])
+            except Exception:
+                pass
+        mem.pop("search_vector", None)
+        return mem
+
     def _get_connection(self) -> Any:
         if self._pool is not None:
             return self._pool.getconn()
@@ -310,7 +359,11 @@ class PGVectorMemoryStore:
         cur.execute("SET LOCAL app.current_tenant = %s;", (ctx,))
 
     def insert_memory(self, memory: Dict[str, Any]) -> None:
-        """Inserts memory with embedding vector into pgvector table with tenant isolation."""
+        """Inserts memory with embedding vector into pgvector table with tenant isolation.
+
+        Combined protection: `content` stores Fernet ciphertext;
+        `content_plain` stores the searchable projection for tsvector/BM25.
+        """
         tenant_id = memory.get("tenant_id") or memory.get("tenantId") or "default"
         mem_copy = memory.copy()
         mem_copy["tenant_id"] = tenant_id
@@ -325,15 +378,18 @@ class PGVectorMemoryStore:
                 self._set_tenant_context(cur, tenant_id)
                 emb = memory.get("embedding", [])
                 emb_str = f"[{','.join(str(float(x)) for x in emb)}]" if emb else None
+                plaintext = str(memory["content"])
+                ciphertext = self._encrypt_field(plaintext)
                 cur.execute("""
                     INSERT INTO memories (
-                        id, tenant_id, content, category, confidence, created_at,
+                        id, tenant_id, content, content_plain, category, confidence, created_at,
                         last_accessed_at, access_count, token_cost,
                         feedback_multiplier, embedding, embedding_dimension, model_version
-                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                     ON CONFLICT (id) DO UPDATE SET
                         tenant_id = EXCLUDED.tenant_id,
                         content = EXCLUDED.content,
+                        content_plain = EXCLUDED.content_plain,
                         category = EXCLUDED.category,
                         confidence = EXCLUDED.confidence,
                         last_accessed_at = EXCLUDED.last_accessed_at,
@@ -346,7 +402,8 @@ class PGVectorMemoryStore:
                 """, (
                     memory["id"],
                     tenant_id,
-                    memory["content"],
+                    ciphertext,
+                    plaintext,
                     memory["category"],
                     memory["confidence"],
                     memory["created_at"],
@@ -382,13 +439,7 @@ class PGVectorMemoryStore:
                     cur.execute("SELECT * FROM memories WHERE id = %s", (memory_id,))
                 row = cur.fetchone()
                 if row:
-                    mem = dict(row)
-                    if isinstance(mem.get("embedding"), str):
-                        try:
-                            mem["embedding"] = json.loads(mem["embedding"])
-                        except Exception:
-                            pass
-                    return mem
+                    return self._decrypt_row(dict(row))
                 return None
         except Exception as e:
             self._handle_db_error("get_memory", e)
@@ -414,13 +465,7 @@ class PGVectorMemoryStore:
                 rows = cur.fetchall()
                 results = []
                 for r in rows:
-                    mem = dict(r)
-                    if isinstance(mem.get("embedding"), str):
-                        try:
-                            mem["embedding"] = json.loads(mem["embedding"])
-                        except Exception:
-                            pass
-                    results.append(mem)
+                    results.append(self._decrypt_row(dict(r)))
                 return results
         except Exception as e:
             self._handle_db_error("get_memories_by_category", e)
@@ -547,7 +592,7 @@ class PGVectorMemoryStore:
                 rows = cur.fetchall()
                 results = []
                 for r in rows:
-                    mem = dict(r)
+                    mem = self._decrypt_row(dict(r))
                     mem["relevance_score"] = mem.get("cosine_similarity", 0.0)
                     results.append(mem)
                 return results
@@ -590,7 +635,7 @@ class PGVectorMemoryStore:
             with conn.cursor(cursor_factory=RealDictCursor) as cur:
                 self._set_tenant_context(cur, tenant_id)
                 conditions = ["search_vector @@ plainto_tsquery('english', %s)"]
-                params: List[Any] = [query, query]
+                params: List[Any] = [query]
                 if tenant_id:
                     conditions.append("tenant_id = %s")
                     params.append(tenant_id)
@@ -599,7 +644,6 @@ class PGVectorMemoryStore:
                     params.append(category)
 
                 where_clause = "WHERE " + " AND ".join(conditions)
-                params.append(top_k)
 
                 sql = f"""
                     SELECT id, tenant_id, content, category, confidence, created_at,
@@ -610,14 +654,15 @@ class PGVectorMemoryStore:
                     ORDER BY lexical_rank DESC
                     LIMIT %s
                 """
+                params.extend([query, top_k])
                 cur.execute(sql, tuple(params))
                 rows = cur.fetchall()
-                results = []
+                out = []
                 for r in rows:
-                    mem = dict(r)
+                    mem = self._decrypt_row(dict(r))
                     mem["relevance_score"] = float(mem.get("lexical_rank", 0.0))
-                    results.append(mem)
-                return results
+                    out.append(mem)
+                return out
         except Exception as e:
             self._handle_db_error("lexical_search", e)
             return []
@@ -688,7 +733,7 @@ class PGVectorMemoryStore:
                 ),
                 fused AS (
                     SELECT COALESCE(d.id, l.id) AS id,
-                           (1.0 / (60 + d.rank)) + (1.0 / (60 + l.rank)) AS rrf
+                           COALESCE(1.0 / (60 + d.rank), 0.0) + COALESCE(1.0 / (60 + l.rank), 0.0) AS rrf
                     FROM dense d
                     FULL OUTER JOIN lexical l ON d.id = l.id
                 )
@@ -707,7 +752,10 @@ class PGVectorMemoryStore:
                 """
                 cur.execute(sql, tuple(params))
                 rows = cur.fetchall()
-                return [dict(r) for r in rows]
+                fused_out = []
+                for r in rows:
+                    fused_out.append(self._decrypt_row(dict(r)))
+                return fused_out
         except Exception as e:
             self._handle_db_error("hybrid_search_sql", e)
             return []
@@ -748,7 +796,7 @@ class PGVectorMemoryStore:
                 else:
                     cur.execute("SELECT * FROM memories ORDER BY created_at DESC;")
                 rows = cur.fetchall()
-                return [dict(r) for r in rows]
+                return [self._decrypt_row(dict(r)) for r in rows]
         except Exception as e:
             self._handle_db_error("get_all_memories", e)
             return []
@@ -848,12 +896,16 @@ class PGVectorMemoryStore:
                     break
                 for row in rows:
                     mem_id = row[0] if isinstance(row, (tuple, list)) else row["id"]
-                    content = row[1] if isinstance(row, (tuple, list)) else row["content"]
+                    raw_content = row[1] if isinstance(row, (tuple, list)) else row["content"]
+                    try:
+                        content = self._decrypt_field(raw_content)
+                    except Exception:
+                        content = raw_content
                     new_vector = embedder.embed_query(content)
                     vec_str = f"[{','.join(str(x) for x in new_vector)}]"
                     write_cur.execute(
-                        "UPDATE memories SET embedding = %s, embedding_dimension = %s, model_version = %s WHERE id = %s;",
-                        (vec_str, len(new_vector), model_version, mem_id),
+                        "UPDATE memories SET embedding = %s, embedding_dimension = %s, model_version = %s, content_plain = %s WHERE id = %s;",
+                        (vec_str, len(new_vector), model_version, content, mem_id),
                     )
                     updated_count += 1
                 conn.commit()

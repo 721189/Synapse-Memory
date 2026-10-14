@@ -40,6 +40,29 @@ class TestDecayEngine(unittest.TestCase):
         neg_memory = self.engine.reinforce(self.memory, feedback_value=-1.0)
         self.assertLess(neg_memory["feedback_multiplier"], 1.0)
 
+    def test_combine_scores_preserves_relevance_ordering(self):
+        # P0-4: S(m,q,t) = R(m,q) * D(m,t). An old but highly relevant
+        # memory must still outrank a new but irrelevant one.
+        now = self.base_time
+        old_relevant = dict(self.memory)
+        old_relevant["last_accessed_at"] = now - 30 * 86400
+        new_irrelevant = dict(self.memory)
+        new_irrelevant["last_accessed_at"] = now
+        old_score = self.engine.combine_scores(0.95, old_relevant, now=now)
+        new_score = self.engine.combine_scores(0.05, new_irrelevant, now=now)
+        self.assertGreater(old_score, new_score)
+
+    def test_temporal_multiplier_bounded(self):
+        mult = self.engine.temporal_multiplier(self.memory, now=self.base_time)
+        self.assertGreaterEqual(mult, self.engine.decay_floor)
+        self.assertLessEqual(mult, 1.0)
+
+    def test_combine_scores_scales_monotonically(self):
+        low = self.engine.combine_scores(0.2, self.memory, now=self.base_time)
+        high = self.engine.combine_scores(0.9, self.memory, now=self.base_time)
+        self.assertLess(low, high)
+        self.assertAlmostEqual(high / 0.9, low / 0.2, places=9)
+
 
 if __name__ == '__main__':
     unittest.main()

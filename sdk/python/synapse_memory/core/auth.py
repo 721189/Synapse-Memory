@@ -79,7 +79,8 @@ class SecurityManager:
         if self.connection_string:
             if HAS_PSYCOPG2 and pool is not None:
                 try:
-                    self._pool = pool.SimpleConnectionPool(1, 10, self.connection_string)
+                    pool_cls = getattr(pool, "ThreadedConnectionPool", None) or pool.SimpleConnectionPool
+                    self._pool = pool_cls(1, 10, self.connection_string, connect_timeout=5)
                     self._is_postgres = True
                     logger.info("SecurityManager connected to centralized PostgreSQL authentication datastore.")
                 except Exception as e:

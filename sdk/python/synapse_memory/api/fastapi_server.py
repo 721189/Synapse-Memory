@@ -522,7 +522,8 @@ def query_memory(
     if not candidates:
         return envelope(QueryResponse(fused_context="", injected_nodes_count=0, injected_nodes=[], active_storage_backend=ACTIVE_BACKEND).model_dump(), request)
 
-    # 2. Dynamic temporal decay adjustment
+    # 2. Dynamic temporal decay adjustment: S(m,q,t) = R(m,q) * D(m,t).
+    # Preserve retrieval relevance; decay only re-weights priority.
     decayed_candidates = []
     for m in candidates:
         mem_node = {
@@ -532,9 +533,12 @@ def query_memory(
             "confidence": m.get("confidence", 0.5),
             "category": m.get("category", "interaction")
         }
-        current_relevance = decay.calculate_relevance(mem_node)
+        retrieval_score = float(m.get("relevance_score", 0.0))
+        combined = decay.combine_scores(retrieval_score, mem_node)
         m_copy = m.copy()
-        m_copy["relevance_score"] = current_relevance
+        m_copy["retrieval_score"] = retrieval_score
+        m_copy["decay_multiplier"] = combined / retrieval_score if retrieval_score else decay.temporal_multiplier(mem_node)
+        m_copy["relevance_score"] = combined
         decayed_candidates.append(m_copy)
 
     # 3. Dynamic programming 0/1 Knapsack optimal budget packing
