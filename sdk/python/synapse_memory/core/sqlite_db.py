@@ -46,9 +46,13 @@ class SQLiteMemoryStore:
     def __init__(
         self,
         db_path: str = "synapse_memory.db",
-        encryption_provider: Optional[Any] = None
+        encryption_provider: Optional[Any] = None,
+        fail_closed: bool = False
     ):
         self.db_path = db_path
+        # Parity with PGVectorMemoryStore: strict callers (tests, provisioning)
+        # may demand that schema bootstrap errors raise instead of warn.
+        self.fail_closed = fail_closed
         if encryption_provider is not None:
             self.encryption_provider = encryption_provider
         else:
@@ -136,6 +140,11 @@ class SQLiteMemoryStore:
             )
             conn.commit()
 
+        # Apply forward-only schema migrations (adds embedding_dimension /
+        # model_version + migration ledger). Idempotent + versioned.
+        from synapse_memory.core.migrations import run_migrations
+        run_migrations(self._get_connection, is_postgres=False, fail_closed=self.fail_closed)
+
     def insert_memory(self, memory: Dict[str, Any]) -> None:
         """Inserts a structured memory node into the SQLite table with tenant isolation."""
         content = self.encryption_provider.encrypt(memory["content"])
@@ -150,8 +159,8 @@ class SQLiteMemoryStore:
                 INSERT OR REPLACE INTO memories (
                     id, tenant_id, content, category, confidence, created_at,
                     last_accessed_at, access_count, token_cost,
-                    embedding, feedback_multiplier
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    embedding, feedback_multiplier, embedding_dimension, model_version
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (
                 memory["id"],
                 tenant_id,
@@ -163,7 +172,9 @@ class SQLiteMemoryStore:
                 memory.get("access_count", 0),
                 memory["token_cost"],
                 embedding,
-                memory.get("feedback_multiplier", 1.0)
+                memory.get("feedback_multiplier", 1.0),
+                memory.get("embedding_dimension", len(memory.get("embedding", []))),
+                memory.get("model_version", "unknown"),
             ))
             conn.commit()
 

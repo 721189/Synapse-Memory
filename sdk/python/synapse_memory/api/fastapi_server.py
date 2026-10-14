@@ -463,42 +463,58 @@ def query_memory(
     effective_tenant = resolve_tenant(principal, payload.tenant_id)
     query_vector = embedder.embed_query(query_text)
 
-    # 1. Scalable Candidate Retrieval: Dense (HNSW pgvector) + Lexical (PostgreSQL tsvector)
-    dense_candidates = store.vector_search(
-        query_vec=query_vector,
-        top_k=100,
-        category=payload.category,
-        tenant_id=effective_tenant
-    )
-    lexical_candidates = store.lexical_search(
-        query=query_text,
-        top_k=100,
-        category=payload.category,
-        tenant_id=effective_tenant
-    )
+    # 1. Candidate retrieval. On the pgvector backend, hybrid search (dense HNSW
+    #    + lexical tsvector) is fused inside a single SQL query (the scale path).
+    #    On SQLite we load the tenant corpus and fuse in Python (dev/local only).
+    candidates = []
+    if ACTIVE_BACKEND == "pgvector" and hasattr(store, "hybrid_search_sql"):
+        candidates = store.hybrid_search_sql(
+            query=query_text,
+            query_vec=query_vector,
+            top_k=25,
+            category=payload.category,
+            tenant_id=effective_tenant,
+        )
 
-    # Deduplicate candidate nodes across dense and lexical retrieval pools
-    candidate_map = {m["id"]: m for m in dense_candidates}
-    for m in lexical_candidates:
-        if m["id"] not in candidate_map:
-            candidate_map[m["id"]] = m
+    if not candidates:
+        # Fallback / SQLite path: dense + lexical pools fused in Python.
+        dense_candidates = store.vector_search(
+            query_vec=query_vector,
+            top_k=100,
+            category=payload.category,
+            tenant_id=effective_tenant
+        )
+        lexical_candidates = store.lexical_search(
+            query=query_text,
+            top_k=100,
+            category=payload.category,
+            tenant_id=effective_tenant
+        )
 
-    candidate_docs = list(candidate_map.values())
-    if not candidate_docs:
-        candidate_docs = store.get_all_memories(tenant_id=effective_tenant)
+        candidate_map = {m["id"]: m for m in dense_candidates}
+        for m in lexical_candidates:
+            if m["id"] not in candidate_map:
+                candidate_map[m["id"]] = m
 
-    if not candidate_docs:
+        candidate_docs = list(candidate_map.values())
+        if not candidate_docs:
+            candidate_docs = store.get_all_memories(tenant_id=effective_tenant)
+
+        if not candidate_docs:
+            return envelope(QueryResponse(fused_context="", injected_nodes_count=0, injected_nodes=[], active_storage_backend=ACTIVE_BACKEND).model_dump(), request)
+
+        # 2. Reciprocal Rank Fusion (RRF) in Python for the non-pgvector backends.
+        candidates = searcher.fused_search(
+            query_text,
+            candidate_docs,
+            query_vector=query_vector,
+            top_k=25,
+            category_filter=payload.category,
+            tenant_filter=effective_tenant
+        )
+
+    if not candidates:
         return envelope(QueryResponse(fused_context="", injected_nodes_count=0, injected_nodes=[], active_storage_backend=ACTIVE_BACKEND).model_dump(), request)
-
-    # 2. Reciprocal Rank Fusion (RRF)
-    candidates = searcher.fused_search(
-        query_text,
-        candidate_docs,
-        query_vector=query_vector,
-        top_k=25,
-        category_filter=payload.category,
-        tenant_filter=effective_tenant
-    )
 
     # 2. Dynamic temporal decay adjustment
     decayed_candidates = []
@@ -707,6 +723,55 @@ def get_audit_trail(
     """Retrieves authorization audit logs."""
     logs = security_manager.get_audit_logs(limit=min(limit, 200), tenant_id=principal.tenant_id if principal.tenant_id != "*" else None)
     return envelope({"audit_logs": logs}, request)
+
+
+@app.get("/api/auth/audit/export", tags=["Enterprise Security"])
+def export_audit_trail(
+    request: Request,
+    since: Optional[float] = None,
+    limit: int = 5000,
+    principal: APIKeyRecord = Depends(require_scope("admin"))
+):
+    """Compliance export of audit records (tenant-scoped, bounded, time-ordered).
+
+    Intended for archival into SIEM/object storage. Non-admins export only
+    their own tenant; admins export everything via tenant wildcard.
+    """
+    scoped_tenant = None if principal.tenant_id in ("*", "") else principal.tenant_id
+    logs = security_manager.export_audit_logs(
+        tenant_id=scoped_tenant,
+        since=since,
+        limit=min(limit, 20000),
+    )
+    return envelope({"audit_logs": logs, "exported": len(logs)}, request)
+
+
+@app.post("/api/auth/audit/prune", tags=["Enterprise Security"])
+def prune_audit_trail(
+    request: Request,
+    payload: Optional[Dict[str, Any]] = None,
+    principal: APIKeyRecord = Depends(require_scope("admin"))
+):
+    """Delete audit records older than the retention window (default 90 days).
+
+    Body: {"older_than_days": <float>}. Returns the deleted row count.
+    """
+    days = 90.0
+    if payload and payload.get("older_than_days") is not None:
+        try:
+            days = float(payload["older_than_days"])
+        except (TypeError, ValueError):
+            raise HTTPException(status_code=400, detail="older_than_days must be a number.")
+    deleted = security_manager.prune_audit_logs(older_than_seconds=max(0.0, days) * 86400)
+    security_manager.log_audit_action(
+        actor_key_id=principal.key_id,
+        tenant_id=principal.tenant_id,
+        action="AUDIT_RETENTION_PRUNE",
+        resource="auth_audit_logs",
+        status="SUCCESS",
+        metadata={"deleted_count": deleted, "older_than_days": days},
+    )
+    return envelope({"deleted": deleted, "older_than_days": days}, request)
 
 
 class RotateKeyRequest(BaseModel):

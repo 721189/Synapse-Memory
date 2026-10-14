@@ -106,7 +106,12 @@ class MemoryManager:
             "created_at": time.time(),
             "access_count": 0,
             "token_cost": token_cost,
-            "embedding": new_vector
+            "embedding": new_vector,
+            # Embedding provenance: stamps which dimension + model wrote this row,
+            # so schema/drift checks can detect stale index entries after an
+            # embedding-model upgrade (and trigger a re-embed pass).
+            "embedding_dimension": len(new_vector),
+            "model_version": getattr(self.embedder, "model_name", "unknown"),
         }
 
         self.store.insert_memory(new_node)

@@ -104,6 +104,74 @@ class TestPGVectorIntegration(unittest.TestCase):
         finally:
             self.store._return_connection(conn)
 
+    def test_rls_enforced_at_sql_level_bypassing_app(self):
+        """Proves RLS blocks cross-tenant reads even when the app layer is bypassed.
+
+        Inserts one row per tenant with a raw superuser-ish connection, then runs
+        plain SELECTs under each tenant's GUC context and asserts hard isolation.
+        """
+        tenants = {"tenant_rls_a": "RLS secret for tenant A", "tenant_rls_b": "RLS secret for tenant B"}
+        for tid, text in tenants.items():
+            self.store.insert_memory({
+                "id": f"rls_{tid}",
+                "content": text,
+                "category": "personal",
+                "confidence": 0.99,
+                "created_at": time.time(),
+                "embedding": [0.2] * 384,
+                "tenant_id": tid,
+            })
+
+        conn = self.store._get_connection()
+        try:
+            with conn.cursor() as cur:
+                # Tenant A context sees only its own row.
+                cur.execute("SET LOCAL app.current_tenant = 'tenant_rls_a';")
+                cur.execute("SELECT id FROM memories;")
+                a_rows = [r[0] if isinstance(r, (tuple, list)) else r["id"] for r in cur.fetchall()]
+                self.assertEqual(a_rows, ["rls_tenant_rls_a"])
+
+                # Tenant B context sees only its own row.
+                cur.execute("SET LOCAL app.current_tenant = 'tenant_rls_b';")
+                cur.execute("SELECT id FROM memories;")
+                b_rows = [r[0] if isinstance(r, (tuple, list)) else r["id"] for r in cur.fetchall()]
+                self.assertEqual(b_rows, ["rls_tenant_rls_b"])
+
+                # Empty context sees nothing at all.
+                cur.execute("SET LOCAL app.current_tenant = '';")
+                cur.execute("SELECT id FROM memories;")
+                self.assertEqual(cur.fetchall(), [])
+            conn.rollback()
+        finally:
+            self.store._return_connection(conn)
+
+    def test_rls_blocks_cross_tenant_vector_and_hybrid_search(self):
+        """Vector + hybrid SQL search must never leak across tenants (HNSW path)."""
+        for tid, mark in (("tenant_hyb_a", 1.0), ("tenant_hyb_b", -1.0)):
+            self.store.insert_memory({
+                "id": f"hyb_{tid}",
+                "content": f"hybrid retrieval marker for {tid}",
+                "category": "fact",
+                "confidence": 0.95,
+                "created_at": time.time(),
+                "embedding": [mark] * 384,
+                "tenant_id": tid,
+            })
+
+        a_hits = self.store.vector_search(query_vec=[1.0] * 384, top_k=10, tenant_id="tenant_hyb_a")
+        self.assertEqual([m["id"] for m in a_hits], ["hyb_tenant_hyb_a"])
+
+        a_hyb = self.store.hybrid_search_sql(
+            query="hybrid retrieval marker",
+            query_vec=[1.0] * 384,
+            top_k=10,
+            tenant_id="tenant_hyb_a",
+        )
+        self.assertEqual([m["id"] for m in a_hyb], ["hyb_tenant_hyb_a"])
+
+        b_hits = self.store.vector_search(query_vec=[-1.0] * 384, top_k=10, tenant_id="tenant_hyb_b")
+        self.assertEqual([m["id"] for m in b_hits], ["hyb_tenant_hyb_b"])
+
     def test_hnsw_large_dataset_and_nearest_neighbors(self):
         # Insert 1000+ vectors
         num_records = 1005

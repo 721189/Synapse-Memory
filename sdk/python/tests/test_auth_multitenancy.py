@@ -87,6 +87,40 @@ class TestAuthAndMultiTenancy(unittest.TestCase):
         gamma_mems = self.store.get_all_memories(tenant_id="tenant_gamma")
         self.assertEqual(len(gamma_mems), 0)
 
+    def test_key_rotation_revokes_old_and_issues_same_scope(self):
+        """Zero-downtime rotation: new key works, old key is revoked."""
+        old_token, old_rec = self.auth.generate_api_key(
+            name="rotation-key",
+            organization_id="org_alpha",
+            project_id="proj_1",
+            tenant_id="tenant_alpha",
+            scopes=["memories:read", "memories:write"],
+            role="developer"
+        )
+        valid_before, _, _ = self.auth.validate_api_key(token=old_token, requested_tenant_id="tenant_alpha")
+        self.assertTrue(valid_before)
+
+        new_token, new_rec = self.auth.generate_api_key(
+            name=old_rec.name,
+            organization_id=old_rec.organization_id,
+            project_id=old_rec.project_id,
+            tenant_id=old_rec.tenant_id,
+            scopes=old_rec.scopes,
+            role=old_rec.role,
+        )
+        self.assertTrue(self.auth.revoke_api_key(old_rec.key_id))
+
+        valid_old, _, reason_old = self.auth.validate_api_key(token=old_token, requested_tenant_id="tenant_alpha")
+        self.assertFalse(valid_old)
+        self.assertIn("revoked", reason_old.lower())
+
+        valid_new, new_validated, _ = self.auth.validate_api_key(
+            token=new_token, required_scope="memories:write", requested_tenant_id="tenant_alpha"
+        )
+        self.assertTrue(valid_new)
+        self.assertEqual(new_validated.organization_id, "org_alpha")
+        self.assertEqual(new_validated.project_id, "proj_1")
+
     def test_security_manager_fail_closed_on_postgres_unavailable(self):
         with self.assertRaises(RuntimeError):
             SecurityManager(

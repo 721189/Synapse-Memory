@@ -10,8 +10,8 @@ import os
 import secrets
 import sqlite3
 import time
-from dataclasses import dataclass, asdict
-from typing import Any, Dict, List, Optional, Set, Tuple
+from dataclasses import dataclass
+from typing import Any, Dict, List, Optional, Tuple
 
 logger = logging.getLogger("SynapseSecurity")
 
@@ -442,6 +442,31 @@ class SecurityManager:
         finally:
             self._return_connection(conn)
 
+    def check_hierarchy(
+        self,
+        record: APIKeyRecord,
+        requested_org: Optional[str] = None,
+        requested_project: Optional[str] = None,
+        requested_tenant: Optional[str] = None,
+    ) -> Tuple[bool, str]:
+        """Enforce org → project → tenant ownership on a request context.
+
+        A key is bound to one (organization_id, project_id, tenant_id) triple.
+        An empty/None requested value inherits the key's own binding; a concrete
+        requested value must equal the binding (admins with tenant "*" bypass
+        the tenant leg only). Returns (allowed, reason).
+        """
+        if requested_org and record.organization_id not in ("*", "", "org_system"):
+            if requested_org != record.organization_id:
+                return False, f"Organization boundary violation. Key bound to: {record.organization_id}"
+        if requested_project and record.project_id not in ("*", ""):
+            if requested_project != record.project_id:
+                return False, f"Project boundary violation. Key bound to: {record.project_id}"
+        if requested_tenant and record.tenant_id not in ("*", ""):
+            if requested_tenant != record.tenant_id:
+                return False, f"Tenant boundary violation. Key bound to: {record.tenant_id}"
+        return True, "Hierarchy check passed"
+
     def list_api_keys(self, organization_id: Optional[str] = None) -> List[Dict[str, Any]]:
         conn = self._get_connection()
         try:
@@ -492,6 +517,34 @@ class SecurityManager:
         except Exception as e:
             logger.warning(f"Failed to record auth audit log: {e}")
 
+    def log_audit_action(
+        self,
+        actor_key_id: Optional[str],
+        tenant_id: Optional[str],
+        action: str,
+        resource: str = "memories",
+        status: str = "SUCCESS",
+        metadata: Optional[Dict[str, Any]] = None,
+        route: str = "/",
+        client_ip: Optional[str] = None,
+    ) -> None:
+        """Public action-level audit writer for gateway data-plane events.
+
+        Wraps the internal _log_audit record with resource/status context so
+        destructive operations (bulk clears, GDPR deletes, retention prunes)
+        leave a queryable compliance trail. Never raises — audit must not
+        break the data path it observes.
+        """
+        outcome = f"{action}:{status}" if resource == "memories" else f"{action}:{status}:{resource}"
+        try:
+            self._log_audit(
+                actor_key_id, tenant_id, route, action, outcome, client_ip,
+            )
+            if metadata:
+                logger.info("audit action=%s actor=%s tenant=%s meta=%s", action, actor_key_id, tenant_id, metadata)
+        except Exception as e:
+            logger.warning(f"Failed to record audit action {action}: {e}")
+
     def get_audit_logs(self, limit: int = 100, tenant_id: Optional[str] = None) -> List[Dict[str, Any]]:
         conn = self._get_connection()
         try:
@@ -509,5 +562,58 @@ class SecurityManager:
                 sql = self._format_sql("SELECT * FROM auth_audit_logs ORDER BY timestamp DESC LIMIT ?")
                 cur.execute(sql, (limit,))
             return [dict(r) for r in cur.fetchall()]
+        finally:
+            self._return_connection(conn)
+
+    def export_audit_logs(
+        self,
+        tenant_id: Optional[str] = None,
+        since: Optional[float] = None,
+        limit: int = 10000,
+    ) -> List[Dict[str, Any]]:
+        """Compliance export of auth audit records for retention/archival.
+
+        Bounded to `limit` rows so an export can never OOM the engine on a
+        years-old tenant. Callers stream/export in pages keyed on the rows'
+        `timestamp` values.
+        """
+        conn = self._get_connection()
+        try:
+            if self._is_postgres and RealDictCursor is not None:
+                cur = conn.cursor(cursor_factory=RealDictCursor)
+            else:
+                cur = conn.cursor()
+
+            clauses: List[str] = []
+            params: List[Any] = []
+            if tenant_id:
+                clauses.append("tenant_id = ?")
+                params.append(tenant_id)
+            if since is not None:
+                clauses.append("timestamp >= ?")
+                params.append(since)
+            where = ("WHERE " + " AND ".join(clauses)) if clauses else ""
+            sql = self._format_sql(f"SELECT * FROM auth_audit_logs {where} ORDER BY timestamp ASC LIMIT ?")
+            params.append(min(limit, 50000))
+            cur.execute(sql, tuple(params))
+            return [dict(r) for r in cur.fetchall()]
+        finally:
+            self._return_connection(conn)
+
+    def prune_audit_logs(self, older_than_seconds: float = 90 * 86400) -> int:
+        """Delete audit records older than the retention window.
+
+        Default 90 days. Returns the deleted row count so the gateway can
+        confirm and log the retention pass. Always logged as an audit event.
+        """
+        cutoff = time.time() - max(0.0, float(older_than_seconds))
+        conn = self._get_connection()
+        try:
+            cur = conn.cursor()
+            sql = self._format_sql("DELETE FROM auth_audit_logs WHERE timestamp < ?")
+            cur.execute(sql, (cutoff,))
+            deleted = cur.rowcount if cur.rowcount is not None else 0
+            conn.commit()
+            return int(deleted)
         finally:
             self._return_connection(conn)
