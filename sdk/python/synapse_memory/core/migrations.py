@@ -97,6 +97,12 @@ def run_migrations(get_connection: Callable[[], Any], is_postgres: bool, fail_cl
     """Apply all pending forward migrations. Returns count applied. Idempotent."""
     applied_total = 0
     conn = get_connection()
+    # True only when the factory hands us a fresh (non-pooled) connection that
+    # we own. PGVectorMemoryStore passes a bound method returning pooled
+    # connections — closing those would destroy pool slots.
+    owns_connection = not (
+        hasattr(get_connection, "__self__") and hasattr(get_connection.__self__, "_pool")
+    )
     try:
         cur = conn.cursor()
         # The ledger (v2) must exist before we can read it; bootstrap directly.
@@ -128,7 +134,25 @@ def run_migrations(get_connection: Callable[[], Any], is_postgres: bool, fail_cl
                 logger.warning("Migration v%d (%s) skipped: %s", migration.version, migration.name, e)
     finally:
         try:
-            conn.close()
+            if owns_connection:
+                conn.close()
+            else:
+                # Return pooled connections to the pool instead of closing.
+                try:
+                    conn.rollback()
+                except Exception:
+                    pass
+                try:
+                    owner = getattr(get_connection, "__self__", None)
+                    if owner is not None:
+                        owner._return_connection(conn)
+                    else:
+                        conn.close()
+                except Exception:
+                    try:
+                        conn.close()
+                    except Exception:
+                        pass
         except Exception:
             pass
     return applied_total

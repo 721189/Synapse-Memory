@@ -215,9 +215,25 @@ class PGVectorMemoryStore:
                             FOR ALL
                             USING (
                                 tenant_id = NULLIF(current_setting('app.current_tenant', true), '')
+                                -- Admin/unscoped connections bypass RLS via sentinel GUC value.
+                                OR current_setting('app.current_tenant', true) = '__synapse_admin__'
                             )
                             WITH CHECK (
                                 tenant_id = NULLIF(current_setting('app.current_tenant', true), '')
+                                OR current_setting('app.current_tenant', true) = '__synapse_admin__'
+                            );
+                        ELSE
+                            -- Migrate legacy policy (no admin bypass) to the current version.
+                            DROP POLICY IF EXISTS tenant_isolation_policy ON memories;
+                            CREATE POLICY tenant_isolation_policy ON memories
+                            FOR ALL
+                            USING (
+                                tenant_id = NULLIF(current_setting('app.current_tenant', true), '')
+                                OR current_setting('app.current_tenant', true) = '__synapse_admin__'
+                            )
+                            WITH CHECK (
+                                tenant_id = NULLIF(current_setting('app.current_tenant', true), '')
+                                OR current_setting('app.current_tenant', true) = '__synapse_admin__'
                             );
                         END IF;
                     END $$;
@@ -264,7 +280,19 @@ class PGVectorMemoryStore:
 
     def _return_connection(self, conn: Any) -> None:
         if self._pool is not None:
-            self._pool.putconn(conn)
+            try:
+                # Roll back any open transaction so SET LOCAL tenant context
+                # and failed statements never leak into the next checkout.
+                conn.rollback()
+            except Exception:
+                pass
+            try:
+                self._pool.putconn(conn)
+            except Exception:
+                try:
+                    conn.close()
+                except Exception:
+                    pass
         else:
             try:
                 conn.close()
@@ -272,7 +300,13 @@ class PGVectorMemoryStore:
                 pass
 
     def _set_tenant_context(self, cur: Any, tenant_id: Optional[str]) -> None:
-        ctx = tenant_id if tenant_id and tenant_id != "*" else ""
+        # None / "*" means admin (unscoped) access: bypass RLS via a sentinel
+        # GUC value that the RLS policy explicitly allows. Empty string means
+        # "no tenant" and must see zero rows (fail-closed isolation).
+        if tenant_id is None or tenant_id == "*":
+            ctx = "__synapse_admin__"
+        else:
+            ctx = tenant_id
         cur.execute("SET LOCAL app.current_tenant = %s;", (ctx,))
 
     def insert_memory(self, memory: Dict[str, Any]) -> None:
@@ -618,12 +652,19 @@ class PGVectorMemoryStore:
         try:
             with conn.cursor(cursor_factory=RealDictCursor) as cur:
                 self._set_tenant_context(cur, tenant_id)
-                params: List[Any] = [query, emb_str, emb_str, query, emb_str, emb_str, query]
+                # NOTE: placeholders are positional — build params in exact SQL
+                # text order: dense rank (emb), dense cat?, dense order (emb),
+                # dense limit, lexical rank (q), lexical where (q), lexical
+                # cat?, lexical order (q), lexical limit, final limit.
+                params: List[Any] = [emb_str]
                 cat_clause = ""
                 if category:
                     cat_clause = "AND category = %s"
                     params.append(category)
-                params.extend([candidate_pool, candidate_pool, top_k])
+                params.extend([emb_str, candidate_pool, query, query])
+                if category:
+                    params.append(category)
+                params.extend([query, candidate_pool, top_k])
 
                 sql = f"""
                 WITH dense AS (
@@ -782,6 +823,17 @@ class PGVectorMemoryStore:
         conn = self._get_connection()
         updated_count = 0
         try:
+            # Admin (unscoped) context so RLS does not hide rows from this
+            # maintenance scan. Uses a regular cursor first because SET LOCAL
+            # must run before the named cursor opens its transaction.
+            setup_cur = conn.cursor()
+            try:
+                self._set_tenant_context(setup_cur, None)
+            finally:
+                try:
+                    setup_cur.close()
+                except Exception:
+                    pass
             # Named cursor streams results server-side instead of fetchall().
             cursor_name = f"reembed_{secrets_token_hex(6)}"
             read_cur = conn.cursor(name=cursor_name)

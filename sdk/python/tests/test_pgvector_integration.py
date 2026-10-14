@@ -20,7 +20,7 @@ class TestPGVectorIntegration(unittest.TestCase):
         cls.db_url = os.environ.get("DATABASE_URL")
         if not cls.db_url or not cls.db_url.startswith("postgres"):
             raise unittest.SkipTest("DATABASE_URL environment variable is not configured for PostgreSQL; skipping integration tests.")
-        
+
         # Ensure the vector extension is active
         try:
             conn = psycopg2.connect(cls.db_url)
@@ -239,3 +239,122 @@ class TestPGVectorIntegration(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestHybridSearchSQLPlaceholderOrder(unittest.TestCase):
+    """Regression test for hybrid_search_sql positional placeholder order.
+
+    The SQL text has different placeholder counts depending on whether a
+    category filter is present, and psycopg2 binds %s positionally. If the
+    params list drifts out of order, Postgres raises a type error (e.g. a
+    category string bound to a ::vector slot) — or worse, silently fuses the
+    wrong channels. This runs against a mock cursor so it executes in the
+    plain unit-test CI job without a live database.
+    """
+
+    def _make_store_with_mock(self, captured: Dict[str, Any]) -> Any:
+        store = PGVectorMemoryStore.__new__(PGVectorMemoryStore)
+        store._connected = True
+        store._pool = None
+        store._fallback_cache = {}
+
+        def fake_set_tenant_context(cur: Any, tenant_id: Any) -> None:
+            captured["tenant_id"] = tenant_id
+
+        store._set_tenant_context = fake_set_tenant_context  # type: ignore[method-assign]
+
+        class FakeCursor:
+            def __init__(self) -> None:
+                self.sql = ""
+                self.params: Any = ()
+
+            def execute(self, sql: str, params: Any = ()) -> None:
+                self.sql = sql
+                self.params = params
+
+            def fetchall(self) -> List[Any]:
+                return []
+
+            def __enter__(self) -> "FakeCursor":
+                return self
+
+            def __exit__(self, *args: Any) -> bool:
+                return False
+
+        fake_cur = FakeCursor()
+        captured["cursor"] = fake_cur
+
+        class FakeConn:
+            def cursor(self, cursor_factory: Any = None) -> FakeCursor:
+                return fake_cur
+
+        fake_conn = FakeConn()
+        store._get_connection = lambda: fake_conn  # type: ignore[method-assign]
+        store._return_connection = lambda conn: None  # type: ignore[method-assign]
+        store._handle_db_error = lambda op, e: (_ for _ in ()).throw(  # type: ignore[method-assign]
+            AssertionError(f"hybrid_search_sql unexpectedly failed ({op}): {e}")
+        )
+        store._mock_cursor = fake_cur  # type: ignore[attr-defined]
+        return store
+
+    def _expected_param_types(self, with_category: bool) -> List[str]:
+        # Mirror of the CTE placeholder layout in hybrid_search_sql.
+        types = ["emb"]  # dense rank
+        if with_category:
+            types.append("cat")  # dense filter
+        types += ["emb", "limit"]  # dense order + limit
+        types += ["query", "query"]  # lexical rank + where
+        if with_category:
+            types.append("cat")  # lexical filter
+        types += ["query", "limit", "limit"]  # lexical order + limits
+        return types
+
+    def _check_binding(self, captured: Dict[str, Any], with_category: bool) -> None:
+        cur = captured["cursor"]
+        sql, params = cur.sql, list(cur.params)
+        expected = self._expected_param_types(with_category)
+        actual_placeholders = sql.count("%s")
+        self.assertEqual(
+            actual_placeholders, len(params),
+            f"SQL has {actual_placeholders} placeholders but {len(params)} params",
+        )
+        self.assertEqual(
+            len(params), len(expected),
+            f"expected {len(expected)} params ({expected}), got {len(params)}",
+        )
+        for value, kind in zip(params, expected):
+            if kind == "emb":
+                self.assertIsInstance(value, str)
+                self.assertTrue(
+                    value.startswith("[") and value.endswith("]"),
+                    f"embedding slot got non-vector value: {value!r}",
+                )
+            elif kind == "query":
+                self.assertEqual(value, "hybrid retrieval marker")
+            elif kind == "cat":
+                self.assertEqual(value, "fact")
+            elif kind == "limit":
+                self.assertIsInstance(value, int)
+
+    def test_placeholder_order_without_category(self) -> None:
+        captured: Dict[str, Any] = {}
+        store = self._make_store_with_mock(captured)
+        store.hybrid_search_sql(
+            query="hybrid retrieval marker",
+            query_vec=[1.0] * 4,
+            top_k=10,
+            tenant_id="tenant_hyb_a",
+        )
+        self._check_binding(captured, with_category=False)
+
+    def test_placeholder_order_with_category(self) -> None:
+        captured: Dict[str, Any] = {}
+        store = self._make_store_with_mock(captured)
+        store.hybrid_search_sql(
+            query="hybrid retrieval marker",
+            query_vec=[1.0] * 4,
+            top_k=10,
+            category="fact",
+            tenant_id="tenant_hyb_a",
+        )
+        self._check_binding(captured, with_category=True)
