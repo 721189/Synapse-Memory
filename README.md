@@ -1,47 +1,55 @@
 # Synapse Memory
 
-> A sovereign, token-aware cognitive memory substrate for AI agents — DB-level multi-tenancy, Fernet encryption, 0/1 Knapsack DP context budgeting, hybrid retrieval, and Ebbinghaus temporal decay.
+A persistent memory layer for LLM applications. Solves the stateless-LLM problem: models have no memory across sessions. Synapse provides encrypted, multi-tenant, token-budgeted storage with hybrid retrieval (BM25 + pgvector HNSW + RRF) and optimal context packing (0/1 Knapsack DP).
 
-[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![CI](https://github.com/721189/Synapse-Memory/actions/workflows/ci.yml/badge.svg)](https://github.com/721189/Synapse-Memory/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Python](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://www.python.org/)
 [![Node](https://img.shields.io/badge/node-20.19%2B-green.svg)](https://nodejs.org/)
 [![pgvector](https://img.shields.io/badge/pgvector-HNSW-336791.svg)](https://github.com/pgvector/pgvector)
 
 ---
 
-## What Is This?
+## Problem
 
-Every LLM conversation is stateless — the model forgets everything when the chat ends. **Synapse-Memory is the persistent, encrypted, multi-tenant memory layer** that sits between your application and your LLM so the AI remembers facts, preferences, constraints, and project context across every session.
+LLM APIs are stateless. Each `POST /v1/chat/completions` call is independent — no memory of prior interactions. Applications need a persistent store that:
 
-Think of it as `localStorage` for AI agents — except it's encrypted at the field level, multi-tenant at the database level, and uses optimal algorithms to pack only the most relevant facts into the LLM's finite context window.
+1. **Retrieves relevant context** efficiently at scale (not brute-force scan)
+2. **Packs context optimally** into finite token windows (not naive truncation)
+3. **Manages memory lifecycle** — decays stale facts, merges duplicates
+4. **Isolates tenants** at the database level (not just API-level filtering)
+5. **Encrypts at rest** (not just TLS in transit)
 
-### Where It Sits
+Synapse-Memory addresses all five.
+
+---
+
+## Architecture
 
 ```mermaid
 graph TB
-    subgraph App["Your Application"]
-        AGENT["AI Agent / Chatbot / RAG Pipeline"]
+    subgraph App["Application"]
+        AGENT["Agent / RAG Pipeline"]
     end
 
-    subgraph SM["Synapse-Memory"]
+    subgraph SM["Synapse Memory"]
         direction TB
-        RET["Hybrid Retrieval<br/>(BM25 + pgvector HNSW + RRF)"]
-        BUD["Knapsack Budget<br/>(0/1 DP Optimizer)"]
-        DEC["Decay + Feedback<br/>(Ebbinghaus + RLAIF)"]
-        DED["Dedup + Prune<br/>(Jaccard + Cosine)"]
-        subgraph STORE["Encrypted Storage"]
+        RET["HybridSearch<br/>BM25 + HNSW + RRF k=60"]
+        BUD["KnapsackPacker<br/>0/1 DP, O(n·budget)"]
+        DEC["DecayEngine<br/>Ebbinghaus + RLAIF"]
+        DED["Deduplicator<br/>Jaccard + Cosine ≥0.85"]
+        subgraph Store["Encrypted Storage"]
             SG["SQLite (dev)"]
             PG["pgvector HNSW (prod)"]
         end
         RET --> BUD --> DEC
-        DED --> STORE
+        DED --> Store
     end
 
-    subgraph LLM["LLM Provider"]
-        OPENAI["OpenAI"]
-        CLAUDE["Anthropic Claude"]
-        GEMINI["Google Gemini"]
+    subgraph LLM["LLM"]
+        O["OpenAI"]
+        C["Anthropic"]
+        G["Google"]
     end
 
     AGENT -->|"POST /query"| SM
@@ -50,46 +58,30 @@ graph TB
     SG -.->|fallback| PG
 
     style SM fill:#1e1b4b,stroke:#6366f1,color:#fff
-    style STORE fill:#312e81,stroke:#818cf8,color:#fff
+    style Store fill:#312e81,stroke:#818cf8,color:#fff
 ```
 
----
-
-## Architecture
+### Ingestion Pipeline
 
 ```mermaid
-graph LR
-    subgraph Input["Ingestion"]
-        TXT["Text"]
-        DOC["Documents"]
-        API["REST / SDK"]
-    end
+sequenceDiagram
+    participant App
+    participant API as Synapse API
+    participant DB as Encrypted Store
 
-    subgraph Pipeline["Cognitive Pipeline"]
-        direction TB
-        EMB["Embed<br/>(MiniLM 384-d)"]
-        ENC["Encrypt<br/>(Fernet AES-128)"]
-        DEDUP["Dedup<br/>(Jaccard + Cosine)"]
-        STORE["Store<br/>(pgvector / SQLite)"]
-        EMB --> ENC --> DEDUP --> STORE
+    App->>API: POST /api/memories/add {content, category}
+    API->>API: Embed (384-d MiniLM or provider-specific)
+    API->>API: Encrypt (Fernet AES-128-CBC + HMAC-SHA256)
+    API->>API: Dedup (Jaccard token overlap + cosine ≥ 0.85)
+    alt Duplicate found
+        API->>API: MERGE (update confidence, supersede)
+    else New
+        API->>DB: INSERT (encrypted content + vector)
     end
+    API-->>App: {id, status, token_cost}
+```
 
-    subgraph Query["Retrieval Pipeline"]
-        direction TB
-        QEMB["Query Embed"]
-        BM25["BM25 Lexical"]
-        VEC["Vector HNSW"]
-        RRF["RRF Fusion (k=60)"]
-        DECAY["Temporal Decay"]
-        KNAP["Knapsack DP"]
-        QEMB --> BM25 --> RRF
-        QEMB --> VEC --> RRF
-        RRF --> DECAY --> KNAP
-    end
-
-    Input --> Pipeline
-    STORE --> Query
-    KNAP -->|"packed context"| LLM["LLM Context Window"]
+### Retrieval Pipeline
 
 ---
 
@@ -98,18 +90,18 @@ graph LR
 ```bash
 git clone https://github.com/721189/Synapse-Memory.git && cd Synapse-Memory
 cp deploy/.env.example .env
-# Edit .env: SYNAPSE_API_KEY, SYNAPSE_ENCRYPTION_KEY, POSTGRES_PASSWORD
+# Set SYNAPSE_API_KEY, SYNAPSE_ENCRYPTION_KEY, POSTGRES_PASSWORD in .env
 docker compose -f deploy/docker-compose.yml up -d
 ```
 
 ```bash
-# Ingest a memory
+# Ingest
 curl -X POST http://localhost:8008/api/memories/add \
   -H "X-Synapse-API-Key: $SYNAPSE_API_KEY" \
   -H "Content-Type: application/json" \
-  -d '{"content": "User prefers TypeScript", "category": "preference"}'
+  -d '{"content": "User prefers TypeScript for backend", "category": "preference"}'
 
-# Query with hybrid search + knapsack budget packing
+# Retrieve with budget packing
 curl -X POST http://localhost:8008/query \
   -H "X-Synapse-API-Key: $SYNAPSE_API_KEY" \
   -H "Content-Type: application/json" \
@@ -121,42 +113,45 @@ curl -X POST http://localhost:8008/query \
 ## Installation
 
 ```bash
-pip install -e ".[local-models]"    # 384-d MiniLM embeddings
-pip install -e ".[pgvector]"        # PostgreSQL + pgvector
-pip install -e ".[langchain]"       # LangChain integration
-pip install -e ".[llamaindex]"      # LlamaIndex integration
+pip install -e ".[pgvector]"        # Production (PostgreSQL + pgvector)
+pip install -e ".[local-models]"    # Local embeddings (384-d MiniLM)
+pip install -e ".[langchain]"       # LangChain BaseMemory
+pip install -e ".[llamaindex]"      # LlamaIndex BaseMemory
+pip install -e ".[all]"             # Everything
 ```
+
+Core dependencies: `fastapi`, `pydantic`, `uvicorn`, `cryptography`, `numpy`. Optional: `psycopg2-binary`, `pgvector`, `sentence-transformers`, `langchain-core`, `llama-index-core`.
 
 ---
 
-## API Reference
+## API
 
-All responses use the canonical envelope: `{ success, data, request_id }`.
+All responses: `{ success: bool, data: <payload>, request_id: string }`.
 
-### Memory Operations
+### Memory
 
 | Method | Path | Scope | Description |
 |--------|------|-------|-------------|
-| POST | `/api/memories/add` | `memories:write` | Ingest (auto-dedup + prune) |
-| POST | `/api/memories/query` | `memories:read` | Hybrid search + decay + Knapsack |
-| GET | `/api/memories` | `memories:read` | List (`?category=&tenant_id=`) |
-| DELETE | `/api/memories/{id}` | `memories:delete` | Delete one |
-| POST | `/api/memories/clear` | `memories:delete` | Clear all |
-| POST | `/api/memories/bulk-ingest` | `memories:write` | Bulk (≤100) |
-| POST | `/feedback` | `memories:write` | RLAIF boost/demote |
+| `POST` | `/api/memories/add` | `memories:write` | Ingest (dedup + prune) |
+| `POST` | `/api/memories/query` | `memories:read` | Hybrid search + decay + Knapsack |
+| `GET` | `/api/memories` | `memories:read` | List (`?category=&tenant_id=`) |
+| `DELETE` | `/api/memories/{id}` | `memories:delete` | Delete one |
+| `POST` | `/api/memories/clear` | `memories:delete` | Clear all |
+| `POST` | `/api/memories/bulk-ingest` | `memories:write` | Bulk (≤ 100) |
+| `POST` | `/feedback` | `memories:write` | RLAIF boost/demote |
 
 ### Security & Observability
 
 | Method | Path | Scope | Description |
 |--------|------|-------|-------------|
-| POST | `/api/auth/keys` | `admin` | Generate key (SHA-256 hashed) |
-| GET | `/api/auth/keys` | `admin` | List keys |
-| POST | `/api/auth/keys/revoke` | `admin` | Revoke |
-| POST | `/api/auth/keys/rotate` | `admin` | Rotate |
-| GET | `/api/auth/audit` | `admin` | Audit export |
-| POST | `/api/security/scrub-pii` | `memories:read` | Scrub PII |
-| POST | `/api/security/gdpr-delete` | `memories:delete` | GDPR delete |
-| GET | `/healthz` `/readyz` `/metrics` | none | Probes + Prometheus |
+| `POST` | `/api/auth/keys` | `admin` | Generate key (SHA-256 hashed) |
+| `GET` | `/api/auth/keys` | `admin` | List keys |
+| `POST` | `/api/auth/keys/revoke` | `admin` | Revoke |
+| `POST` | `/api/auth/keys/rotate` | `admin` | Rotate |
+| `GET` | `/api/auth/audit` | `admin` | Audit export |
+| `POST` | `/api/security/scrub-pii` | `memories:read` | PII scrubbing |
+| `POST` | `/api/security/gdpr-delete` | `memories:delete` | GDPR deletion |
+| `GET` | `/healthz` `/readyz` `/metrics` | — | Probes + Prometheus |
 
 ---
 
@@ -178,55 +173,38 @@ All responses use the canonical envelope: `{ success, data, request_id }`.
 
 ## Deployment
 
-### Docker Compose
-
 ```bash
 docker compose -f deploy/docker-compose.yml up -d
-```
-
-### Kubernetes (Helm)
-
-```bash
-helm install synapse deploy/helm-chart \
-  --set config.nodeEnv=production \
-  --set secrets.existingSecret=synapse-secrets
+helm install synapse deploy/helm-chart --set config.nodeEnv=production
 ```
 
 ---
 
 ## Framework Integrations
 
-### LangChain
-
 ```python
+# LangChain
 from synapse_memory.integrations.langchain import SynapseMemory
-memory = SynapseMemory(
-    tenant_id="acme",
-    memory_manager=manager, searcher=searcher,
-    decay=decay, packer=packer, embedder=embedder
-)
+memory = SynapseMemory(tenant_id="acme", memory_manager=manager, searcher=searcher, decay=decay, packer=packer, embedder=embedder)
 memory.save_context(inputs={"input": "Capital of France?"}, outputs={"output": "Paris"})
-```
 
-### LlamaIndex
-
-```python
+# LlamaIndex
 from synapse_memory.integrations.llamaindex import SynapseMemory
 ```
 
 ---
 
-## Security
+## Security Model
 
-- **Authentication**: SHA-256 hashed API keys + scope RBAC (`memories:read/write/delete`, `admin`)
-- **Multi-tenancy**: DB-level RLS (pgvector) or app-level tenant scoping (SQLite)
-- **Encryption**: Fernet (AES-128-CBC + HMAC) field-level; env/file/KMS key management
-- **Audit logging**: Every auth event + destructive action logged
-- **PII scrubbing**: Emails, phones, SSNs, `sk-*` keys, credit cards
+- **Auth**: SHA-256 hashed API keys, scope RBAC (`memories:read/write/delete`, `admin`)
+- **Multi-tenancy**: DB-level RLS (pgvector) or app-level scoping (SQLite)
+- **Encryption**: Fernet (AES-128-CBC + HMAC-SHA256) field-level; env/file/KMS key management
+- **Audit**: Every auth event + destructive action logged
+- **PII**: Regex scrubbing for emails, phones, SSNs, `sk-*` keys, credit cards
 
 ---
 
-## Development
+## Testing & Quality
 
 ```bash
 pip install -r requirements-dev.txt && pip install -e "sdk/python[all,dev]"
@@ -241,49 +219,37 @@ npm ci && npm run lint && npm run build
 
 ## Security Policy
 
-See [SECURITY.md](SECURITY.md) for vulnerability disclosure guidelines.
+See [SECURITY.md](SECURITY.md).
 
 ## License
 
 MIT — see [LICENSE](LICENSE).
 
-    style Pipeline fill:#1e1b4b,stroke:#6366f1,color:#fff
-    style Query fill:#1e1b4b,stroke:#818cf8,color:#fff
-```
-
-### Data Flow
-
 ```mermaid
 sequenceDiagram
-    participant App as Your App
+    participant App
     participant API as Synapse API
     participant DB as Encrypted Store
-    participant LLM as LLM
-
-    App->>API: POST /api/memories/add {content, category}
-    API->>API: Embed (384-d vector)
-    API->>API: Encrypt (Fernet AES-128)
-    API->>API: Dedup (Jaccard + Cosine)
-    API->>DB: INSERT (encrypted)
-    API-->>App: {id, status, token_cost}
 
     App->>API: POST /query {prompt, max_token_budget}
-    API->>DB: Hybrid Search (BM25 + HNSW)
-    DB-->>API: Top-100 candidates
-    API->>API: RRF Fusion + Temporal Decay
-    API->>API: Knapsack DP (0/1 optimization)
+    API->>DB: Dense search (vector <=> query, HNSW)
+    API->>DB: Lexical search (tsvector @@ plainto_tsquery)
+    DB-->>API: Top-100 candidates each
+    API->>API: Dedup by ID across pools
+    API->>API: RRF Fusion (k=60): score = Σ 1/(k+rank)
+    API->>API: Temporal decay: relevance × e^(-t/S)
+    API->>API: Knapsack DP: maximize Σ value s.t. Σ weight ≤ budget
     API-->>App: {fused_context, injected_nodes}
-    App->>LLM: Generate with packed context
 ```
 
 ---
 
-## The 5 Core Engines
+## Core Engines
 
-| Engine | Algorithm | What It Does |
-|--------|-----------|-------------|
-| **HybridSearch** | BM25 + Cosine + RRF (k=60) | Searches semantically AND lexically in parallel, fuses results |
-| **KnapsackPacker** | 0/1 DP (O(n·budget)) | Packs highest-value memories into token window optimally |
-| **DecayEngine** | Ebbinghaus exp(-t/S) | Ages old facts, boosts reinforced ones (RLAIF) |
-| **Deduplicator** | Jaccard + Cosine (≥0.85) | Merges semantic duplicates before insert |
-| **SecurityManager** | SHA-256 + Fernet | Hashed keys, RBAC scopes, audit logging, tenant isolation |
+| Engine | Algorithm | Complexity | Notes |
+|--------|-----------|-----------|-------|
+| `HybridSearch` | BM25 + Cosine + RRF (k=60) | O(n) per pool | Dense and lexical in parallel, fused by reciprocal rank |
+| `KnapsackPacker` | 0/1 DP | O(n · budget) | Greedy fallback when n·budget > 2M; `value = relevance × 1000`, `weight = token_cost` |
+| `DecayEngine` | `relevance × e^(-t/S)` | O(1) per node | `S = 86400 × (1 + access_count × 0.45)`; floor at 0.10; RLAIF feedback adjusts confidence |
+| `Deduplicator` | Jaccard + Cosine | O(n) per insert | Dual-stage: lexical screening → dense verification (≥ 0.85 threshold) |
+| `SecurityManager` | SHA-256 + Fernet | O(1) per request | API keys hashed at rest; RBAC scopes; audit log; tenant from key or `X-Tenant-ID` |
