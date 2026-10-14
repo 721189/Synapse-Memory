@@ -11,8 +11,8 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  python-matrix-tests:
-    name: Python ${{ matrix.python-version }} Engine Tests
+  python-lint-and-type:
+    name: Python ${{ matrix.python-version }} Lint & Type Check
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -33,38 +33,59 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y libpq-dev
 
-      - name: Install Python Package & Dependencies
+      - name: Install Python Package (lean, no heavy ML)
         run: |
           python -m pip install --upgrade pip setuptools wheel
-          pip install -r requirements.txt
-          pip install -r requirements-dev.txt
-          pip install -e "sdk/python[all,dev]"
+          pip install -e "sdk/python[pgvector,langchain,llamaindex,dev]"
 
       - name: Verify Clean Module Imports
         env:
           PYTHONPATH: sdk/python
         run: |
-          python -c "import synapse_memory; from synapse_memory.core import SQLiteMemoryStore, PGVectorMemoryStore, SynapseEmbedder, HybridSearch, KnapsackPacker, DecayEngine, SecurityManager; print('SynapseMemory all core engines cleanly imported!')"
+          python -c "import synapse_memory; from synapse_memory.core import SQLiteMemoryStore, PGVectorMemoryStore, SynapseEmbedder, HybridSearch, KnapsackPacker, DecayEngine, SecurityManager; print('All core engines imported OK')"
 
-      - name: Code Style & Quality (flake8)
-        run: |
-          flake8 sdk/python/synapse_memory --config=setup.cfg
+      - name: Code Style (flake8)
+        run: flake8 sdk/python/synapse_memory --config=setup.cfg
 
       - name: Static Type Analysis (mypy)
-        run: |
-          mypy sdk/python/synapse_memory --config-file setup.cfg
+        run: mypy sdk/python/synapse_memory --config-file setup.cfg
 
-      - name: Security Vulnerability Scan (bandit)
-        run: |
-          bandit -r sdk/python/synapse_memory -s B101,B104,B105,B110,B310,B311,B608
+      - name: Security Scan (bandit)
+        run: bandit -r sdk/python/synapse_memory -s B101,B104,B105,B110,B310,B311,B608
 
-      - name: Execute Full Unit & Integration Test Suite
+  python-tests:
+    name: Python ${{ matrix.python-version }} Tests
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ['3.10', '3.11', '3.12']
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: 'pip'
+
+      - name: Install System Dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libpq-dev
+
+      - name: Install Python Package (lean, no heavy ML)
+        run: |
+          python -m pip install --upgrade pip setuptools wheel
+          pip install -e "sdk/python[pgvector,langchain,llamaindex,dev]"
+
+      - name: Execute Full Test Suite
         env:
           PYTHONPATH: sdk/python
           SYNAPSE_ENCRYPTION_KEY: "2N53Wk7u2V5bK1wU_1F5Y9mZ7zN53Wk7u2V5bK1wU_0="
           SYNAPSE_API_KEY: "syn_live_ci_test_key"
-        run: |
-          pytest sdk/python/tests -v
+        run: pytest sdk/python/tests -v
 
   frontend-build:
     name: Node.js Frontend & Gateway Build
@@ -98,8 +119,7 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Build Docker Container
-        run: |
-          docker build -t synapse-memory:ci-test .
+        run: docker build -t synapse-memory:ci-test .
 
   python-pgvector-integration-tests:
     name: Python PGVector Integration Tests
@@ -126,23 +146,21 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
+          cache: 'pip'
 
       - name: Install System Dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y libpq-dev
 
-      - name: Install Python Package & Dependencies
+      - name: Install Python Package
         run: |
           python -m pip install --upgrade pip setuptools wheel
-          pip install -r requirements.txt
-          pip install -r requirements-dev.txt
-          pip install -e "sdk/python[all,dev]"
+          pip install -e "sdk/python[pgvector,dev]"
 
       - name: Run PGVector Integration Tests
         env:
           PYTHONPATH: sdk/python
           DATABASE_URL: postgresql://synapse_test:synapse_test@localhost:5432/synapse_test
           SYNAPSE_ENCRYPTION_KEY: "2N53Wk7u2V5bK1wU_1F5Y9mZ7zN53Wk7u2V5bK1wU_0="
-        run: |
-          pytest sdk/python/tests/test_pgvector_integration.py -v
+        run: pytest sdk/python/tests/test_pgvector_integration.py -v
