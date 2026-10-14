@@ -4,7 +4,7 @@ import { getApiKey, getTenant } from '../lib/api';
 
 interface HeaderProps {
   activeTab: string;
-  setActiveTab: (tab: 'gateway' | 'memories' | 'poisoning' | 'security' | 'retrieval' | 'decay' | 'graph' | 'knapsack' | 'multimodal' | 'rlaif' | 'differentiation' | 'infrastructure' | 'buyout' | 'docs') => void;
+  setActiveTab: (tab: 'gateway' | 'memories' | 'poisoning' | 'security' | 'retrieval' | 'decay' | 'graph' | 'knapsack' | 'multimodal' | 'rlaif' | 'differentiation' | 'infrastructure' | 'docs') => void;
   stats: {
     totalMemories: number;
     quarantinedCount: number;
@@ -225,17 +225,16 @@ export const Header: React.FC<HeaderProps> = ({ activeTab, setActiveTab, stats, 
             <span>Scale Infrastructure</span>
           </button>
 
-          <button
-            onClick={() => setActiveTab('buyout')}
-            className={`flex items-center space-x-2 px-4 py-2 rounded-lg text-sm font-semibold transition-all ${
-              activeTab === 'buyout'
-                ? 'bg-amber-500 text-slate-950 shadow-md shadow-amber-500/20'
-                : 'text-amber-400 hover:text-white hover:bg-amber-500/10'
-            }`}
-          >
-            <Award className="w-4 h-4" />
-            <span>Enterprise GTM & License ($1K)</span>
-          </button>
+<button
+              onClick={() => setActiveTab('docs')}
+              className="flex items-center space-x-2 px-4 py-2 rounded-lg text-sm font-semibold text-amber-400 transition-all hover:bg-amber-500/10"
+            >
+              <Award className="w-4 h-4" />
+              <span>Pricing & Getting Started</span>
+            </button>
+
+
+          
 
           <button
             onClick={() => setActiveTab('docs')}
