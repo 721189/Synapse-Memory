@@ -79,7 +79,8 @@ class SecurityManager:
         if self.connection_string:
             if HAS_PSYCOPG2 and pool is not None:
                 try:
-                    self._pool = pool.SimpleConnectionPool(1, 10, self.connection_string)
+                    pool_cls = getattr(pool, "ThreadedConnectionPool", None) or pool.SimpleConnectionPool
+                    self._pool = pool_cls(1, 10, self.connection_string, connect_timeout=5)
                     self._is_postgres = True
                     logger.info("SecurityManager connected to centralized PostgreSQL authentication datastore.")
                 except Exception as e:
@@ -121,6 +122,17 @@ class SecurityManager:
                 conn.close()
             except Exception:
                 pass
+
+    def pool_stats(self) -> Dict[str, int]:
+        """Live pool utilization for /metrics (no secrets)."""
+        if not self._is_postgres or self._pool is None:
+            return {"pool_size": 0, "in_use": 0}
+        try:
+            maxconn = getattr(self._pool, "maxconn", 10)
+            used = maxconn - len(getattr(self._pool, "_pool", []))
+            return {"pool_size": int(maxconn), "in_use": max(0, int(used))}
+        except Exception:
+            return {"pool_size": 0, "in_use": 0}
 
     def _initialize_auth_tables(self) -> None:
         conn = self._get_connection()

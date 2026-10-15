@@ -49,6 +49,32 @@ class DecayEngine:
         confidence = float(memory.get("confidence", 0.5))
         return max(self.decay_floor, confidence * math.exp(-elapsed / max(1.0, strength)))
 
+    def temporal_multiplier(
+        self,
+        memory: Dict[str, Any],
+        now: Optional[float] = None,
+    ) -> float:
+        """Temporal-decay multiplier D(m,t) in [decay_floor, 1.0].
+
+        Separated from retrieval relevance R(m,q) so query relevance is
+        never erased: combined score S(m,q,t) = R(m,q) * D(m,t).
+        """
+        if now is None:
+            now = time.time()
+        last_accessed = memory.get("last_accessed_at", memory["created_at"])
+        elapsed = max(0.0, now - last_accessed)
+        config = self._get_config(memory.get("category", "interaction"))
+        access_count = memory.get("access_count", 0)
+        feedback_multiplier = memory.get("feedback_multiplier", 1.0)
+        strength = config['base_strength'] * (
+            1 + (access_count * config['reinforcement_factor']) * feedback_multiplier
+        )
+        return max(self.decay_floor, math.exp(-elapsed / max(1.0, strength)))
+
+    def combine_scores(self, retrieval_score: float, memory: Dict[str, Any], now: Optional[float] = None) -> float:
+        """S(m,q,t) = R(m,q) * D(m,t)."""
+        return float(retrieval_score) * self.temporal_multiplier(memory, now=now)
+
     def calculate_retention(
         self,
         base_relevance: float,

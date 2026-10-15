@@ -1,0 +1,32 @@
+SynapseMemory {{ .Chart.Version }} (app {{ .Chart.AppVersion }}) installed as release "{{ .Release.Name }}".
+
+PostgreSQL is an EXTERNAL dependency — this chart does not deploy a database.
+Before traffic reaches the pods, verify the operator checklist:
+
+1. Credentials Secret "{{ .Values.secrets.existingSecret | default (printf "%s-secret" (include "synapse-memory.fullname" .)) }}" exists with keys:
+   SYNAPSE_API_KEY, SYNAPSE_ENCRYPTION_KEY, POSTGRES_PASSWORD,
+   REDIS_PASSWORD (may be empty), GEMINI_API_KEY (optional).
+
+2. pgvector PostgreSQL is reachable at {{ .Values.config.dbHost }}:{{ .Values.config.dbPort }}/{{ .Values.config.dbName }}
+   (set config.dbHost/dbPort/dbUser/dbName to your endpoint).
+
+3. Least-privilege roles + schema (run once, from a workstation):
+     DATABASE_URL=postgresql://<bootstrap-admin>@<host>/<db> \
+       python scripts/provision_db_roles.py --runtime-role synapse_app --admin-role synapse_admin ...
+     # apply schema as the migration role, then re-run the script to grant DML
+   For production, set:  --set config.applyDbSchema=false --set config.dbUser=synapse_app
+   (migrate-then-run; details in SECURITY.md). With applyDbSchema=true the
+   engine owns DDL — dev/single-role only.
+
+4. Routing is derived automatically: the gateway calls
+   {{ .Values.config.pythonEngineUrl | default (printf "http://%s-engine:%v" (include "synapse-memory.fullname" .) (.Values.config.pythonPort | int)) }}
+   (override with config.pythonEngineUrl only for an out-of-release engine).
+
+5. Health:
+     kubectl get pods -l app.kubernetes.io/name={{ include "synapse-memory.name" . }}
+     engine  -> GET /readiness  (fails closed if the DB is down)
+     gateway -> GET /api/ready  (503 until engine + auth are healthy)
+
+Rate limiting is enforced cluster-wide when REDIS_PASSWORD is present; without
+Redis it degrades to a per-replica in-process window (requests never fail).
+

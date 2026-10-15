@@ -23,6 +23,8 @@ services:
       - SYNAPSE_ALLOW_DB_FALLBACK=${SYNAPSE_ALLOW_DB_FALLBACK:-false}
       - TOKEN_BUDGET_MAX=${TOKEN_BUDGET_MAX:-1500}
       - RATE_LIMIT_PER_MIN=${RATE_LIMIT_PER_MIN:-120}
+      - REDIS_URL=redis://:${REDIS_PASSWORD:-}@redis-state:6379/0
+      - REDIS_PASSWORD=${REDIS_PASSWORD:-}
       - ALLOWED_ORIGINS=${ALLOWED_ORIGINS:-http://localhost:3000,http://127.0.0.1:3000}
       - GEMINI_API_KEY=${GEMINI_API_KEY:-}
     volumes:
@@ -30,6 +32,14 @@ services:
     depends_on:
       postgres-pgvector:
         condition: service_healthy
+      redis-state:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:8008/readiness', timeout=5)\""]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
     networks:
       - synapse-internal
 
@@ -53,9 +63,15 @@ services:
       - ALLOWED_ORIGINS=${ALLOWED_ORIGINS:-http://localhost:3000,http://127.0.0.1:3000}
     depends_on:
       synapse-memory-engine:
-        condition: service_started
+        condition: service_healthy
       postgres-pgvector:
         condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "node -e \"fetch('http://127.0.0.1:3000/api/ready').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))\""]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
     networks:
       - synapse-internal
 

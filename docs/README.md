@@ -63,14 +63,26 @@ All responses: `{ success, data, request_id }` envelope.
 | `SYNAPSE_EMBEDDING_PROVIDER` | `local` | `local` / `deterministic` / `gemini` / `openai` |
 | `TOKEN_BUDGET_MAX` | `4000` | Knapsack token window cap |
 | `RATE_LIMIT_PER_MIN` | `120` | Per-key limit |
+| `REDIS_URL` | — | Redis DSN; cross-replica rate limiting (else in-process) |
 | `ENABLE_DEMO_ROUTES` | `false` in prod | Simulated demo endpoints |
 | `NODE_ENV` | `development` | `production` = strict auth + fail-closed |
+| `SYNAPSE_APPLY_DB_SCHEMA` | `true` | `false` = migrate-then-run: run the engine as a DML-only runtime role (see `SECURITY.md`) |
 
 ## Docker Compose / Helm
 
 ```bash
+# Compose bundles pgvector + Redis as separate services.
 docker compose -f deploy/docker-compose.yml up -d
-helm install synapse deploy/helm-chart --set config.nodeEnv=production
+
+# Helm deploys gateway + engine ONLY: PostgreSQL is an EXTERNAL dependency
+# (pgvector). Before installing: provision the DB, create the
+# 'synapse-credentials' Secret (SYNAPSE_API_KEY, SYNAPSE_ENCRYPTION_KEY,
+# POSTGRES_PASSWORD, REDIS_PASSWORD), run scripts/provision_db_roles.py, apply
+# the schema as the migration role, then install with
+# --set config.applyDbSchema=false --set config.dbUser=synapse_app and
+# --set config.dbHost=<pgvector-host>. See deploy/helm-chart/values.yaml and
+# `helm install ... --help` NOTES for the full operator checklist.
+helm install synapse deploy/helm-chart --set config.nodeEnv=production --set config.dbHost=<pgvector-host>
 ```
 
 ## Python SDK

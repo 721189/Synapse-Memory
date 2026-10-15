@@ -283,12 +283,29 @@ async function getActiveMemories(req: express.Request, tenantId?: string): Promi
 }
 
 // API Routes
+// Liveness: gateway process alive. Does NOT imply engine/DB health.
 app.get("/api/health", async (req, res) => {
-  const pyHealth = await callPythonBackend(req, "/health");
   res.json({
     status: "ok",
     service: "SynapseMemory Unified Gateway",
-    python_engine: pyHealth || { status: "offline", storage_backend: "none" }
+  });
+});
+
+// Readiness: safe to accept workload (engine reachable).
+// Fails CLOSED: 503 when Python engine unavailable — never report ok.
+app.get("/api/ready", async (req, res) => {
+  const pyHealth = await callPythonBackend(req, "/health");
+  if (!pyHealth || (pyHealth as any).error) {
+    return res.status(503).json({
+      status: "not_ready",
+      service: "SynapseMemory Unified Gateway",
+      python_engine: pyHealth || { status: "offline", storage_backend: "none" },
+    });
+  }
+  res.json({
+    status: "ready",
+    service: "SynapseMemory Unified Gateway",
+    python_engine: pyHealth,
   });
 });
 
@@ -300,7 +317,22 @@ app.get(["/api/memories", "/api/memories/list"], async (req, res) => {
   let storageBackend = "pgvector (Python)";
 
   if (!pyData || pyData.error) {
-    // Fallback to local memory store
+    // P0-3 fail-closed: 401/403 stay auth failures; engine down is 503.
+    // Never mix demo/local data into production tenant results.
+    const status = (pyData as any)?.status;
+    if (status === 401 || status === 403) {
+      return res.status(status).json({
+        success: false,
+        error: (pyData as any)?.detail || "Authentication failed.",
+      });
+    }
+    if (process.env.NODE_ENV === "production") {
+      return res.status(503).json({
+        success: false,
+        error: (pyData as any)?.detail || "Memory engine unavailable.",
+      });
+    }
+    // Dev-only convenience: local store.
     syncedMemories = localMemoryStore.filter(m => !tenantId || m.tenantId === tenantId || m.tenantId === 'default');
     storageBackend = "sqlite (Local Fallback)";
   } else {
@@ -352,7 +384,15 @@ app.post(["/api/memories/add", "/api/memories/create"], async (req, res) => {
 
   let newNode: MemoryNode;
   if (!pyIngest || pyIngest.error) {
-    // Fallback local addition
+    // P0-3: DB/engine errors must not become successful writes.
+    const status = (pyIngest as any)?.status;
+    if (status === 401 || status === 403) {
+      return res.status(status).json({ success: false, error: (pyIngest as any)?.detail || "Authentication failed." });
+    }
+    if (process.env.NODE_ENV === "production") {
+      return res.status(503).json({ success: false, error: (pyIngest as any)?.detail || "Memory engine unavailable. Write not persisted." });
+    }
+    // Fallback local addition (dev only)
     newNode = {
       id: `mem_local_${Date.now()}`,
       category: category || 'fact',
@@ -389,6 +429,16 @@ app.post("/api/memories/clear", async (req, res) => {
     method: "POST",
     body: JSON.stringify({ tenant_id: tenantId })
   });
+
+  if (!pyRes || (pyRes as any).error) {
+    const status = (pyRes as any)?.status;
+    if (status === 401 || status === 403) {
+      return res.status(status).json({ success: false, error: (pyRes as any)?.detail || "Authentication failed." });
+    }
+    if (process.env.NODE_ENV === "production") {
+      return res.status(503).json({ success: false, error: (pyRes as any)?.detail || "Memory engine unavailable. Nothing was cleared." });
+    }
+  }
 
   if (tenantId) {
     localMemoryStore = localMemoryStore.filter(m => m.tenantId !== tenantId);
@@ -538,7 +588,16 @@ app.post("/api/chat", async (req, res) => {
   let retrievedMemories: any[] = [];
 
   if (!pyRes || pyRes.error) {
-    // Fallback context generation from localMemoryStore
+    // P0-3: a failed read must not return fabricated/stale info as
+    // though it came from the persistent database.
+    const status = (pyRes as any)?.status;
+    if (status === 401 || status === 403) {
+      return res.status(status).json({ success: false, error: (pyRes as any)?.detail || "Authentication failed." });
+    }
+    if (process.env.NODE_ENV === "production") {
+      return res.status(503).json({ success: false, error: (pyRes as any)?.detail || "Retrieval engine unavailable." });
+    }
+    // Fallback context generation from localMemoryStore (dev only)
     retrievedMemories = localMemoryStore.filter(m => !tenantHeader || m.tenantId === tenantHeader || m.tenantId === 'default').slice(0, 5);
     fusedContextStr = retrievedMemories.map(m => `[Memory ID: ${m.id}] (${m.category}): ${m.content}`).join("\n");
   } else {

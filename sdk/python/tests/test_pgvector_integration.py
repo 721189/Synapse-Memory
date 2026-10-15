@@ -9,6 +9,7 @@ try:
 except ImportError:
     HAS_PSYCOPG2 = False
 
+from synapse_memory.core.encryption import FernetEncryptionProvider
 from synapse_memory.core.pgvector_db import PGVectorMemoryStore
 
 
@@ -21,15 +22,30 @@ class TestPGVectorIntegration(unittest.TestCase):
         if not cls.db_url or not cls.db_url.startswith("postgres"):
             raise unittest.SkipTest("DATABASE_URL environment variable is not configured for PostgreSQL; skipping integration tests.")
 
-        # Ensure the vector extension is active
+        # Ensure the vector extension is active. A least-privilege migration role
+        # may lack CREATE EXTENSION (a DBA installs it); that is fine as long as it
+        # is actually present, so verify existence instead of blindly skipping.
+        conn = None
         try:
             conn = psycopg2.connect(cls.db_url)
             with conn.cursor() as cur:
-                cur.execute("CREATE EXTENSION IF NOT EXISTS vector;")
-                conn.commit()
-            conn.close()
+                try:
+                    cur.execute("CREATE EXTENSION IF NOT EXISTS vector;")
+                    conn.commit()
+                except Exception:
+                    conn.rollback()
+                cur.execute("SELECT 1 FROM pg_extension WHERE extname = 'vector';")
+                installed = cur.fetchone() is not None
         except Exception as e:
-            raise unittest.SkipTest(f"Failed to connect to database or install vector extension: {e}")
+            raise unittest.SkipTest(f"Failed to connect to database: {e}")
+        finally:
+            if conn is not None:
+                try:
+                    conn.close()
+                except Exception:
+                    pass
+        if not installed:
+            raise unittest.SkipTest("pgvector extension is not installed in this database.")
 
     def setUp(self):
         self.store = PGVectorMemoryStore(
@@ -358,3 +374,254 @@ class TestHybridSearchSQLPlaceholderOrder(unittest.TestCase):
             tenant_id="tenant_hyb_a",
         )
         self._check_binding(captured, with_category=True)
+
+
+class TestRuntimeRoleIsolation(unittest.TestCase):
+    """P0-5 acceptance proof using the ACTUAL least-privilege runtime role.
+
+    PostgreSQL superusers and roles with BYPASSRLS bypass row-level security, and
+    table owners bypass it unless FORCE ROW LEVEL SECURITY is set. Proving Row
+    Level Security "with a database administrator" therefore proves nothing about
+    production traffic. These tests connect as the real runtime role.
+
+    Environment:
+      DATABASE_URL               migration/admin DSN (runs DDL, seeds rows)
+      SYNAPSE_APP_DATABASE_URL   runtime-role DSN (the subject under test)
+      SYNAPSE_DB_RUNTIME_ROLE    default "synapse_app"
+      SYNAPSE_DB_ADMIN_ROLE      default "synapse_admin"
+
+    Provision both roles with ``scripts/provision_db_roles.py`` (the CI
+    python-pgvector-integration-tests job does this). Skipped when the runtime
+    DSN is absent so local runs without Postgres still pass.
+    """
+
+    KEY = "3pQ8Zm1vT4yW7cR2nB5kL9xJ6hG0dS8aF1uE4iO7pM2="
+    TENANT_A = "runtime_role_tenant_a"
+    TENANT_B = "runtime_role_tenant_b"
+
+    @classmethod
+    def setUpClass(cls):
+        if not HAS_PSYCOPG2:
+            raise unittest.SkipTest("psycopg2 not installed; skipping runtime-role tests.")
+        cls.admin_url = os.environ.get("DATABASE_URL")
+        cls.app_url = os.environ.get("SYNAPSE_APP_DATABASE_URL")
+        if not cls.admin_url or not cls.admin_url.startswith("postgres"):
+            raise unittest.SkipTest("DATABASE_URL is not configured; skipping runtime-role tests.")
+        if not cls.app_url or not cls.app_url.startswith("postgres"):
+            raise unittest.SkipTest(
+                "SYNAPSE_APP_DATABASE_URL is not configured; run "
+                "scripts/provision_db_roles.py and point it at the runtime-role DSN."
+            )
+        cls.runtime_role = os.environ.get("SYNAPSE_DB_RUNTIME_ROLE", "synapse_app")
+        cls.admin_role = os.environ.get("SYNAPSE_DB_ADMIN_ROLE", "synapse_admin")
+
+        # One explicit key shared by both stores: proves the runtime role reads
+        # rows it is allowed to see, not that we got lucky with the default key.
+        try:
+            key = os.environ.get("SYNAPSE_ENCRYPTION_KEY") or cls.KEY
+            cls.provider = FernetEncryptionProvider(key)
+        except Exception as exc:  # pragma: no cover - only on a malformed key
+            raise unittest.SkipTest(f"encryption key unusable: {exc}")
+
+        cls.admin = PGVectorMemoryStore(
+            connection_string=cls.admin_url, dimension=384, auto_init=True,
+            fail_closed=True, encryption_provider=cls.provider)
+        if not cls.admin.is_connected:
+            raise unittest.SkipTest("admin connection unavailable; skipping runtime-role tests.")
+
+    @classmethod
+    def tearDownClass(cls):
+        store = getattr(cls, "admin", None)
+        if store is not None:
+            try:
+                store.clear_memories()
+            except Exception:
+                pass
+
+    def setUp(self):
+        self.admin.clear_memories()
+        for mem in (
+            self._mem("rt_a1", self.TENANT_A, "tenant A private runtime record one"),
+            self._mem("rt_a2", self.TENANT_A, "tenant A private runtime record two"),
+            self._mem("rt_b1", self.TENANT_B, "tenant B private runtime record"),
+        ):
+            self.admin.insert_memory(mem)
+
+    def _mem(self, mem_id, tenant, content):
+        return {
+            "id": mem_id,
+            "content": content,
+            "category": "fact",
+            "confidence": 0.9,
+            "created_at": time.time(),
+            "token_cost": 6,
+            "embedding": [0.5] * 384,
+            "tenant_id": tenant,
+        }
+
+    def _runtime_store(self):
+        """Real engine code path, connected as the DML-only runtime role.
+
+        apply_schema=False is required (and is the documented production mode):
+        a non-owner runtime role cannot execute DDL.
+        """
+        store = PGVectorMemoryStore(
+            connection_string=self.app_url, dimension=384, fail_closed=True,
+            apply_schema=False, encryption_provider=self.provider)
+        self.assertTrue(store.is_connected,
+                        "runtime role could not connect/verify schema; did "
+                        "scripts/provision_db_roles.py run?")
+        return store
+
+    def _raw_rows(self, tenant_context=None):
+        """Read `memories` over a raw runtime-role connection (app layer bypassed)."""
+        conn = psycopg2.connect(self.app_url)
+        try:
+            with conn.cursor() as cur:
+                if tenant_context is not None:
+                    cur.execute("SET LOCAL app.current_tenant = %s;", (tenant_context,))
+                cur.execute("SELECT id FROM memories;")
+                return sorted(r[0] for r in cur.fetchall())
+        finally:
+            conn.close()
+    def test_runtime_role_is_a_non_owner_without_bypassrls(self):
+        """The role the engine connects as must be structurally incapable of
+        bypassing row-level security."""
+        conn = psycopg2.connect(self.app_url)
+        try:
+            with conn.cursor() as cur:
+                cur.execute("SELECT current_user;")
+                self.assertEqual(cur.fetchone()[0], self.runtime_role)
+                cur.execute(
+                    "SELECT rolsuper, rolbypassrls, rolcreaterole, rolcreatedb "
+                    "FROM pg_roles WHERE rolname = %s;", (self.runtime_role,))
+                row = cur.fetchone()
+                self.assertIsNotNone(row, "runtime role does not exist")
+                self.assertFalse(row[0], "runtime role must not be a SUPERUSER")
+                self.assertFalse(row[1], "runtime role must not have BYPASSRLS")
+                self.assertFalse(row[2], "runtime role must not have CREATEROLE")
+                self.assertFalse(row[3], "runtime role must not have CREATEDB")
+                cur.execute(
+                    "SELECT tableowner FROM pg_tables "
+                    "WHERE schemaname='public' AND tablename='memories';")
+                owner = cur.fetchone()[0]
+                self.assertNotEqual(owner, self.runtime_role,
+                                    "runtime role must NOT own memories")
+                cur.execute("SELECT has_schema_privilege(%s, 'public', 'CREATE');",
+                            (self.runtime_role,))
+                self.assertFalse(cur.fetchone()[0],
+                                 "runtime role must not hold schema CREATE (DDL)")
+        finally:
+            conn.close()
+
+    def test_runtime_role_denied_on_destructive_and_ddl_operations(self):
+        """Privilege separation: runtime is DML-only, never destructive/DDL."""
+        conn = psycopg2.connect(self.app_url)
+        try:
+            with conn.cursor() as cur:
+                for priv in ("TRUNCATE", "REFERENCES", "TRIGGER"):
+                    cur.execute(
+                        "SELECT has_table_privilege(%s, 'public.memories', %s);",
+                        (self.runtime_role, priv))
+                    self.assertFalse(cur.fetchone()[0],
+                                     "runtime role must not hold " + priv)
+                for ddl in ("ALTER TABLE memories ADD COLUMN rt_probe INTEGER;",
+                            "DROP TABLE memories;",
+                            "TRUNCATE TABLE memories;"):
+                    with self.assertRaises(psycopg2.Error, msg=ddl):
+                        cur.execute(ddl)
+                    conn.rollback()
+        finally:
+            conn.close()
+
+
+    def test_runtime_role_raw_sql_cannot_read_another_tenant(self):
+        """Isolation holds even with the application layer completely bypassed."""
+        # No tenant context at all -> fail closed, zero rows.
+        self.assertEqual(self._raw_rows(), [])
+        # Explicitly scoped to B -> only B.
+        self.assertEqual(self._raw_rows(self.TENANT_B), ["rt_b1"])
+        # Explicitly scoped to A -> only A.
+        self.assertEqual(self._raw_rows(self.TENANT_A), ["rt_a1", "rt_a2"])
+        # Empty-string context -> zero rows (never "everything").
+        self.assertEqual(self._raw_rows(""), [])
+
+    def test_runtime_store_reads_only_its_own_tenant(self):
+        store = self._runtime_store()
+        self.assertEqual(len(store.get_all_memories(tenant_id=self.TENANT_A)), 2)
+        self.assertEqual(len(store.get_all_memories(tenant_id=self.TENANT_B)), 1)
+        self.assertEqual(store.get_all_memories(tenant_id="tenant_with_nothing"), [])
+        self.assertIsNone(store.get_memory_by_id("rt_b1", tenant_id=self.TENANT_A))
+        self.assertIsNotNone(store.get_memory_by_id("rt_a1", tenant_id=self.TENANT_A))
+        self.assertEqual(store.count_memories(tenant_id=self.TENANT_A), 2)
+        self.assertEqual(store.count_memories(tenant_id=self.TENANT_B), 1)
+        # Category-scoped reads and searches must stay inside the tenant too.
+        self.assertEqual(
+            len(store.get_memories_by_category("fact", tenant_id=self.TENANT_A)), 2)
+        self.assertEqual(
+            len(store.vector_search([0.5] * 384, top_k=10,
+                                    tenant_id=self.TENANT_A)), 2)
+        self.assertEqual(
+            len(store.lexical_search("runtime", top_k=10,
+                                     tenant_id=self.TENANT_B)), 1)
+        self.assertEqual(
+            len(store.query_candidates(tenant_id=self.TENANT_A, limit=50)), 2)
+
+    def test_runtime_store_cross_tenant_write_rejected(self):
+        """A write whose row tenant does not match the session context is refused
+        by the RLS WITH CHECK clause, not merely by application logic."""
+        conn = psycopg2.connect(self.app_url)
+        try:
+            with conn.cursor() as cur:
+                cur.execute("SET LOCAL app.current_tenant = %s;", (self.TENANT_A,))
+                with self.assertRaises(psycopg2.Error):
+                    cur.execute(
+                        "INSERT INTO memories (id, tenant_id, content, content_plain, "
+                        "category, confidence, created_at, last_accessed_at, "
+                        "access_count, token_cost, feedback_multiplier) "
+                        "VALUES ('rt_evil', %s, 'x', 'x', 'fact', 0.9, %s, %s, 0, 1, 1.0);",
+                        (self.TENANT_B, time.time(), time.time()))
+                    conn.commit()
+            conn.rollback()
+        finally:
+            conn.close()
+        # The rejected row must not exist for anyone.
+        self.assertEqual(self._raw_rows(self.TENANT_B), ["rt_b1"])
+
+
+    def test_runtime_store_writes_and_deletes_stay_tenant_scoped(self):
+        store = self._runtime_store()
+        store.insert_memory(self._mem("rt_a3", self.TENANT_A, "new tenant A record"))
+        self.assertEqual(store.count_memories(tenant_id=self.TENANT_A), 3)
+        self.assertEqual(store.count_memories(tenant_id=self.TENANT_B), 1)
+        store.update_access_count("rt_a3", 1, tenant_id=self.TENANT_A)
+        store.update_confidence("rt_a3", 0.5, tenant_id=self.TENANT_A)
+        # A scoped clear must not touch another tenant's rows.
+        deleted = store.clear_memories(tenant_id=self.TENANT_A)
+        self.assertEqual(deleted, 3)
+        self.assertEqual(store.count_memories(tenant_id=self.TENANT_A), 0)
+        self.assertEqual(store.count_memories(tenant_id=self.TENANT_B), 1)
+
+    def test_runtime_start_refuses_to_run_without_provisioned_schema(self):
+        """apply_schema=False with a missing schema must fail closed rather than
+        silently degrading to the in-memory cache (which would fake write
+        success and lose data on restart)."""
+        admin_conn = psycopg2.connect(self.admin_url)
+        try:
+            admin_conn.autocommit = True
+            with admin_conn.cursor() as cur:
+                cur.execute("ALTER TABLE memories RENAME TO memories_hidden;")
+            try:
+                with self.assertRaises(RuntimeError) as caught:
+                    PGVectorMemoryStore(
+                        connection_string=self.app_url, dimension=384,
+                        fail_closed=True, apply_schema=False,
+                        encryption_provider=self.provider)
+                self.assertIn("memories", str(caught.exception))
+            finally:
+                with admin_conn.cursor() as cur:
+                    cur.execute("ALTER TABLE memories_hidden RENAME TO memories;")
+        finally:
+            admin_conn.close()
+        # The renamed table is back and readable again.
+        self.assertEqual(self._raw_rows(self.TENANT_A), ["rt_a1", "rt_a2"])

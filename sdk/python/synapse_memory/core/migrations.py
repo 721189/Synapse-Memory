@@ -22,7 +22,7 @@ logger = logging.getLogger("SynapseMigrations")
 
 # Ledger + metadata columns tracked on the memories table so embedding-model
 # upgrades (e.g. 128-d hash -> 384-d MiniLM) are explicit, not silent.
-CURRENT_SCHEMA_VERSION = 3
+CURRENT_SCHEMA_VERSION = 4
 
 
 @dataclass
@@ -76,10 +76,31 @@ def _m3_backfill_dimension(cur: Any) -> None:
     cur.execute("UPDATE memories SET embedding_dimension = 0 WHERE embedding_dimension IS NULL;")
 
 
+def _m4_content_plain_search_projection(cur: Any) -> None:
+    """v4: Combined-protection search projection for field-encrypted content.
+
+    Adds `content_plain` (searchable projection feeding the tsvector index).
+    Existing rows backfill `content_plain` from `content` ONLY when that
+    column still holds plaintext — i.e. rows written before P0-2 field
+    encryption. Rows already holding Fernet ciphertext are left untouched
+    (re-encrypting ciphertext would destroy recoverability); operators must
+    run the documented key-rotation/re-encryption sweep for those.
+    Detection heuristic: Fernet tokens are urlsafe-base64 starting with
+    'gAAAAA'; anything else is treated as legacy plaintext.
+    """
+    _add_column_if_missing(cur, "memories", "content_plain", "TEXT NOT NULL DEFAULT ''")
+    cur.execute(
+        "UPDATE memories SET content_plain = content "
+        "WHERE (content_plain IS NULL OR content_plain = '') "
+        "AND content NOT LIKE 'gAAAAA%';"
+    )
+
+
 MIGRATIONS: List[Migration] = [
     Migration(1, "embedding_metadata", _m1_embedding_metadata, _m1_embedding_metadata),
     Migration(2, "migration_ledger", _m2_migration_ledger, _m2_migration_ledger),
     Migration(3, "backfill_dimension", _m3_backfill_dimension, _m3_backfill_dimension),
+    Migration(4, "content_plain_search_projection", _m4_content_plain_search_projection, _m4_content_plain_search_projection),
 ]
 
 
@@ -93,16 +114,38 @@ def _applied_versions(cur: Any) -> set:
         return set()
 
 
-def run_migrations(get_connection: Callable[[], Any], is_postgres: bool, fail_closed: bool = False) -> int:
-    """Apply all pending forward migrations. Returns count applied. Idempotent."""
+def run_migrations(
+    get_connection: Callable[[], Any],
+    is_postgres: bool,
+    fail_closed: bool = False,
+    close_on_exit: bool = True,
+    owns_connection: bool = True,
+) -> int:
+    """Apply all pending forward migrations. Returns count applied. Idempotent.
+
+    Args:
+        get_connection: Callable returning a fresh connection for this run.
+        is_postgres: Dialect to apply (SQLite vs PostgreSQL).
+        fail_closed: Raise on migration failure instead of skipping.
+        close_on_exit: If True (default), the connection is released when the run
+            finishes. Set False only when the caller keeps the connection alive
+            and reuses it afterwards, e.g. SQLiteMemoryStore caching its
+            schema-init ':memory:' connection.
+        owns_connection: If True (default), treat the returned connection as
+            freshly-owned (non-pooled) and close it in the finally block. Set
+            False when the connection belongs to an external pool that must be
+            returned, not closed. Existing callers can rely on the default True
+            (fresh connection). PGVectorMemoryStore passes a pooled connection
+            and sets this False.
+
+        The connection is closed only when ``owns_connection`` AND
+        ``close_on_exit`` are both True. Otherwise it is handed back through the
+        factory owner's ``_return_connection`` hook (when present) or closed as
+        a last-resort fallback.
+    """
     applied_total = 0
     conn = get_connection()
-    # True only when the factory hands us a fresh (non-pooled) connection that
-    # we own. PGVectorMemoryStore passes a bound method returning pooled
-    # connections — closing those would destroy pool slots.
-    owns_connection = not (
-        hasattr(get_connection, "__self__") and hasattr(get_connection.__self__, "_pool")
-    )
+    should_close = owns_connection and close_on_exit
     try:
         cur = conn.cursor()
         # The ledger (v2) must exist before we can read it; bootstrap directly.
@@ -134,7 +177,7 @@ def run_migrations(get_connection: Callable[[], Any], is_postgres: bool, fail_cl
                 logger.warning("Migration v%d (%s) skipped: %s", migration.version, migration.name, e)
     finally:
         try:
-            if owns_connection:
+            if should_close:
                 conn.close()
             else:
                 # Return pooled connections to the pool instead of closing.

@@ -40,6 +40,13 @@ FAIL_CLOSED_DB = bool(DATABASE_URL) and not ALLOW_DB_FALLBACK
 # Gate demo/simulated routes (infrastructure fantasy metrics, licensing toy).
 # Production deployments MUST set ENABLE_DEMO_ROUTES=false.
 ENABLE_DEMO_ROUTES = os.environ.get("ENABLE_DEMO_ROUTES", "false" if IS_PRODUCTION else "true").lower() == "true"
+# Schema ownership topology. true (default) = the engine creates/upgrades its own
+# schema (single-role local/dev). false = "migrate-then-run": DDL + migrations are
+# performed ahead of start-up by the migration role, and the engine connects as a
+# least-privilege DML-only runtime role (scripts/provision_db_roles.py). Required
+# when the runtime role is a NON-owner without BYPASSRLS, because such a role
+# cannot execute DDL.
+APPLY_DB_SCHEMA = os.environ.get("SYNAPSE_APPLY_DB_SCHEMA", "true").lower() == "true"
 
 # Security & Distributed Identity Engine
 security_manager = SecurityManager(
@@ -58,7 +65,8 @@ if STORAGE_BACKEND == "pgvector":
         store = PGVectorMemoryStore(
             connection_string=DATABASE_URL,
             dimension=embedding_dimension,
-            fail_closed=True
+            fail_closed=True,
+            apply_schema=APPLY_DB_SCHEMA,
         )
         ACTIVE_BACKEND = "pgvector"
         logger.info(f"Canonical Production Engine using PostgreSQL + pgvector ({embedding_dimension}-d HNSW) at {str(DATABASE_URL)[:20]}...")
@@ -70,7 +78,8 @@ elif STORAGE_BACKEND == "auto" and DATABASE_URL:
         store = PGVectorMemoryStore(
             connection_string=DATABASE_URL,
             dimension=embedding_dimension,
-            fail_closed=FAIL_CLOSED_DB or IS_PRODUCTION
+            fail_closed=FAIL_CLOSED_DB or IS_PRODUCTION,
+            apply_schema=APPLY_DB_SCHEMA,
         )
         ACTIVE_BACKEND = "pgvector"
         logger.info(f"Canonical Production Engine using PostgreSQL + pgvector ({embedding_dimension}-d HNSW) at {str(DATABASE_URL)[:20]}...")
@@ -90,21 +99,47 @@ packer = KnapsackPacker(token_budget=min(int(os.environ.get("TOKEN_BUDGET_MAX", 
 decay = DecayEngine(category_configs={})
 searcher = HybridSearch()
 
-# --- Minimal in-process rate limiting (no extra deps; replace with Redis in HA) ---
-_rate_buckets: Dict[str, list] = {}
-_rate_lock = threading.Lock()
+# --- Rate limiting: distributed (Redis) when configured, else in-process ---
+# REDIS_URL enables a Redis sorted-set sliding window enforced across ALL
+# replicas; without it (or when Redis is unreachable) we degrade to a
+# thread-safe per-process window. See synapse_memory.core.rate_limiter.
+from synapse_memory.core.rate_limiter import build_rate_limiter
+
 RATE_LIMIT_PER_MIN = int(os.environ.get("RATE_LIMIT_PER_MIN", "120"))
+RATE_LIMIT_WINDOW_SECONDS = float(os.environ.get("RATE_LIMIT_WINDOW_SECONDS", "60"))
+rate_limiter = build_rate_limiter()
+
+# --- Live operational metrics (no extra deps; scraped via /metrics) ---
+_metrics_lock = threading.Lock()
+_request_counts: Dict[tuple, int] = {}
+_latency_samples: Dict[str, list] = {}
+_auth_failures = 0
+_rate_limit_rejections = 0
+_ingest_success = 0
+_ingest_errors = 0
+_retrieval_success = 0
+_retrieval_errors = 0
+_last_candidate_count = 0
+_last_packed_tokens = 0
+
+
+def _record_request(path: str, status: int, latency_s: float) -> None:
+    with _metrics_lock:
+        key = (path, str(status))
+        _request_counts[key] = _request_counts.get(key, 0) + 1
+        samples = _latency_samples.setdefault(path, [])
+        samples.append(latency_s)
+        if len(samples) > 500:
+            del samples[: len(samples) - 500]
 
 
 def _check_rate_limit(key: str) -> None:
-    now = time.time()
-    window_start = now - 60.0
-    with _rate_lock:
-        bucket = _rate_buckets.setdefault(key, [])
-        bucket[:] = [t for t in bucket if t > window_start]
-        if len(bucket) >= RATE_LIMIT_PER_MIN:
-            raise HTTPException(status_code=429, detail="Rate limit exceeded. Retry after 60s.")
-        bucket.append(now)
+    global _rate_limit_rejections
+    if rate_limiter.check(key, RATE_LIMIT_PER_MIN, RATE_LIMIT_WINDOW_SECONDS):
+        return
+    with _metrics_lock:
+        _rate_limit_rejections += 1
+    raise HTTPException(status_code=429, detail="Rate limit exceeded. Retry after 60s.")
 
 
 # Initialize FastAPI application (MUST precede any @app.middleware / route registration)
@@ -120,6 +155,7 @@ async def add_request_id_and_rate_limit(request: Request, call_next):  # type: i
     import uuid as _uuid
 
     request_id = request.headers.get("X-Request-ID") or f"req_{_uuid.uuid4().hex[:12]}"
+    start = time.time()
     # Rate-limit only mutating + heavy retrieval endpoints
     if request.url.path.startswith(("/ingest", "/api/memories", "/query", "/api/retrieval")):
         client_key = request.headers.get("X-Synapse-API-Key") or (request.client.host if request.client else "anon")
@@ -128,6 +164,7 @@ async def add_request_id_and_rate_limit(request: Request, call_next):  # type: i
         except HTTPException as e:
             from fastapi.responses import JSONResponse
 
+            _record_request(request.url.path, e.status_code, time.time() - start)
             return JSONResponse(
                 status_code=e.status_code,
                 content={"success": False, "error": e.detail, "request_id": request_id},
@@ -136,6 +173,10 @@ async def add_request_id_and_rate_limit(request: Request, call_next):  # type: i
     # below; the middleware only stamps the request id on successful responses.
     response = await call_next(request)
     response.headers["X-Request-ID"] = request_id
+    try:
+        _record_request(request.url.path, response.status_code, time.time() - start)
+    except Exception:
+        pass
     return response
 
 
@@ -213,9 +254,12 @@ def require_scope(scope: str):
         )
 
         if not valid or record is None:
+            global _auth_failures
+            with _metrics_lock:
+                _auth_failures += 1
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
-                detail=f"Authentication failed: {reason}"
+                detail="Authentication failed.",
             )
 
         return record
@@ -264,10 +308,10 @@ def envelope(data: Any, request: Optional[Request] = None) -> Dict[str, Any]:
 # --- PYDANTIC SCHEMAS ---
 
 class IngestRequest(BaseModel):
-    content: str = Field(..., description="Raw text representation of the memory segment")
-    category: str = Field("interaction", description="Cognitive category (e.g., interaction, preference, system)")
+    content: str = Field(..., min_length=1, max_length=32000, description="Raw text representation of the memory segment")
+    category: str = Field("interaction", min_length=1, max_length=64, pattern=r"^[a-z0-9_\-]+$", description="Cognitive category (e.g., interaction, preference, system)")
     confidence: float = Field(0.95, ge=0.0, le=1.0, description="Confidence alignment coefficient")
-    tenant_id: Optional[str] = Field(None, alias="tenantId", description="Target tenant ID for isolation")
+    tenant_id: Optional[str] = Field(None, alias="tenantId", min_length=1, max_length=128, pattern=r"^[A-Za-z0-9_\-\.]+$", description="Target tenant ID for isolation")
 
 
 class IngestResponse(BaseModel):
@@ -278,11 +322,11 @@ class IngestResponse(BaseModel):
 
 
 class QueryRequest(BaseModel):
-    prompt: Optional[str] = Field(None, description="Active user prompt")
-    query: Optional[str] = Field(None, description="Alternative alias for prompt")
-    max_token_budget: int = Field(1500, ge=50, le=32000, description="Max token window allowed for context packing", alias="maxTokens")
-    category: Optional[str] = Field(None, description="Optional category filter")
-    tenant_id: Optional[str] = Field(None, alias="tenantId", description="Target tenant ID")
+    prompt: Optional[str] = Field(None, min_length=1, max_length=8000, description="Active user prompt")
+    query: Optional[str] = Field(None, min_length=1, max_length=8000, description="Alternative alias for prompt")
+    max_token_budget: int = Field(1500, ge=50, le=8000, description="Max token window allowed for context packing", alias="maxTokens")
+    category: Optional[str] = Field(None, min_length=1, max_length=64, pattern=r"^[a-z0-9_\-]+$", description="Optional category filter")
+    tenant_id: Optional[str] = Field(None, alias="tenantId", min_length=1, max_length=128, pattern=r"^[A-Za-z0-9_\-\.]+$", description="Target tenant ID")
 
 
 class QueryResponse(BaseModel):
@@ -293,23 +337,23 @@ class QueryResponse(BaseModel):
 
 
 class FeedbackRequest(BaseModel):
-    memory_id: str
-    feedback_type: str = Field(..., description="Must be either 'positive' (boost) or 'negative' (hallucination alert)")
-    tenant_id: Optional[str] = Field(None, alias="tenantId")
+    memory_id: str = Field(..., min_length=1, max_length=256, description="Memory node ID")
+    feedback_type: str = Field(..., pattern=r"^(positive|negative)$", description="Must be either 'positive' (boost) or 'negative' (hallucination alert)")
+    tenant_id: Optional[str] = Field(None, alias="tenantId", min_length=1, max_length=128, pattern=r"^[A-Za-z0-9_\-\.]+$")
 
 
 class CreateKeyRequest(BaseModel):
-    name: str
-    organization_id: str = "org_default"
-    project_id: str = "proj_default"
-    tenant_id: str = "default"
-    scopes: List[str] = ["memories:read", "memories:write"]
-    role: str = "developer"
-    ttl_days: Optional[int] = 365
+    name: str = Field(..., min_length=1, max_length=128)
+    organization_id: str = Field("org_default", min_length=1, max_length=128, pattern=r"^[A-Za-z0-9_\-\.]+$")
+    project_id: str = Field("proj_default", min_length=1, max_length=128, pattern=r"^[A-Za-z0-9_\-\.]+$")
+    tenant_id: str = Field("default", min_length=1, max_length=128, pattern=r"^([A-Za-z0-9_\-\.]+|\*)$")
+    scopes: List[str] = Field(["memories:read", "memories:write"], min_length=1, max_length=16)
+    role: str = Field("developer", pattern=r"^(admin|developer|service|viewer)$")
+    ttl_days: Optional[int] = Field(365, ge=1, le=3650)
 
 
 class RevokeKeyRequest(BaseModel):
-    key_id: str
+    key_id: str = Field(..., min_length=1, max_length=128)
 
 
 # --- API ENDPOINTS ---
@@ -432,12 +476,20 @@ def ingest_memory(
 
     effective_tenant = resolve_tenant(principal, payload.tenant_id)
 
-    memory_id, action, cost = manager.ingest_with_deduplication(
-        content=payload.content,
-        category=payload.category,
-        confidence=payload.confidence,
-        tenant_id=effective_tenant
-    )
+    global _ingest_success, _ingest_errors
+    try:
+        memory_id, action, cost = manager.ingest_with_deduplication(
+            content=payload.content,
+            category=payload.category,
+            confidence=payload.confidence,
+            tenant_id=effective_tenant
+        )
+    except Exception:
+        with _metrics_lock:
+            _ingest_errors += 1
+        raise
+    with _metrics_lock:
+        _ingest_success += 1
 
     return envelope(
         {
@@ -522,7 +574,8 @@ def query_memory(
     if not candidates:
         return envelope(QueryResponse(fused_context="", injected_nodes_count=0, injected_nodes=[], active_storage_backend=ACTIVE_BACKEND).model_dump(), request)
 
-    # 2. Dynamic temporal decay adjustment
+    # 2. Dynamic temporal decay adjustment: S(m,q,t) = R(m,q) * D(m,t).
+    # Preserve retrieval relevance; decay only re-weights priority.
     decayed_candidates = []
     for m in candidates:
         mem_node = {
@@ -532,13 +585,22 @@ def query_memory(
             "confidence": m.get("confidence", 0.5),
             "category": m.get("category", "interaction")
         }
-        current_relevance = decay.calculate_relevance(mem_node)
+        retrieval_score = float(m.get("relevance_score", 0.0))
+        combined = decay.combine_scores(retrieval_score, mem_node)
         m_copy = m.copy()
-        m_copy["relevance_score"] = current_relevance
+        m_copy["retrieval_score"] = retrieval_score
+        m_copy["decay_multiplier"] = combined / retrieval_score if retrieval_score else decay.temporal_multiplier(mem_node)
+        m_copy["relevance_score"] = combined
         decayed_candidates.append(m_copy)
 
     # 3. Dynamic programming 0/1 Knapsack optimal budget packing
     packed_nodes = packer.pack(decayed_candidates, payload.max_token_budget)
+
+    global _retrieval_success, _last_candidate_count, _last_packed_tokens
+    with _metrics_lock:
+        _retrieval_success += 1
+        _last_candidate_count = len(candidates)
+        _last_packed_tokens = sum(int(n.get("token_cost", 0) or 0) for n in packed_nodes)
 
     # Increment access counts for Ebbinghaus stabilization
     for node in packed_nodes:
@@ -818,14 +880,14 @@ def rotate_api_key(
 
 
 class BulkIngestItem(BaseModel):
-    content: str
-    category: str = "interaction"
-    confidence: float = 0.95
+    content: str = Field(..., min_length=1, max_length=32000)
+    category: str = Field("interaction", min_length=1, max_length=64, pattern=r"^[a-z0-9_\-]+$")
+    confidence: float = Field(0.95, ge=0.0, le=1.0)
 
 
 class BulkIngestRequest(BaseModel):
-    items: List[BulkIngestItem]
-    tenant_id: Optional[str] = Field(None, alias="tenantId")
+    items: List[BulkIngestItem] = Field(..., min_length=1, max_length=100)
+    tenant_id: Optional[str] = Field(None, alias="tenantId", min_length=1, max_length=128, pattern=r"^[A-Za-z0-9_\-\.]+$")
 
 
 @app.post("/api/memories/bulk", tags=["Ingestion"])
@@ -835,8 +897,9 @@ def bulk_ingest(
     principal: APIKeyRecord = Depends(require_scope("memories:write"))
 ):
     """Bulk ingest up to 100 memories in one call (team backfills)."""
-    if len(payload.items) > 100:
-        raise HTTPException(status_code=400, detail="Bulk limit is 100 items per request.")
+    total_chars = sum(len(i.content) for i in payload.items)
+    if total_chars > 500_000:
+        raise HTTPException(status_code=413, detail="Bulk payload too large (500KB text limit).")
     effective_tenant = resolve_tenant(principal, payload.tenant_id)
     results = []
     for item in payload.items:
@@ -854,12 +917,30 @@ def bulk_ingest(
 
 @app.get("/metrics", tags=["Telemetry"])
 def prometheus_metrics():
-    """Prometheus-compatible metrics (no extra deps). Scrape with Prometheus/Grafana."""
+    """Prometheus-compatible metrics (no extra deps). Scrape with Prometheus/Grafana.
+
+    All values are live: request counters + latency samples by endpoint,
+    auth failures, rate-limit rejections, ingestion/retrieval volumes and
+    errors, pool utilization, token-budget usage. No hardcoded figures.
+    """
     total = 0
     try:
         total = store.count_memories()
     except Exception:
         pass
+    pool_stats: Dict[str, Any] = {}
+    for candidate in (store, security_manager):
+        stats_fn = getattr(candidate, "pool_stats", None)
+        if not callable(stats_fn):
+            continue
+        try:
+            candidate_stats = stats_fn() or {}
+        except Exception:
+            logger.debug("pool_stats() failed for %r", candidate)
+            candidate_stats = {}
+        if candidate_stats:
+            pool_stats = candidate_stats
+            break
     lines = [
         "# HELP synapse_memories_total Total indexed memories",
         "# TYPE synapse_memories_total gauge",
@@ -870,10 +951,63 @@ def prometheus_metrics():
         "# HELP synapse_embedding_dimension Active embedding dimension",
         "# TYPE synapse_embedding_dimension gauge",
         f"synapse_embedding_dimension {embedding_dimension}",
+        "# HELP synapse_requests_total Requests by endpoint and status",
+        "# TYPE synapse_requests_total counter",
     ]
+    with _metrics_lock:
+        for (path, status_code), count in sorted(_request_counts.items()):
+            lines.append(f"synapse_requests_total{{path=\"{path}\",status=\"{status_code}\"}} {count}")
+        lines += [
+            "# HELP synapse_auth_failures_total Authentication/authorization failures",
+            "# TYPE synapse_auth_failures_total counter",
+            f"synapse_auth_failures_total {_auth_failures}",
+            "# HELP synapse_rate_limit_rejections_total Rate-limit 429 rejections",
+            "# TYPE synapse_rate_limit_rejections_total counter",
+            f"synapse_rate_limit_rejections_total {_rate_limit_rejections}",
+            "# HELP synapse_ingest_total Ingested memories and failures",
+            "# TYPE synapse_ingest_total counter",
+            f"synapse_ingest_total{{outcome=\"success\"}} {_ingest_success}",
+            f"synapse_ingest_total{{outcome=\"error\"}} {_ingest_errors}",
+            "# HELP synapse_retrieval_total Retrieval requests and errors",
+            "# TYPE synapse_retrieval_total counter",
+            f"synapse_retrieval_total{{outcome=\"success\"}} {_retrieval_success}",
+            f"synapse_retrieval_total{{outcome=\"error\"}} {_retrieval_errors}",
+            "# HELP synapse_retrieval_candidates Candidate count of last retrieval",
+            "# TYPE synapse_retrieval_candidates gauge",
+            f"synapse_retrieval_candidates {_last_candidate_count}",
+            "# HELP synapse_context_tokens_packed Tokens packed into last context",
+            "# TYPE synapse_context_tokens_packed gauge",
+            f"synapse_context_tokens_packed {_last_packed_tokens}",
+        ]
+    lines += [
+        "# HELP synapse_db_pool_in_use Pooled DB connections currently checked out",
+        "# TYPE synapse_db_pool_in_use gauge",
+        f"synapse_db_pool_in_use {pool_stats.get('in_use', 0)}",
+        "# HELP synapse_db_pool_size Configured DB pool size",
+        "# TYPE synapse_db_pool_size gauge",
+        f"synapse_db_pool_size {pool_stats.get('pool_size', 0)}",
+        "# HELP synapse_rate_limit_backend Active rate-limiter backend (constant 1)",
+        "# TYPE synapse_rate_limit_backend gauge",
+        f'synapse_rate_limit_backend{{backend="{rate_limiter.backend}"}} 1',
+    ]
+    lat_lines = ["# HELP synapse_request_latency_seconds Request latency by endpoint", "# TYPE synapse_request_latency_seconds summary"]
+    with _metrics_lock:
+        for path, samples in sorted(_latency_samples.items()):
+            if not samples:
+                continue
+            ordered = sorted(samples)
+            n = len(ordered)
+            avg = sum(ordered) / n
+            p50 = ordered[min(n - 1, n // 2)]
+            p95 = ordered[min(n - 1, int(n * 0.95))]
+            lat_lines.append(f"synapse_request_latency_seconds{{path=\"{path}\",quantile=\"0.5\"}} {p50:.6f}")
+            lat_lines.append(f"synapse_request_latency_seconds{{path=\"{path}\",quantile=\"0.95\"}} {p95:.6f}")
+            lat_lines.append(f"synapse_request_latency_seconds_sum{{path=\"{path}\"}} {sum(ordered):.6f}")
+            lat_lines.append(f"synapse_request_latency_seconds_count{{path=\"{path}\"}} {n}")
+            lat_lines.append(f"# avg {avg:.6f}s over {n} samples")
     from fastapi.responses import PlainTextResponse
 
-    return PlainTextResponse("\n".join(lines) + "\n", media_type="text/plain")
+    return PlainTextResponse("\n".join(lines + lat_lines) + "\n", media_type="text/plain")
 
 
 @app.post("/api/security/scrub-pii", tags=["Security"])

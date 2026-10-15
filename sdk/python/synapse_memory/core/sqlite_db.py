@@ -10,14 +10,23 @@ from synapse_memory.core.encryption import (
 
 
 class _AutoClosingConnection(sqlite3.Connection):
-    """SQLite connection whose context manager COMMITS + CLOSES.
+    """SQLite connection whose context manager COMMITS/ROLLS BACK and CLOSES.
 
-    Stock sqlite3 `with conn:` only commits/rollbacks but leaves the file handle
-    open — on Windows that locks test .db files (PermissionError on cleanup) and
-    leaks WAL handles under FastAPI workers. This subclass closes on __exit__.
+    Stock sqlite3 ``with conn:`` only commits or rolls back but leaves the file
+    handle open — on Windows that locks test .db files (PermissionError on
+    cleanup) and leaks WAL handles under FastAPI workers. This subclass closes
+    the handle on ``__exit__`` unless the instance is flagged
+    ``_sqlite_keep_open`` (used by SQLiteMemoryStore for its long-lived
+    ``:memory:`` connection).
     """
 
     def __exit__(self, exc_type, exc_val, exc_tb):  # type: ignore
+        # Commit (or roll back) on context exit, then close the handle UNLESS
+        # this is the store's cached ':memory:' connection. SQLite ':memory:'
+        # databases are per-connection, so that one must stay open for the
+        # lifetime of the store (closing it would discard the schema and every
+        # migration). File-based connections always close here so Windows test
+        # teardown can delete the .db / -wal / -shm files without PermissionError.
         try:
             if exc_type is None:
                 try:
@@ -30,10 +39,13 @@ class _AutoClosingConnection(sqlite3.Connection):
                 except Exception:
                     pass
         finally:
-            try:
-                self.close()
-            except Exception:
-                pass
+            # Skip closing the flagged long-lived ':memory:' connection so its
+            # schema and migrations survive this `with`; close everything else.
+            if not getattr(self, '_sqlite_keep_open', False):
+                try:
+                    self.close()
+                except Exception:
+                    pass
         return False
 
 
@@ -58,13 +70,17 @@ class SQLiteMemoryStore:
         else:
             key = KeyManagementProvider.get_encryption_key()
             self.encryption_provider = FernetEncryptionProvider(key)
+        self._conn: Optional[sqlite3.Connection] = None  # cached shared connection for ':memory:'
         self._initialize_database()
 
     def _get_connection(self) -> sqlite3.Connection:
-        # WAL mode + busy timeout: required for concurrent FastAPI workers.
-        # NOTE: SQLite is single-node dev/local only. Use pgvector for teams.
-        # Uses _AutoClosingConnection so `with` blocks commit AND close the handle
-        # (stock sqlite3 leaves it open -> Windows file locks + WAL handle leaks).
+        # SQLite ':memory:' is per-connection, so the schema created during
+        # _initialize_database must live on ONE shared connection. Cache a
+        # single connection only for ':memory:' stores; file-based stores use a
+        # fresh connection per query so that test teardown can remove the DB
+        # file cleanly.
+        if self.db_path == ":memory:" and self._conn is not None:
+            return self._conn
         conn = sqlite3.connect(
             self.db_path,
             timeout=10.0,
@@ -73,33 +89,62 @@ class SQLiteMemoryStore:
         )
         conn.row_factory = sqlite3.Row
         try:
-            # checkpoint on close keeps test -wal/-shm sidecars from lingering
             conn.execute("PRAGMA journal_mode=WAL;")
             conn.execute("PRAGMA busy_timeout=5000;")
             conn.execute("PRAGMA synchronous=NORMAL;")
         except Exception:
             pass
+        if self.db_path == ":memory:":
+            self._conn = conn
+            setattr(conn, "_sqlite_keep_open", True)
         return conn
 
     def close(self) -> None:
-        """Checkpoint WAL so no -wal/-shm sidecars linger after tests or shutdown."""
-        if self.db_path == ":memory:":
-            return
+        """Release the cached connection and checkpoint WAL sidecars.
+
+        File-based stores open a short-lived connection to run a WAL
+        checkpoint so no ``-wal``/``-shm`` files linger after tests or
+        shutdown; ':memory:' stores skip that (there is nothing on disk).
+        Either way the cached ':memory:' connection is then torn down.
+        """
         try:
-            conn = sqlite3.connect(self.db_path, timeout=5.0)
-            try:
-                conn.execute("PRAGMA wal_checkpoint(TRUNCATE);")
-                conn.commit()
-            finally:
-                conn.close()
+            if self.db_path != ":memory:":
+                conn = sqlite3.connect(self.db_path, timeout=5.0)
+                try:
+                    conn.execute("PRAGMA wal_checkpoint(TRUNCATE);")
+                    conn.commit()
+                finally:
+                    conn.close()
         except Exception:
             pass
+        finally:
+            self._close_conn()
+
+    def _close_conn(self) -> None:
+        """Close the store's cached ':memory:' connection, if one exists."""
+        conn = self._conn
+        if conn is not None:
+            try:
+                conn.close()
+            except Exception:
+                pass
+            self._conn = None
+
+    def _return_connection(self, conn: Any) -> None:
+        """Pool-compatible no-op.
+
+        SQLiteMemoryStore owns a single cached ':memory:' connection instead of
+        an external pool, so there is nothing to return. Exposing this method
+        lets ``run_migrations(..., owns_connection=False)`` hand the connection
+        back without closing it, keeping the ':memory:' schema alive.
+        """
+        pass
 
     def _initialize_database(self) -> None:
         """Creates the memory table with tenant isolation and index constraints on creation."""
-        with self._get_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute("""
+        conn = self._get_connection()
+        cursor = conn.cursor()
+        cursor.execute("""
                 CREATE TABLE IF NOT EXISTS memories (
                     id TEXT PRIMARY KEY,
                     tenant_id TEXT NOT NULL DEFAULT 'default',
@@ -115,35 +160,56 @@ class SQLiteMemoryStore:
                 )
             """)
 
-            # Migration check: Ensure tenant_id column exists if table was created in older version
-            cursor.execute("PRAGMA table_info(memories)")
-            columns = [info[1] for info in cursor.fetchall()]
-            if "tenant_id" not in columns:
-                cursor.execute(
-                    "ALTER TABLE memories ADD COLUMN tenant_id TEXT NOT NULL DEFAULT 'default'"
-                )
+        # Migration check: Ensure tenant_id column exists if the table was
+        # created by an older schema version.
+        cursor.execute("PRAGMA table_info(memories)")
+        columns = [info[1] for info in cursor.fetchall()]
+        if "tenant_id" not in columns:
+            cursor.execute(
+                "ALTER TABLE memories ADD COLUMN tenant_id TEXT NOT NULL DEFAULT 'default'"
+            )
 
-            cursor.execute(
-                "CREATE INDEX IF NOT EXISTS idx_tenant ON memories(tenant_id)"
-            )
-            cursor.execute(
-                "CREATE INDEX IF NOT EXISTS idx_tenant_category ON memories(tenant_id, category)"
-            )
-            cursor.execute(
-                "CREATE INDEX IF NOT EXISTS idx_category ON memories(category)"
-            )
-            cursor.execute(
-                "CREATE INDEX IF NOT EXISTS idx_created_at ON memories(created_at)"
-            )
-            cursor.execute(
-                "CREATE INDEX IF NOT EXISTS idx_last_accessed ON memories(last_accessed_at)"
-            )
-            conn.commit()
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_tenant ON memories(tenant_id)"
+        )
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_tenant_category ON memories(tenant_id, category)"
+        )
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_category ON memories(category)"
+        )
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_created_at ON memories(created_at)"
+        )
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_last_accessed ON memories(last_accessed_at)"
+        )
+        conn.commit()
 
         # Apply forward-only schema migrations (adds embedding_dimension /
         # model_version + migration ledger). Idempotent + versioned.
+        # ':memory:' is per-connection in SQLite, so the schema created during
+        # _initialize_database lives on our cached connection and must survive
+        # this run of migrations. Pass owns_connection=False so the cached
+        # connection is NOT closed here.
         from synapse_memory.core.migrations import run_migrations
-        run_migrations(self._get_connection, is_postgres=False, fail_closed=self.fail_closed)
+        if self.db_path == ":memory:":
+            run_migrations(
+                self._get_connection,
+                is_postgres=False,
+                fail_closed=self.fail_closed,
+                owns_connection=False,
+                close_on_exit=False,
+            )
+        else:
+            # File-based stores hand run_migrations a callable that returns the
+            # schema-init connection and let it own+close it. This also lets
+            # test teardown remove the DB file cleanly.
+            run_migrations(
+                lambda: conn,
+                is_postgres=False,
+                fail_closed=self.fail_closed,
+            )
 
     def insert_memory(self, memory: Dict[str, Any]) -> None:
         """Inserts a structured memory node into the SQLite table with tenant isolation."""

@@ -18,6 +18,7 @@ RUN npm ci
 # Build the Vite dashboard + server bundle.
 COPY tsconfig.json vite.config.ts index.html ./
 COPY server.ts ./
+COPY demo ./demo
 COPY src ./src
 RUN npm run build && npm prune --omit=dev
 

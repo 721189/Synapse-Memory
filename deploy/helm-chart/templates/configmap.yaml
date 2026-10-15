@@ -12,16 +12,26 @@ data:
   DB_PORT: {{ .Values.config.dbPort | quote }}
   DB_USER: {{ .Values.config.dbUser | quote }}
   DB_NAME: {{ .Values.config.dbName | quote }}
-  REDIS_URL: "redis://{{ .Values.config.redisHost }}:{{ .Values.config.redisPort }}/0"
   # Storage backend for the cognitive engine: pgvector (team/prod) or sqlite (dev)
   SYNAPSE_STORAGE_BACKEND: {{ .Values.config.storageBackend | quote }}
-  # Database connection string the Python engine uses to reach pgvector.
-  # Password is injected via the DB_PASSWORD env var (from Secret) in the Deployment.
-  DATABASE_URL: "postgresql://{{ .Values.config.dbUser }}:$(DB_PASSWORD)@{{ .Values.config.dbHost }}:{{ .Values.config.dbPort }}/{{ .Values.config.dbName }}"
-  PYTHON_ENGINE_URL: {{ .Values.config.pythonEngineUrl | quote }}
+  # NOTE: REDIS_URL intentionally NOT here: envFrom values are passed through
+  # literally, without $(VAR) expansion, so a password reference would never
+  # resolve. The engine Deployment builds its authenticated REDIS_URL from
+  # container-level env (where the kubelet expands $(REDIS_PASSWORD)).
+  # DATABASE_URL is built the same way in the engine Deployment.
+  # Derived in-cluster engine URL: must match the engine Service name
+  # (<fullname>-engine) for ANY release name. A hardcoded hostname silently
+  # breaks gateway -> engine routing (e.g. release "synapse" renders
+  # "synapse-synapse-memory-engine"). Set config.pythonEngineUrl to override.
+  PYTHON_ENGINE_URL: {{ .Values.config.pythonEngineUrl | default (printf "http://%s-engine:%v" (include "synapse-memory.fullname" .) (.Values.config.pythonPort | int)) | quote }}
   PYTHON_PORT: {{ .Values.config.pythonPort | quote }}
   # Fail-closed: never silently fall back to in-memory storage in production.
   SYNAPSE_ALLOW_DB_FALLBACK: "false"
+  # NOTE: DATABASE_URL intentionally NOT in the ConfigMap — it contains a
+  # secret reference. The engine Deployment builds it from container-level
+  # env (where kubelet expands $(DB_PASSWORD) from the Secret). Values
+  # injected via envFrom/configMapRef are passed through literally without
+  # $(VAR) expansion, so a password reference here would never resolve.
   # Disable demo/simulated routes in production.
   ENABLE_DEMO_ROUTES: {{ .Values.config.enableDemoRoutes | quote }}
   RATE_LIMIT_PER_MIN: {{ .Values.config.rateLimitPerMin | quote }}

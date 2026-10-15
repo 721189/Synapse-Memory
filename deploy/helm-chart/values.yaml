@@ -57,6 +57,33 @@ secrets:
   postgresPassword: ""
   redisPassword: ""
 
+# --- Split workloads: gateway + engine deploy as separate services ---
+gateway:
+  replicaCount: 2
+  image:
+    repository: synapse-memory/gateway
+    tag: "v1.2.0"
+  resources:
+    requests:
+      cpu: 250m
+      memory: 512Mi
+    limits:
+      cpu: 1000m
+      memory: 2Gi
+
+engine:
+  replicaCount: 2
+  image:
+    repository: synapse-memory/engine
+    tag: "v1.2.0"
+  resources:
+    requests:
+      cpu: 500m
+      memory: 1Gi
+    limits:
+      cpu: 2000m
+      memory: 4Gi
+
 config:
   nodeEnv: "production"
   tokenBudgetMax: "1500"
@@ -68,27 +95,40 @@ config:
   redisHost: "synapse-redis-master.default.svc.cluster.local"
   redisPort: "6379"
   storageBackend: "pgvector"
-  pythonEngineUrl: "http://127.0.0.1:8008"
+  # In-cluster engine address. LEAVE EMPTY: the ConfigMap derives it from the
+  # release's engine Service name (<fullname>-engine:<pythonPort>) so any
+  # `helm install <release>` resolves correctly. Set only to override (e.g.
+  # an engine running outside this release).
+  pythonEngineUrl: ""
   pythonPort: "8008"
   enableDemoRoutes: "false"
   rateLimitPerMin: "120"
   allowedOrigins: "http://localhost:3000"
   sqliteDbPath: "/data/synapse_memory.db"
+  # Schema ownership topology (see SECURITY.md "migrate-then-run"):
+  #   "true"  (default) the engine creates/upgrades its own schema (dev/single-role)
+  #   "false" production least-privilege: migrations are applied ahead of start-up
+  #           by the migration role, then run the engine with config.dbUser set to
+  #           the DML-only runtime role (e.g. synapse_app) created by
+  #           scripts/provision_db_roles.py — the runtime role cannot execute DDL.
+  applyDbSchema: "true"
 
-postgresql:
-  enabled: true
-  image:
-    repository: pgvector/pgvector
-    tag: pg16
-  auth:
-    username: synapse_admin
-    database: synapse_cognitive
-    existingSecret: "synapse-credentials"
-    secretKeys:
-      adminPasswordKey: "POSTGRES_PASSWORD"
-      userPasswordKey: "POSTGRES_PASSWORD"
-  primary:
-    persistence:
-      enabled: true
-      size: 100Gi
-      storageClass: ""
+# --- PostgreSQL: EXTERNAL dependency (deliberately NOT a chart subchart) ---
+# This chart does NOT deploy a database and has no `Chart.yaml` dependencies
+# on purpose:
+#   * the engine requires the pgvector extension (stock Bitnami/PostgreSQL
+#     subcharts do not ship it, and their POSTGRESQL_* entrypoint contract
+#     does not apply to the pgvector/pgvector image), and
+#   * the database lifecycle is owned by the operator: least-privilege roles
+#     (scripts/provision_db_roles.py) and migrations must run as a SEPARATE
+#     migration role before the engine starts (see SECURITY.md).
+# Operator checklist before `helm install`:
+#   1. Provision pgvector PostgreSQL (managed service or `pgvector/pgvector`)
+#      and point config.dbHost/dbPort/dbUser/dbName at it.
+#   2. Create the credentials Secret (secrets.existingSecret) with keys:
+#      SYNAPSE_API_KEY, SYNAPSE_ENCRYPTION_KEY, POSTGRES_PASSWORD,
+#      REDIS_PASSWORD (may be empty), GEMINI_API_KEY (optional).
+#   3. Provision roles, apply schema as the migration role, then set
+#      config.applyDbSchema=false and config.dbUser=<runtime-role>.
+# `docker-compose` follows the same model: its `postgres-pgvector` service is
+# a separate top-level service, not part of the engine/gateway images.
