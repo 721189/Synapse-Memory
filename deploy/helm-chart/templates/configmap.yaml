@@ -12,14 +12,18 @@ data:
   DB_PORT: {{ .Values.config.dbPort | quote }}
   DB_USER: {{ .Values.config.dbUser | quote }}
   DB_NAME: {{ .Values.config.dbName | quote }}
-  REDIS_URL: "redis://{{ .Values.config.redisHost }}:{{ .Values.config.redisPort }}/0"
   # Storage backend for the cognitive engine: pgvector (team/prod) or sqlite (dev)
   SYNAPSE_STORAGE_BACKEND: {{ .Values.config.storageBackend | quote }}
-  # DATABASE_URL is built in the engine Deployment's container env (where
-  # kubelet expands $(DB_PASSWORD) from the Secret). It must NOT live here:
-  # values injected via envFrom are passed through literally, without $(VAR)
-  # expansion, so a password reference in a ConfigMap would never resolve.
-  PYTHON_ENGINE_URL: {{ .Values.config.pythonEngineUrl | quote }}
+  # NOTE: REDIS_URL intentionally NOT here: envFrom values are passed through
+  # literally, without $(VAR) expansion, so a password reference would never
+  # resolve. The engine Deployment builds its authenticated REDIS_URL from
+  # container-level env (where the kubelet expands $(REDIS_PASSWORD)).
+  # DATABASE_URL is built the same way in the engine Deployment.
+  # Derived in-cluster engine URL: must match the engine Service name
+  # (<fullname>-engine) for ANY release name. A hardcoded hostname silently
+  # breaks gateway -> engine routing (e.g. release "synapse" renders
+  # "synapse-synapse-memory-engine"). Set config.pythonEngineUrl to override.
+  PYTHON_ENGINE_URL: {{ .Values.config.pythonEngineUrl | default (printf "http://%s-engine:%v" (include "synapse-memory.fullname" .) (.Values.config.pythonPort | int)) | quote }}
   PYTHON_PORT: {{ .Values.config.pythonPort | quote }}
   # Fail-closed: never silently fall back to in-memory storage in production.
   SYNAPSE_ALLOW_DB_FALLBACK: "false"

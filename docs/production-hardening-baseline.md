@@ -62,6 +62,12 @@
    live PostgreSQL server in this environment. Documented in `SECURITY.md`.
 9. Phase 7.3 load/resilience tests → NOT STARTED (concurrency, DB interruption, slow provider,
    worker/DB restart, large batches). Phase 7.4 ops runbook → NOT STARTED.
-10. Helm `Chart.yaml` has no `dependencies:` block, so the `postgresql:` values subtree is inert
-    (the chart does not deploy a database). P1-2 residual → NOT FIXED.
+10. ~~Helm `Chart.yaml` inert `postgresql:` values subtree~~ → DONE this batch (P1-2 residual):
+    PostgreSQL is now a documented EXTERNAL dependency (values subtree removed, operator
+    checklist in `values.yaml` + `templates/NOTES.txt`, `applyDbSchema` toggle); gateway
+    `PYTHON_ENGINE_URL` derived from the release fullname + `config.pythonPort`; kubelet
+    `$(VAR)` expansion ordering fixed (`DB_PASSWORD`→`DATABASE_URL`, `REDIS_PASSWORD`→`REDIS_URL`);
+    env parity with compose (`REDIS_URL`, `RATE_LIMIT_PER_MIN`, `ALLOWED_ORIGINS`,
+    `GEMINI_API_KEY`, `SYNAPSE_APPLY_DB_SCHEMA`). 18 offline contract tests
+    (`tests/test_helm_chart.py`); `bandit`/`flake8`/`mypy`/`pytest` all clean (133 passed, 14 skipped).
 

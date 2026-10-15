@@ -10,3 +10,9 @@ maintainers:
 home: https://github.com/721189/Synapse-Memory
 sources:
   - https://github.com/721189/Synapse-Memory
+# PostgreSQL is deliberately an EXTERNAL dependency: there is intentionally no
+# `dependencies:` block here. The engine needs the pgvector extension (not
+# shipped by stock PostgreSQL subcharts) and the database lifecycle —
+# least-privilege roles + migrations run by a separate migration role — is
+# owned by the operator. See values.yaml and SECURITY.md for the operator
+# checklist. `helm lint`/`helm template` therefore need no dependency build.

@@ -23,30 +23,63 @@ spec:
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           ports:
             - name: http
-              containerPort: 8008
+              containerPort: {{ .Values.config.pythonPort | int }}
               protocol: TCP
           env:
             - name: NODE_ENV
               value: {{ .Values.config.nodeEnv | quote }}
             - name: SYNAPSE_STORAGE_BACKEND
               value: {{ .Values.config.storageBackend | quote }}
+            # Kubelet `$(VAR)` expansion only sees variables defined EARLIER in
+            # this same env list. DB_PASSWORD must therefore be declared BEFORE
+            # DATABASE_URL — otherwise the pod boots with the literal string
+            # "$(DB_PASSWORD)" as the password, auth fails, and fail-closed
+            # startup crash-loops the engine.
+            - name: DB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.secrets.existingSecret | default (printf "%s-secret" (include "synapse-memory.fullname" .)) }}
+                  key: POSTGRES_PASSWORD
             - name: DATABASE_URL
               value: "postgresql://{{ .Values.config.dbUser }}:$(DB_PASSWORD)@{{ .Values.config.dbHost }}:{{ .Values.config.dbPort }}/{{ .Values.config.dbName }}"
+            # "false" = migrate-then-run: schema was applied ahead of start-up by
+            # the migration role; the engine connects as the DML-only runtime
+            # role (config.dbUser) which cannot execute DDL. See SECURITY.md.
+            - name: SYNAPSE_APPLY_DB_SCHEMA
+              value: {{ .Values.config.applyDbSchema | quote }}
+            # Distributed rate limiting: REDIS_PASSWORD must precede REDIS_URL
+            # for the same expansion reason as above. optional: the key may be
+            # absent/empty when Redis runs without requirepass — the engine
+            # then connects without AUTH (the rate limiter degrades to the
+            # in-process window if the URL is unusable; requests never fail).
+            - name: REDIS_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.secrets.existingSecret | default (printf "%s-secret" (include "synapse-memory.fullname" .)) }}
+                  key: REDIS_PASSWORD
+                  optional: true
+            - name: REDIS_URL
+              value: "redis://:$(REDIS_PASSWORD)@{{ .Values.config.redisHost }}:{{ .Values.config.redisPort }}/0"
+            - name: RATE_LIMIT_PER_MIN
+              value: {{ .Values.config.rateLimitPerMin | quote }}
+            - name: ALLOWED_ORIGINS
+              value: {{ .Values.config.allowedOrigins | quote }}
+            - name: GEMINI_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.secrets.existingSecret | default (printf "%s-secret" (include "synapse-memory.fullname" .)) }}
+                  key: GEMINI_API_KEY
+                  optional: true
             - name: SYNAPSE_ENCRYPTION_KEY
               valueFrom:
                 secretKeyRef:
-                  name: {{ .Values.secrets.existingSecret }}
+                  name: {{ .Values.secrets.existingSecret | default (printf "%s-secret" (include "synapse-memory.fullname" .)) }}
                   key: SYNAPSE_ENCRYPTION_KEY
             - name: SYNAPSE_API_KEY
               valueFrom:
                 secretKeyRef:
-                  name: {{ .Values.secrets.existingSecret }}
+                  name: {{ .Values.secrets.existingSecret | default (printf "%s-secret" (include "synapse-memory.fullname" .)) }}
                   key: SYNAPSE_API_KEY
-            - name: DB_PASSWORD
-              valueFrom:
-                secretKeyRef:
-                  name: {{ .Values.secrets.existingSecret }}
-                  key: POSTGRES_PASSWORD
             - name: SYNAPSE_ALLOW_DB_FALLBACK
               value: "false"
             - name: TOKEN_BUDGET_MAX

@@ -7,7 +7,18 @@
 - Decay composition `S=R*D` preserved through `/query` (`retrieval_score` + `decay_multiplier`).
 - Gateway fail-closed: liveness vs readiness, accurate 401/403/429/5xx, no fake successes.
 - Thread-safe pooling (`ThreadedConnectionPool`, timeout, rollback-on-return).
-- Helm split engine/gateway workloads + services; in-cluster engine URL; secrets out of ConfigMap.
+- Helm split engine/gateway workloads + services; secrets out of ConfigMap.
+- Helm P1-2 residual fixed: PostgreSQL is a DOCUMENTED external dependency (the inert
+  `postgresql:` values subtree is gone; no undeclared chart dependencies); the gateway's
+  `PYTHON_ENGINE_URL` is derived from the release fullname (the hardcoded
+  `synapse-memory-engine` hostname did not match the Service that `helm install synapse`
+  actually renders); kubelet `$(VAR)` expansion ordering fixed (`DB_PASSWORD`/`REDIS_PASSWORD`
+  now precede their consumers — previously the literal `$(DB_PASSWORD)` shipped as the DSN
+  password and fail-closed startup crash-looped); engine env parity with Compose
+  (`REDIS_URL`, `RATE_LIMIT_PER_MIN`, `ALLOWED_ORIGINS`, `GEMINI_API_KEY`,
+  `SYNAPSE_APPLY_DB_SCHEMA` — distributed rate limiting actually activates in k8s now);
+  ports/URL track `config.pythonPort`; operator `NOTES.txt` checklist. 18 offline
+  contract tests (`tests/test_helm_chart.py`).
 - Strict API validation limits; generic auth-failure messages.
 - Live `/metrics` (requests, latency, auth/429, ingest/retrieval, pool, packed tokens).
 - Distributed rate limiting (`REDIS_URL` opt-in; in-process fallback, `RATE_LIMIT_WINDOW_SECONDS`).

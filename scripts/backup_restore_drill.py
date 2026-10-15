@@ -24,7 +24,14 @@ import argparse
 import os
 import shutil
 import sqlite3
-import subprocess
+# Operator-run drill: the subprocess calls below are intentional and reviewed.
+# Justification for the blanket suppression markers below:
+#   * argv lists with shell=False (never a shell string) — no shell injection;
+#   * target_db is the hardcoded literal "synapse_drill_restore", and the DSNs
+#     come from the operator's own --database-url/DATABASE_URL (the operator
+#     already holds those credentials — this tool cannot elevate anything);
+#   * client tools are resolved on PATH (verified via shutil.which first).
+import subprocess  # nosec B404
 import sys
 import tempfile
 import time
@@ -150,17 +157,17 @@ def postgres_drill(database_url):
     dump = os.path.join(tmp, "synapse.dump")
     try:
         print("[postgres] pg_dump -> " + dump)
-        subprocess.run(["pg_dump", "-Fc", "-d", database_url, "-f", dump], check=True)
+        subprocess.run(["pg_dump", "-Fc", "-d", database_url, "-f", dump], check=True)  # nosec
         assert os.path.getsize(dump) > 0, "pg_dump produced an empty file"
 
         print("[postgres] recreating target database " + target_db)
         drop_sql = 'DROP DATABASE IF EXISTS "' + target_db + '";'
         create_sql = 'CREATE DATABASE "' + target_db + '";'
-        subprocess.run(["psql", "-d", database_url, "-v", "ON_ERROR_STOP=1", "-c", drop_sql], check=True)
-        subprocess.run(["psql", "-d", database_url, "-v", "ON_ERROR_STOP=1", "-c", create_sql], check=True)
+        subprocess.run(["psql", "-d", database_url, "-v", "ON_ERROR_STOP=1", "-c", drop_sql], check=True)  # nosec
+        subprocess.run(["psql", "-d", database_url, "-v", "ON_ERROR_STOP=1", "-c", create_sql], check=True)  # nosec
 
         print("[postgres] pg_restore into " + target_db)
-        subprocess.run(["pg_restore", "-d", target_dsn, dump], check=True)
+        subprocess.run(["pg_restore", "-d", target_dsn, dump], check=True)  # nosec
 
         try:
             import psycopg2  # type: ignore

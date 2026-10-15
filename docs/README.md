@@ -71,8 +71,18 @@ All responses: `{ success, data, request_id }` envelope.
 ## Docker Compose / Helm
 
 ```bash
+# Compose bundles pgvector + Redis as separate services.
 docker compose -f deploy/docker-compose.yml up -d
-helm install synapse deploy/helm-chart --set config.nodeEnv=production
+
+# Helm deploys gateway + engine ONLY: PostgreSQL is an EXTERNAL dependency
+# (pgvector). Before installing: provision the DB, create the
+# 'synapse-credentials' Secret (SYNAPSE_API_KEY, SYNAPSE_ENCRYPTION_KEY,
+# POSTGRES_PASSWORD, REDIS_PASSWORD), run scripts/provision_db_roles.py, apply
+# the schema as the migration role, then install with
+# --set config.applyDbSchema=false --set config.dbUser=synapse_app and
+# --set config.dbHost=<pgvector-host>. See deploy/helm-chart/values.yaml and
+# `helm install ... --help` NOTES for the full operator checklist.
+helm install synapse deploy/helm-chart --set config.nodeEnv=production --set config.dbHost=<pgvector-host>
 ```
 
 ## Python SDK
