@@ -19,6 +19,15 @@
   `SYNAPSE_APPLY_DB_SCHEMA` — distributed rate limiting actually activates in k8s now);
   ports/URL track `config.pythonPort`; operator `NOTES.txt` checklist. 18 offline
   contract tests (`tests/test_helm_chart.py`).
+- Phase 7.3 load & resilience suite (`tests/test_load_resilience.py`, 17 offline tests):
+  parallel writers/readers lose nothing; a DB interruption raises fail-fast (no fake
+  success, no partial rows) and the store recovers; slow embedding providers degrade
+  latency without retry storms and repeated queries hit the embed cache; worker
+  crash-restart preserves every row with idempotent migrations and `integrity_check ok`;
+  1000-row corpus + tenant/category matrix keep search quality and isolation; HTTP
+  read/write bursts, 100-item bulk (auto-prune bound ≤ 50 per tenant), and a full store
+  outage on the real gateway (ingest 500s fail-closed, `/liveness` stays DB-independent,
+  instant recovery).
 - Strict API validation limits; generic auth-failure messages.
 - Live `/metrics` (requests, latency, auth/429, ingest/retrieval, pool, packed tokens).
 - Distributed rate limiting (`REDIS_URL` opt-in; in-process fallback, `RATE_LIMIT_WINDOW_SECONDS`).

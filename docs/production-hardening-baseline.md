@@ -6,9 +6,11 @@
 
 ## Test evidence
 - `PYTHONPATH=sdk/python pytest sdk/python/tests -q`
-  - Base: 54 → P0: 61 → P1/P2: 70 → rate-limit: 90 → **P0-5 runtime-role: 115 passed, 14 skipped**
+  - Base: 54 → P0: 61 → P1/P2: 70 → rate-limit: 90 → P0-5 runtime-role: 115 → P1-2 Helm: 133 →
+    **Phase 7.3 load/resilience: 150 passed, 14 skipped**
   - New: 3 decay-composition + 4 RRF/encryption + 7 validation/migration/metrics + 14 rate-limiter
-    + 19 least-privilege role-provisioning + 7 runtime-role RLS isolation tests
+    + 19 least-privilege role-provisioning + 7 runtime-role RLS isolation + 18 Helm chart
+    + 17 load/resilience tests
 - The 14 skips are environment-gated: 7 Postgres integration tests without `DATABASE_URL`, and the
   7 new runtime-role isolation tests without `SYNAPSE_APP_DATABASE_URL` (both run in the CI
   `python-pgvector-integration-tests` job).
@@ -60,8 +62,10 @@
    layer blocks it (`resolve_tenant`), but RLS alone does not contain a compromised app process.
    Fix = role-gated admin path inside the policy; deferred because it cannot be verified without a
    live PostgreSQL server in this environment. Documented in `SECURITY.md`.
-9. Phase 7.3 load/resilience tests → NOT STARTED (concurrency, DB interruption, slow provider,
-   worker/DB restart, large batches). Phase 7.4 ops runbook → NOT STARTED.
+9. ~~Phase 7.3 load/resilience tests~~ → DONE this batch: `tests/test_load_resilience.py`
+   (17 offline tests — concurrency, DB interruption, slow provider, worker/DB restart,
+   large batches, incl. HTTP bursts / 100-item bulk / gateway outage via TestClient).
+   Phase 7.4 ops runbook → NOT STARTED.
 10. ~~Helm `Chart.yaml` inert `postgresql:` values subtree~~ → DONE this batch (P1-2 residual):
     PostgreSQL is now a documented EXTERNAL dependency (values subtree removed, operator
     checklist in `values.yaml` + `templates/NOTES.txt`, `applyDbSchema` toggle); gateway
