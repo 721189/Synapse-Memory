@@ -4,10 +4,11 @@ import hmac
 import logging
 import os
 import secrets
-from typing import Optional
+from typing import Any, Optional
 
 logger = logging.getLogger("SynapseEncryption")
 
+Fernet: Any
 try:
     from cryptography.fernet import Fernet
     HAS_CRYPTOGRAPHY = True
@@ -152,10 +153,9 @@ class FernetEncryptionProvider:
         else:
             self.key = key
 
+        self._cipher: Any = None
         if HAS_CRYPTOGRAPHY and Fernet is not None:
-            self._cipher = Fernet(self.key)
-        else:
-            self._cipher = None
+            self._cipher = Fernet(self.key)  # type: ignore[operator]
 
     @staticmethod
     def generate_key() -> bytes:

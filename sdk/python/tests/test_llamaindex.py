@@ -13,7 +13,12 @@ from synapse_memory.core.embedder import SynapseEmbedder
 class TestSynapseLlamaIndexIntegration(unittest.TestCase):
 
     def setUp(self):
-        self.db_path = "test_llamaindex_memory.db"
+        self.db_path = f"test_llamaindex_memory_{self._testMethodName}.db"
+        if os.path.exists(self.db_path):
+            try:
+                os.remove(self.db_path)
+            except OSError:
+                pass
         self.store = SQLiteMemoryStore(self.db_path)
         self.embedder = SynapseEmbedder(provider="local")
         self.memory = SynapseLlamaIndexMemory(
@@ -23,6 +28,10 @@ class TestSynapseLlamaIndexIntegration(unittest.TestCase):
         )
 
     def tearDown(self):
+        try:
+            self.store.close()
+        except Exception:
+            pass
         if os.path.exists(self.db_path):
             try:
                 os.remove(self.db_path)
