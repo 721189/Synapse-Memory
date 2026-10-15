@@ -1,20 +1,91 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: {{ include "synapse-memory.fullname" . }}-gateway
+  name: {{ include "synapse-memory.fullname" . }}-engine
   labels:
     {{- include "synapse-memory.labels" . | nindent 4 }}
+    app.kubernetes.io/component: engine
 spec:
-  {{- if not .Values.autoscaling.enabled }}
-  replicas: {{ .Values.replicaCount }}
-  {{- end }}
+  replicas: {{ .Values.engine.replicaCount }}
   selector:
     matchLabels:
       {{- include "synapse-memory.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: engine
   template:
     metadata:
       labels:
         {{- include "synapse-memory.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: engine
+    spec:
+      containers:
+        - name: engine
+          image: "{{ .Values.engine.image.repository }}:{{ .Values.engine.image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          ports:
+            - name: http
+              containerPort: 8008
+              protocol: TCP
+          env:
+            - name: NODE_ENV
+              value: {{ .Values.config.nodeEnv | quote }}
+            - name: SYNAPSE_STORAGE_BACKEND
+              value: {{ .Values.config.storageBackend | quote }}
+            - name: DATABASE_URL
+              value: "postgresql://{{ .Values.config.dbUser }}:$(DB_PASSWORD)@{{ .Values.config.dbHost }}:{{ .Values.config.dbPort }}/{{ .Values.config.dbName }}"
+            - name: SYNAPSE_ENCRYPTION_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.secrets.existingSecret }}
+                  key: SYNAPSE_ENCRYPTION_KEY
+            - name: SYNAPSE_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.secrets.existingSecret }}
+                  key: SYNAPSE_API_KEY
+            - name: DB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.secrets.existingSecret }}
+                  key: POSTGRES_PASSWORD
+            - name: SYNAPSE_ALLOW_DB_FALLBACK
+              value: "false"
+            - name: TOKEN_BUDGET_MAX
+              value: {{ .Values.config.tokenBudgetMax | quote }}
+          livenessProbe:
+            httpGet:
+              path: /liveness
+              port: http
+            initialDelaySeconds: 20
+            periodSeconds: 10
+          readinessProbe:
+            httpGet:
+              path: /readiness
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 5
+          resources:
+            {{- toYaml .Values.engine.resources | nindent 12 }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "synapse-memory.fullname" . }}-gateway
+  labels:
+    {{- include "synapse-memory.labels" . | nindent 4 }}
+    app.kubernetes.io/component: gateway
+spec:
+  {{- if not .Values.autoscaling.enabled }}
+  replicas: {{ .Values.gateway.replicaCount }}
+  {{- end }}
+  selector:
+    matchLabels:
+      {{- include "synapse-memory.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: gateway
+  template:
+    metadata:
+      labels:
+        {{- include "synapse-memory.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: gateway
       annotations:
         prometheus.io/scrape: "true"
         prometheus.io/path: "/metrics"
@@ -22,7 +93,7 @@ spec:
     spec:
       containers:
         - name: gateway
-          image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+          image: "{{ .Values.gateway.image.repository }}:{{ .Values.gateway.image.tag | default .Chart.AppVersion }}"
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           ports:
             - name: http
@@ -67,9 +138,9 @@ spec:
             periodSeconds: 10
           readinessProbe:
             httpGet:
-              path: /api/health
+              path: /api/ready
               port: http
             initialDelaySeconds: 5
             periodSeconds: 5
           resources:
-            {{- toYaml .Values.resources | nindent 12 }}
+            {{- toYaml .Values.gateway.resources | nindent 12 }}

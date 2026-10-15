@@ -22,7 +22,7 @@ logger = logging.getLogger("SynapseMigrations")
 
 # Ledger + metadata columns tracked on the memories table so embedding-model
 # upgrades (e.g. 128-d hash -> 384-d MiniLM) are explicit, not silent.
-CURRENT_SCHEMA_VERSION = 3
+CURRENT_SCHEMA_VERSION = 4
 
 
 @dataclass
@@ -76,10 +76,31 @@ def _m3_backfill_dimension(cur: Any) -> None:
     cur.execute("UPDATE memories SET embedding_dimension = 0 WHERE embedding_dimension IS NULL;")
 
 
+def _m4_content_plain_search_projection(cur: Any) -> None:
+    """v4: Combined-protection search projection for field-encrypted content.
+
+    Adds `content_plain` (searchable projection feeding the tsvector index).
+    Existing rows backfill `content_plain` from `content` ONLY when that
+    column still holds plaintext — i.e. rows written before P0-2 field
+    encryption. Rows already holding Fernet ciphertext are left untouched
+    (re-encrypting ciphertext would destroy recoverability); operators must
+    run the documented key-rotation/re-encryption sweep for those.
+    Detection heuristic: Fernet tokens are urlsafe-base64 starting with
+    'gAAAAA'; anything else is treated as legacy plaintext.
+    """
+    _add_column_if_missing(cur, "memories", "content_plain", "TEXT NOT NULL DEFAULT ''")
+    cur.execute(
+        "UPDATE memories SET content_plain = content "
+        "WHERE (content_plain IS NULL OR content_plain = '') "
+        "AND content NOT LIKE 'gAAAAA%';"
+    )
+
+
 MIGRATIONS: List[Migration] = [
     Migration(1, "embedding_metadata", _m1_embedding_metadata, _m1_embedding_metadata),
     Migration(2, "migration_ledger", _m2_migration_ledger, _m2_migration_ledger),
     Migration(3, "backfill_dimension", _m3_backfill_dimension, _m3_backfill_dimension),
+    Migration(4, "content_plain_search_projection", _m4_content_plain_search_projection, _m4_content_plain_search_projection),
 ]
 
 

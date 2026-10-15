@@ -57,6 +57,33 @@ secrets:
   postgresPassword: ""
   redisPassword: ""
 
+# --- Split workloads: gateway + engine deploy as separate services ---
+gateway:
+  replicaCount: 2
+  image:
+    repository: synapse-memory/gateway
+    tag: "v1.2.0"
+  resources:
+    requests:
+      cpu: 250m
+      memory: 512Mi
+    limits:
+      cpu: 1000m
+      memory: 2Gi
+
+engine:
+  replicaCount: 2
+  image:
+    repository: synapse-memory/engine
+    tag: "v1.2.0"
+  resources:
+    requests:
+      cpu: 500m
+      memory: 1Gi
+    limits:
+      cpu: 2000m
+      memory: 4Gi
+
 config:
   nodeEnv: "production"
   tokenBudgetMax: "1500"
@@ -68,7 +95,8 @@ config:
   redisHost: "synapse-redis-master.default.svc.cluster.local"
   redisPort: "6379"
   storageBackend: "pgvector"
-  pythonEngineUrl: "http://127.0.0.1:8008"
+  # In-cluster engine address (NOT 127.0.0.1): gateway -> engine Service.
+  pythonEngineUrl: "http://synapse-memory-engine:8008"
   pythonPort: "8008"
   enableDemoRoutes: "false"
   rateLimitPerMin: "120"

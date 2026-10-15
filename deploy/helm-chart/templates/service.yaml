@@ -1,9 +1,28 @@
 apiVersion: v1
 kind: Service
 metadata:
+  name: {{ include "synapse-memory.fullname" . }}-engine
+  labels:
+    {{- include "synapse-memory.labels" . | nindent 4 }}
+    app.kubernetes.io/component: engine
+spec:
+  type: ClusterIP
+  ports:
+    - port: 8008
+      targetPort: http
+      protocol: TCP
+      name: http
+  selector:
+    {{- include "synapse-memory.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: engine
+---
+apiVersion: v1
+kind: Service
+metadata:
   name: {{ include "synapse-memory.fullname" . }}-gateway
   labels:
     {{- include "synapse-memory.labels" . | nindent 4 }}
+    app.kubernetes.io/component: gateway
 spec:
   type: {{ .Values.service.type }}
   ports:
@@ -13,3 +32,4 @@ spec:
       name: http
   selector:
     {{- include "synapse-memory.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: gateway

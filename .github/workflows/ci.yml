@@ -164,3 +164,68 @@ jobs:
           DATABASE_URL: postgresql://synapse_test:synapse_test@localhost:5432/synapse_test
           SYNAPSE_ENCRYPTION_KEY: "2N53Wk7u2V5bK1wU_1F5Y9mZ7zN53Wk7u2V5bK1wU_0="
         run: pytest sdk/python/tests/test_pgvector_integration.py -v
+
+  split-image-build:
+    name: Split Docker Images + Compose Smoke
+    runs-on: ubuntu-latest
+    needs: [python-tests, frontend-build]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build engine image
+        run: docker build -f Dockerfile.engine -t synapse-engine:ci .
+
+      - name: Build gateway image
+        run: docker build -f Dockerfile.gateway -t synapse-gateway:ci .
+
+      - name: Validate compose config
+        run: docker compose -f deploy/docker-compose.yml config
+
+      - name: Scan engine image
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: synapse-engine:ci
+          severity: 'CRITICAL,HIGH'
+          exit-code: '0'
+
+      - name: Scan gateway image
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: synapse-gateway:ci
+          severity: 'CRITICAL,HIGH'
+          exit-code: '0'
+
+  helm-validate:
+    name: Helm Template Validation
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Helm
+        uses: azure/setup-helm@v4
+        with:
+          version: v3.14.0
+
+      - name: Lint chart
+        run: helm lint deploy/helm-chart
+
+      - name: Render manifests
+        run: helm template synapse deploy/helm-chart --values deploy/helm-chart/values.yaml
+
+      - name: Validate rendered manifests parse
+        run: helm template synapse deploy/helm-chart | python3 -c "import sys,yaml; list(yaml.safe_load_all(sys.stdin)); print('manifests parse OK')"
+
+  secret-scan:
+    name: Secret Scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: TruffleHog secret scan
+        uses: trufflesecurity/trufflehog@main
+        with:
+          path: ./
+          base: ${{ github.event.repository.default_branch }}
+          head: HEAD
