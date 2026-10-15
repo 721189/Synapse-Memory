@@ -8,6 +8,10 @@ from synapse_memory.core.knapsack_packer import KnapsackPacker
 from synapse_memory.core.decay_engine import DecayEngine
 from synapse_memory.integrations.langchain import SynapseLangChainMemory
 from synapse_memory.integrations.llamaindex import SynapseLlamaIndexMemory
+from synapse_memory.client import SynapseClient, SynapseError, CreateResult, QueryResult
+
+__version__ = "1.2.0"
+__api_compat_version__ = "v1"
 
 __all__ = [
     "MemoryManager",
@@ -20,4 +24,8 @@ __all__ = [
     "DecayEngine",
     "SynapseLangChainMemory",
     "SynapseLlamaIndexMemory",
+    "SynapseClient",
+    "SynapseError",
+    "CreateResult",
+    "QueryResult",
 ]

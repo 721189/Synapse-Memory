@@ -166,8 +166,10 @@ All responses: `{ success: bool, data: <payload>, request_id: string }`.
 | `SYNAPSE_EMBEDDING_PROVIDER` | `local` | `local` / `deterministic` / `gemini` / `openai` |
 | `TOKEN_BUDGET_MAX` | `4000` | Knapsack token window cap |
 | `RATE_LIMIT_PER_MIN` | `120` | Per-key rate limit |
+| `REDIS_URL` | — | Redis DSN; enables cross-replica rate limiting (else in-process) |
 | `ENABLE_DEMO_ROUTES` | `false` in prod | Simulated demo endpoints |
 | `NODE_ENV` | `development` | `production` = strict auth + fail-closed |
+| `SYNAPSE_APPLY_DB_SCHEMA` | `true` | `false` = migrate-then-run: run the engine as a DML-only runtime role (see `SECURITY.md`) |
 
 ---
 

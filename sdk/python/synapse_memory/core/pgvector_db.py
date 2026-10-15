@@ -56,7 +56,8 @@ class PGVectorMemoryStore:
         ef_construction: int = 64,
         encryption_provider: Optional[Any] = None,
         auto_init: bool = True,
-        fail_closed: bool = False
+        fail_closed: bool = False,
+        apply_schema: bool = True,
     ):
         # SECURITY: never ship a default password. Require explicit DATABASE_URL in prod.
         # Local dev convenience default uses an obviously-insecure placeholder and logs a warning.
@@ -71,6 +72,12 @@ class PGVectorMemoryStore:
         self.m = m
         self.ef_construction = ef_construction
         self.fail_closed = fail_closed
+        # apply_schema=False = "migrate-then-run" production topology: DDL and the
+        # migration ledger are owned by a separate migration role/step, and the
+        # engine connects with a least-privilege runtime role that has DML only.
+        # See scripts/provision_db_roles.py. Default True preserves the
+        # single-role local/dev behaviour.
+        self.apply_schema = apply_schema
         self._pool: Optional[Any] = None
         self._connected = False
 
@@ -111,7 +118,13 @@ class PGVectorMemoryStore:
                     1, 10, self.connection_string, connect_timeout=5
                 )
             self._connected = True
-            self._initialize_database()
+            if self.apply_schema:
+                self._initialize_database()
+            else:
+                # Runtime-role topology: the operator already ran DDL + migrations.
+                # Verify that, so a missing table fails loudly instead of silently
+                # serving from the in-memory fallback cache.
+                self._verify_schema_present()
             logger.info("PGVectorMemoryStore successfully connected to PostgreSQL.")
         except Exception as e:
             self._connected = False
@@ -122,15 +135,50 @@ class PGVectorMemoryStore:
                 f"PostgreSQL/pgvector connection unviable ({e}); operating in fallback mode."
             )
 
+    def _verify_schema_present(self) -> None:
+        """Read-only guard for the ``apply_schema=False`` (runtime-role) topology.
+
+        When the engine runs as a least-privilege DML-only role it must not attempt
+        DDL, so we cannot create the schema on start-up. Instead we prove the
+        schema was provisioned by the migration step; if ``memories`` is absent we
+        raise rather than silently degrading to the in-memory fallback cache
+        (which would fake successful writes and lose data on restart).
+        """
+        conn = self._get_connection()
+        try:
+            with conn.cursor() as cur:
+                cur.execute("SELECT to_regclass('public.memories') IS NOT NULL;")
+                row = cur.fetchone()
+                present = bool(row[0]) if row else False
+            if not present:
+                raise RuntimeError(
+                    "Schema not provisioned: table 'memories' is missing. Run the "
+                    "migration step (SQLite/Postgres DDL + migrations) before starting "
+                    "the engine with apply_schema=False."
+                )
+        finally:
+            self._return_connection(conn)
+
     def _initialize_database(self) -> None:
         if not self._connected or not HAS_PSYCOPG2:
             return
         conn = self._get_connection()
         try:
             with conn.cursor() as cur:
-                # 1. Enable extensions
-                cur.execute("CREATE EXTENSION IF NOT EXISTS vector;")
-                cur.execute("CREATE EXTENSION IF NOT EXISTS pg_trgm;")
+                # 1. Enable extensions. On a least-privilege migration role these
+                # may already be installed by a DBA; CREATE EXTENSION needs
+                # superuser for non-trusted extensions, so treat it as deferrable
+                # rather than fatal (mirrors the FTS block below).
+                try:
+                    cur.execute("CREATE EXTENSION IF NOT EXISTS vector;")
+                    cur.execute("CREATE EXTENSION IF NOT EXISTS pg_trgm;")
+                except Exception as ext_err:
+                    logger.warning(
+                        "Extension initialization deferred (install `vector` and "
+                        "`pg_trgm` as a DBA if this role lacks CREATE EXTENSION): %s",
+                        ext_err,
+                    )
+                    conn.rollback()
 
                 # 2. Main cognitive memories table with tenant_id
                 cur.execute(f"""
@@ -286,7 +334,12 @@ class PGVectorMemoryStore:
         # + migration ledger). Versioned + idempotent across restarts.
         try:
             from synapse_memory.core.migrations import run_migrations
-            run_migrations(self._get_connection, is_postgres=True, fail_closed=self.fail_closed)
+            run_migrations(
+                self._get_connection,
+                is_postgres=True,
+                fail_closed=self.fail_closed,
+                owns_connection=False,
+            )
         except Exception as mig_err:
             logger.warning(f"Schema migrations deferred: {mig_err}")
 

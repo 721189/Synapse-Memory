@@ -1,34 +1,67 @@
 # Production-Hardening Baseline Report
 
 - Branch: `production-hardening`
-- Commit: `576f05b818a000e56c481eb8967b53f7d90cba44` (+ working-tree P0 fixes below)
+- Commits: `576f05b` (base) → `996dfc6` (P0) → `93e44c3` (P1/P2 batch)
 - Date (UTC): 2026-10-14
 
 ## Test evidence
-- `PYTHONPATH=sdk/python pytest sdk/python/tests -q --ignore=test_pgvector_integration.py`
-  - Before P0 changes: 54 passed
-  - After P0 changes: **61 passed** (added 3 decay-composition tests + 4 RRF/encryption regression tests)
-- `test_pgvector_integration.py` requires a live pgvector container (`DATABASE_URL=postgresql://synapse_test:synapse_test@localhost:5432/synapse_test`); not run in this environment — recorded as open baseline item per Phase 1.
-- Gateway `npm run lint/build`, `docker build` (engine/gateway), Compose smoke, and Helm validation remain open baseline items (no Node/Docker toolchain in this environment).
+- `PYTHONPATH=sdk/python pytest sdk/python/tests -q`
+  - Base: 54 → P0: 61 → P1/P2: 70 → rate-limit: 90 → **P0-5 runtime-role: 115 passed, 14 skipped**
+  - New: 3 decay-composition + 4 RRF/encryption + 7 validation/migration/metrics + 14 rate-limiter
+    + 19 least-privilege role-provisioning + 7 runtime-role RLS isolation tests
+- The 14 skips are environment-gated: 7 Postgres integration tests without `DATABASE_URL`, and the
+  7 new runtime-role isolation tests without `SYNAPSE_APP_DATABASE_URL` (both run in the CI
+  `python-pgvector-integration-tests` job).
+- `flake8 sdk/python/synapse_memory scripts` → clean. `mypy` → clean (26 files).
+  `bandit sdk/python/synapse_memory scripts` → clean.
+- Gateway `npm run lint/build`, `docker build` (engine/gateway), Compose smoke, Helm render: covered by new CI jobs; need a green CI run to close Phase 1 fully.
 
-## P0 fixes applied (Phase 2)
-- P0-1 hybrid RRF: `COALESCE(1.0/(60+d.rank),0.0)+COALESCE(1.0/(60+l.rank),0.0)`; fixed lexical param-count bug (`params=[query]` + `[query, top_k]` tail).
-- P0-2 encryption (combined protection): `content` = Fernet ciphertext, `content_plain` = searchable projection for tsvector; all read paths decrypt via `_decrypt_row`; wrong key raises (fail safe); embeddings + tsvector documented as readable derivatives.
-- P0-3 gateway fail-closed: `/api/health` = liveness only; new `/api/ready` = 503 when engine down; list/add/clear/chat return 401/403/503 accurately in production, no fake successes, no demo-data mixing.
-- P0-4 decay: `S(m,q,t)=R(m,q)*D(m,t)` via `temporal_multiplier()` + `combine_scores()`; `/query` preserves `retrieval_score` and adds `decay_multiplier`.
-- P0-5 isolation: unchanged RLS design verified by existing integration tests (needs live PG run in CI); no code change — admin sentinel + `SET LOCAL` + rollback-on-return already present.
-- P0-6 pooling: `ThreadedConnectionPool` (fallback Simple), `connect_timeout=5`, rollback before `putconn`.
+## Fixes applied (Phases 1–4, 7–8 partial)
+- P0-1 RRF COALESCE + lexical param-count fix.
+- P0-2 combined-protection field encryption (`content` ciphertext + `content_plain` search projection); v4 migration backfills legacy rows only.
+- P0-3 gateway fail-closed (liveness vs readiness, no fake successes, no demo mixing in prod).
+- P0-4 `S=R*D` decay composition preserved through `/query`.
+- P0-5 Proven with the actual runtime role: `scripts/provision_db_roles.py` creates/repairs
+  a least-privilege DML-only runtime role (NON-owner, NOBYPASSRLS, NOSUPERUSER, no schema
+  CREATE) plus a migration role, and exits non-zero unless the invariant verifies. Engine
+  gained the "migrate-then-run" topology (`apply_schema=False` / `SYNAPSE_APPLY_DB_SCHEMA`)
+  and now refuses to start when the schema is missing instead of degrading to in-memory.
+  New tests: `tests/test_db_role_provisioning.py` (19 offline contract tests) and
+  `tests/test_pgvector_integration.py::TestRuntimeRoleIsolation` (7 live tests, run in CI as
+  the real runtime role). CI pgvector job now provisions roles → migrates as the migration
+  role → re-provisions (idempotency) → `--verify-only` gate → runs the suite with both DSNs.
+- P0-6 `ThreadedConnectionPool` + timeout + rollback-on-return; `pool_stats()` for metrics.
+- P1-1 gateway image copies `demo/`; compose healthchecks on `/readiness` + `/api/ready`.
+- P1-2 Helm split engine/gateway workloads + services; in-cluster engine URL; DATABASE_URL moved out of ConfigMap into container env; resource blocks per workload.
+- P1-3 strict Pydantic validation on all schemas; generic auth-failure messages.
+- P1-4 migration v4 + idempotency test.
+- P2-3 live `/metrics` (requests, latency p50/p95, auth/429, ingest/retrieval, pool, packed tokens).
+- P2-4 CI: split-image build + Trivy, Helm lint/template/parse, TruffleHog secret scan.
 
 ## Threat model (P0-2 decision)
 | Layer | Protection | Notes |
 |---|---|---|
 | Volume / managed Postgres encryption | Protects everything at rest (ciphertext, embeddings, tsvector) | Must be enabled by operator; verify with provider |
-| Field-level (`content` Fernet) | Authoritative content unreadable without `SYNAPSE_ENCRYPTION_KEY` | Key via env/file-mount/KMS; never logged/returned; rotation = re-encrypt via `reembed`-style sweep (procedure TBD Phase 4) |
+| Field-level (`content` Fernet) | Authoritative content unreadable without `SYNAPSE_ENCRYPTION_KEY` | Key via env/file-mount/KMS; never logged/returned; rotation via re-encryption sweep (see `docs/backup-recovery.md`) |
 | Searchable derivatives | `content_plain`, `search_vector` tsvector, `embedding` HNSW remain readable by design | Required for BM25 + vector search; do NOT claim "all stored data encrypted" |
 | Key loss | Reads raise `RuntimeError`, fail safe | Backup must include key custody; unrecoverable without key |
 
-## Open items (honest gaps)
-1. Live pgvector integration suite run (needs container).
-2. `npm ci/lint/build`, both `docker build`, Compose smoke, Helm render/deploy.
-3. Migration idempotency test on old schema + backup/restore drill (Phase 4).
-4. Rate-limit distribution claim: still in-process; either wire Redis or document single-instance (Phase 3D).
+## Remaining gaps → status
+1. Live pgvector integration suite → CI job exists; needs green run.
+2. npm/docker/helm binary validation → npm `lint` (tsc --noEmit) and `build` (vite + esbuild) PASS locally; `docker build` + `helm template` remain CI-only (no local daemon/helm). Needs the green CI run to close.
+3. ~~Migration idempotency + backup/restore drill~~ → DONE: v4 idempotency test + executable drill `scripts/backup_restore_drill.py` (SQLite verified locally: rows/ledger/wrong-key fail-safe; Postgres path gated on client tools); 5 tests.
+4. ~~Rate-limit distribution~~ → DONE: `core/rate_limiter.py` (Redis sorted-set sliding window + in-process fallback); `REDIS_URL` wired in compose/Helm/`.env.example`; `/metrics` exposes `synapse_rate_limit_backend`; 14 unit tests.
+5. SDK publish + quickstart (P2-1) → DONE this batch (`SynapseClient`, versioned 1.2.0, quickstart doc).
+6. Benchmark corpus (P2-2) → DONE this batch (`tests/test_retrieval_eval.py`, measured-only bench script).
+7. Release artifacts (P2-4) → DONE this batch (CHANGELOG, version map, SECURITY update).
+8. ~~P0-5 runtime-role proof~~ → DONE this batch (see above). **Residual (tracked, not fixed):**
+   the RLS admin path is a session-GUC sentinel, so a process holding the runtime DSN can set
+   `app.current_tenant='__synapse_admin__'` and bypass RLS at the database layer. The application
+   layer blocks it (`resolve_tenant`), but RLS alone does not contain a compromised app process.
+   Fix = role-gated admin path inside the policy; deferred because it cannot be verified without a
+   live PostgreSQL server in this environment. Documented in `SECURITY.md`.
+9. Phase 7.3 load/resilience tests → NOT STARTED (concurrency, DB interruption, slow provider,
+   worker/DB restart, large batches). Phase 7.4 ops runbook → NOT STARTED.
+10. Helm `Chart.yaml` has no `dependencies:` block, so the `postgresql:` values subtree is inert
+    (the chart does not deploy a database). P1-2 residual → NOT FIXED.
+

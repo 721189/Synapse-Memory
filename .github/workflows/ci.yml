@@ -2,7 +2,7 @@ name: Synapse CI/CD Matrix Pipeline
 
 on:
   push:
-    branches: [main, master, develop]
+    branches: [main, master, develop, 'production-*']
   pull_request:
     branches: [main, master]
 
@@ -45,13 +45,13 @@ jobs:
           python -c "import synapse_memory; from synapse_memory.core import SQLiteMemoryStore, PGVectorMemoryStore, SynapseEmbedder, HybridSearch, KnapsackPacker, DecayEngine, SecurityManager; print('All core engines imported OK')"
 
       - name: Code Style (flake8)
-        run: flake8 sdk/python/synapse_memory --config=setup.cfg
+        run: flake8 sdk/python/synapse_memory scripts --config=setup.cfg
 
       - name: Static Type Analysis (mypy)
         run: mypy sdk/python/synapse_memory --config-file setup.cfg
 
       - name: Security Scan (bandit)
-        run: bandit -r sdk/python/synapse_memory -s B101,B104,B105,B110,B310,B311,B608
+        run: bandit -r sdk/python/synapse_memory scripts -s B101,B104,B105,B110,B310,B311,B608
 
   python-tests:
     name: Python ${{ matrix.python-version }} Tests
@@ -158,10 +158,54 @@ jobs:
           python -m pip install --upgrade pip setuptools wheel
           pip install -e "sdk/python[pgvector,dev]"
 
+      - name: Provision least-privilege roles (P0-5)
+        env:
+          DATABASE_URL: postgresql://synapse_test:synapse_test@localhost:5432/synapse_test
+        run: |
+          python scripts/provision_db_roles.py \
+            --runtime-role synapse_app \
+            --admin-role synapse_admin \
+            --runtime-password synapse_app_ci \
+            --admin-password synapse_admin_ci
+
+      - name: Install required extensions (DBA step, as superuser)
+        env:
+          PGPASSWORD: synapse_test
+        run: |
+          psql -h localhost -U synapse_test -d synapse_test -v ON_ERROR_STOP=1 \
+            -c "CREATE EXTENSION IF NOT EXISTS vector;" \
+            -c "CREATE EXTENSION IF NOT EXISTS pg_trgm;"
+
+      - name: Migrate schema as the admin role (migrate-then-run topology)
+        env:
+          PYTHONPATH: sdk/python
+          DATABASE_URL: postgresql://synapse_admin:synapse_admin_ci@localhost:5432/synapse_test
+          SYNAPSE_ENCRYPTION_KEY: "2N53Wk7u2V5bK1wU_1F5Y9mZ7zN53Wk7u2V5bK1wU_0="
+        run: |
+          python -c "from synapse_memory.core.pgvector_db import PGVectorMemoryStore; s = PGVectorMemoryStore(connection_string='$DATABASE_URL', dimension=384, fail_closed=True); print('schema provisioned; connected =', s.is_connected)"
+
+      - name: Re-run provisioning to grant DML on the created tables (idempotency check)
+        env:
+          DATABASE_URL: postgresql://synapse_test:synapse_test@localhost:5432/synapse_test
+        run: |
+          python scripts/provision_db_roles.py \
+            --runtime-role synapse_app \
+            --admin-role synapse_admin \
+            --runtime-password synapse_app_ci \
+            --admin-password synapse_admin_ci
+
+      - name: Verify runtime-role invariant (fails the build if broken)
+        env:
+          DATABASE_URL: postgresql://synapse_test:synapse_test@localhost:5432/synapse_test
+        run: |
+          python scripts/provision_db_roles.py \
+            --runtime-role synapse_app --admin-role synapse_admin --verify-only
+
       - name: Run PGVector Integration Tests
         env:
           PYTHONPATH: sdk/python
-          DATABASE_URL: postgresql://synapse_test:synapse_test@localhost:5432/synapse_test
+          DATABASE_URL: postgresql://synapse_admin:synapse_admin_ci@localhost:5432/synapse_test
+          SYNAPSE_APP_DATABASE_URL: postgresql://synapse_app:synapse_app_ci@localhost:5432/synapse_test
           SYNAPSE_ENCRYPTION_KEY: "2N53Wk7u2V5bK1wU_1F5Y9mZ7zN53Wk7u2V5bK1wU_0="
         run: pytest sdk/python/tests/test_pgvector_integration.py -v
 

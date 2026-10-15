@@ -114,16 +114,38 @@ def _applied_versions(cur: Any) -> set:
         return set()
 
 
-def run_migrations(get_connection: Callable[[], Any], is_postgres: bool, fail_closed: bool = False) -> int:
-    """Apply all pending forward migrations. Returns count applied. Idempotent."""
+def run_migrations(
+    get_connection: Callable[[], Any],
+    is_postgres: bool,
+    fail_closed: bool = False,
+    close_on_exit: bool = True,
+    owns_connection: bool = True,
+) -> int:
+    """Apply all pending forward migrations. Returns count applied. Idempotent.
+
+    Args:
+        get_connection: Callable returning a fresh connection for this run.
+        is_postgres: Dialect to apply (SQLite vs PostgreSQL).
+        fail_closed: Raise on migration failure instead of skipping.
+        close_on_exit: If True (default), the connection is released when the run
+            finishes. Set False only when the caller keeps the connection alive
+            and reuses it afterwards, e.g. SQLiteMemoryStore caching its
+            schema-init ':memory:' connection.
+        owns_connection: If True (default), treat the returned connection as
+            freshly-owned (non-pooled) and close it in the finally block. Set
+            False when the connection belongs to an external pool that must be
+            returned, not closed. Existing callers can rely on the default True
+            (fresh connection). PGVectorMemoryStore passes a pooled connection
+            and sets this False.
+
+        The connection is closed only when ``owns_connection`` AND
+        ``close_on_exit`` are both True. Otherwise it is handed back through the
+        factory owner's ``_return_connection`` hook (when present) or closed as
+        a last-resort fallback.
+    """
     applied_total = 0
     conn = get_connection()
-    # True only when the factory hands us a fresh (non-pooled) connection that
-    # we own. PGVectorMemoryStore passes a bound method returning pooled
-    # connections — closing those would destroy pool slots.
-    owns_connection = not (
-        hasattr(get_connection, "__self__") and hasattr(get_connection.__self__, "_pool")
-    )
+    should_close = owns_connection and close_on_exit
     try:
         cur = conn.cursor()
         # The ledger (v2) must exist before we can read it; bootstrap directly.
@@ -155,7 +177,7 @@ def run_migrations(get_connection: Callable[[], Any], is_postgres: bool, fail_cl
                 logger.warning("Migration v%d (%s) skipped: %s", migration.version, migration.name, e)
     finally:
         try:
-            if owns_connection:
+            if should_close:
                 conn.close()
             else:
                 # Return pooled connections to the pool instead of closing.

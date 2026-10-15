@@ -40,6 +40,13 @@ FAIL_CLOSED_DB = bool(DATABASE_URL) and not ALLOW_DB_FALLBACK
 # Gate demo/simulated routes (infrastructure fantasy metrics, licensing toy).
 # Production deployments MUST set ENABLE_DEMO_ROUTES=false.
 ENABLE_DEMO_ROUTES = os.environ.get("ENABLE_DEMO_ROUTES", "false" if IS_PRODUCTION else "true").lower() == "true"
+# Schema ownership topology. true (default) = the engine creates/upgrades its own
+# schema (single-role local/dev). false = "migrate-then-run": DDL + migrations are
+# performed ahead of start-up by the migration role, and the engine connects as a
+# least-privilege DML-only runtime role (scripts/provision_db_roles.py). Required
+# when the runtime role is a NON-owner without BYPASSRLS, because such a role
+# cannot execute DDL.
+APPLY_DB_SCHEMA = os.environ.get("SYNAPSE_APPLY_DB_SCHEMA", "true").lower() == "true"
 
 # Security & Distributed Identity Engine
 security_manager = SecurityManager(
@@ -58,7 +65,8 @@ if STORAGE_BACKEND == "pgvector":
         store = PGVectorMemoryStore(
             connection_string=DATABASE_URL,
             dimension=embedding_dimension,
-            fail_closed=True
+            fail_closed=True,
+            apply_schema=APPLY_DB_SCHEMA,
         )
         ACTIVE_BACKEND = "pgvector"
         logger.info(f"Canonical Production Engine using PostgreSQL + pgvector ({embedding_dimension}-d HNSW) at {str(DATABASE_URL)[:20]}...")
@@ -70,7 +78,8 @@ elif STORAGE_BACKEND == "auto" and DATABASE_URL:
         store = PGVectorMemoryStore(
             connection_string=DATABASE_URL,
             dimension=embedding_dimension,
-            fail_closed=FAIL_CLOSED_DB or IS_PRODUCTION
+            fail_closed=FAIL_CLOSED_DB or IS_PRODUCTION,
+            apply_schema=APPLY_DB_SCHEMA,
         )
         ACTIVE_BACKEND = "pgvector"
         logger.info(f"Canonical Production Engine using PostgreSQL + pgvector ({embedding_dimension}-d HNSW) at {str(DATABASE_URL)[:20]}...")
@@ -90,12 +99,15 @@ packer = KnapsackPacker(token_budget=min(int(os.environ.get("TOKEN_BUDGET_MAX", 
 decay = DecayEngine(category_configs={})
 searcher = HybridSearch()
 
-# --- Minimal in-process rate limiting (no extra deps; replace with Redis in HA) ---
-# NOTE (Phase 3D): counters are per-process. Single-instance deployments are
-# supported; multi-replica HA requires the Redis-backed limiter (not yet wired).
-_rate_buckets: Dict[str, list] = {}
-_rate_lock = threading.Lock()
+# --- Rate limiting: distributed (Redis) when configured, else in-process ---
+# REDIS_URL enables a Redis sorted-set sliding window enforced across ALL
+# replicas; without it (or when Redis is unreachable) we degrade to a
+# thread-safe per-process window. See synapse_memory.core.rate_limiter.
+from synapse_memory.core.rate_limiter import build_rate_limiter
+
 RATE_LIMIT_PER_MIN = int(os.environ.get("RATE_LIMIT_PER_MIN", "120"))
+RATE_LIMIT_WINDOW_SECONDS = float(os.environ.get("RATE_LIMIT_WINDOW_SECONDS", "60"))
+rate_limiter = build_rate_limiter()
 
 # --- Live operational metrics (no extra deps; scraped via /metrics) ---
 _metrics_lock = threading.Lock()
@@ -122,17 +134,12 @@ def _record_request(path: str, status: int, latency_s: float) -> None:
 
 
 def _check_rate_limit(key: str) -> None:
-    now = time.time()
-    window_start = now - 60.0
-    with _rate_lock:
-        bucket = _rate_buckets.setdefault(key, [])
-        bucket[:] = [t for t in bucket if t > window_start]
-        if len(bucket) >= RATE_LIMIT_PER_MIN:
-            global _rate_limit_rejections
-            with _metrics_lock:
-                _rate_limit_rejections += 1
-            raise HTTPException(status_code=429, detail="Rate limit exceeded. Retry after 60s.")
-        bucket.append(now)
+    global _rate_limit_rejections
+    if rate_limiter.check(key, RATE_LIMIT_PER_MIN, RATE_LIMIT_WINDOW_SECONDS):
+        return
+    with _metrics_lock:
+        _rate_limit_rejections += 1
+    raise HTTPException(status_code=429, detail="Rate limit exceeded. Retry after 60s.")
 
 
 # Initialize FastAPI application (MUST precede any @app.middleware / route registration)
@@ -589,7 +596,7 @@ def query_memory(
     # 3. Dynamic programming 0/1 Knapsack optimal budget packing
     packed_nodes = packer.pack(decayed_candidates, payload.max_token_budget)
 
-    global _retrieval_success, _retrieval_errors, _last_candidate_count, _last_packed_tokens
+    global _retrieval_success, _last_candidate_count, _last_packed_tokens
     with _metrics_lock:
         _retrieval_success += 1
         _last_candidate_count = len(candidates)
@@ -924,13 +931,16 @@ def prometheus_metrics():
     pool_stats: Dict[str, Any] = {}
     for candidate in (store, security_manager):
         stats_fn = getattr(candidate, "pool_stats", None)
-        if callable(stats_fn):
-            try:
-                pool_stats = stats_fn() or {}
-                if pool_stats:
-                    break
-            except Exception:
-                continue
+        if not callable(stats_fn):
+            continue
+        try:
+            candidate_stats = stats_fn() or {}
+        except Exception:
+            logger.debug("pool_stats() failed for %r", candidate)
+            candidate_stats = {}
+        if candidate_stats:
+            pool_stats = candidate_stats
+            break
     lines = [
         "# HELP synapse_memories_total Total indexed memories",
         "# TYPE synapse_memories_total gauge",
@@ -945,8 +955,8 @@ def prometheus_metrics():
         "# TYPE synapse_requests_total counter",
     ]
     with _metrics_lock:
-        for (path, status), count in sorted(_request_counts.items()):
-            lines.append(f"synapse_requests_total{{path=\"{path}\",status=\"{status}\"}} {count}")
+        for (path, status_code), count in sorted(_request_counts.items()):
+            lines.append(f"synapse_requests_total{{path=\"{path}\",status=\"{status_code}\"}} {count}")
         lines += [
             "# HELP synapse_auth_failures_total Authentication/authorization failures",
             "# TYPE synapse_auth_failures_total counter",
@@ -976,6 +986,9 @@ def prometheus_metrics():
         "# HELP synapse_db_pool_size Configured DB pool size",
         "# TYPE synapse_db_pool_size gauge",
         f"synapse_db_pool_size {pool_stats.get('pool_size', 0)}",
+        "# HELP synapse_rate_limit_backend Active rate-limiter backend (constant 1)",
+        "# TYPE synapse_rate_limit_backend gauge",
+        f'synapse_rate_limit_backend{{backend="{rate_limiter.backend}"}} 1',
     ]
     lat_lines = ["# HELP synapse_request_latency_seconds Request latency by endpoint", "# TYPE synapse_request_latency_seconds summary"]
     with _metrics_lock:
