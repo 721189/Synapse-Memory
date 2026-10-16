@@ -699,8 +699,14 @@ class PGVectorMemoryStore:
         try:
             with conn.cursor(cursor_factory=RealDictCursor) as cur:
                 self._set_tenant_context(cur, tenant_id)
+                # SQL text order of %s placeholders:
+                # 1. SELECT ts_rank's plainto_tsquery  -> query
+                # 2. WHERE @@ plainto_tsquery          -> query
+                # 3. WHERE tenant_id                   -> tenant_id (if present)
+                # 4. WHERE category                    -> category (if present)
+                # 5. LIMIT                             -> top_k
                 conditions = ["search_vector @@ plainto_tsquery('english', %s)"]
-                params: List[Any] = [query]
+                params: List[Any] = [query, query]
                 if tenant_id:
                     conditions.append("tenant_id = %s")
                     params.append(tenant_id)
@@ -719,7 +725,7 @@ class PGVectorMemoryStore:
                     ORDER BY lexical_rank DESC
                     LIMIT %s
                 """
-                params.extend([query, top_k])
+                params.append(top_k)
                 cur.execute(sql, tuple(params))
                 rows = cur.fetchall()
                 out = []
