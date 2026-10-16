@@ -876,57 +876,56 @@ class PGVectorMemoryStore:
 
     def query_candidates(
         self,
-        tenant_id: str,
-        limit: int = 50,
+        category: Optional[str] = None,
+        tenant_id: Optional[str] = None,
+        min_confidence: float = 0.0,
+        limit: int = 100,
+        order_by: str = "last_accessed_at DESC",
     ) -> List[Dict[str, Any]]:
-        """Return candidate memories scoped to one tenant.
-
-        This method intentionally keeps tenant scoping in both the session
-        context and the SQL predicate. RLS remains the database-level
-        enforcement layer, while the predicate prevents accidental
-        cross-tenant candidate selection.
         """
-        if not tenant_id:
-            return []
-
-        if limit <= 0:
-            return []
+        Retrieves a bounded candidate set directly using SQL indexes
+        instead of loading the entire corpus into application memory.
+        """
+        if not self._connected or not HAS_PSYCOPG2:
+            if tenant_id:
+                return [m for m in self._fallback_cache.values() if m.get("tenant_id") == tenant_id][:limit]
+            return list(self._fallback_cache.values())[:limit]
 
         conn = self._get_connection()
         try:
             with conn.cursor(cursor_factory=RealDictCursor) as cur:
                 self._set_tenant_context(cur, tenant_id)
 
-                cur.execute(
-                    """
-                    SELECT
-                        id,
-                        tenant_id,
-                        content,
-                        content_plain,
-                        category,
-                        confidence,
-                        created_at,
-                        last_accessed_at,
-                        access_count,
-                        token_cost,
-                        feedback_multiplier,
-                        embedding,
-                        embedding_dimension,
-                        model_version
-                    FROM memories
-                    WHERE tenant_id = %s
-                    ORDER BY
-                        confidence DESC NULLS LAST,
-                        last_accessed_at DESC NULLS LAST,
-                        created_at DESC
-                    LIMIT %s;
-                    """,
-                    (tenant_id, limit),
-                )
-                return [dict(row) for row in cur.fetchall()]
-        except Exception as exc:
-            self._handle_db_error("query candidates", exc)
+                conditions = ["confidence >= %s"]
+                params: List[Any] = [min_confidence]
+                if tenant_id:
+                    conditions.append("tenant_id = %s")
+                    params.append(tenant_id)
+                if category:
+                    conditions.append("category = %s")
+                    params.append(category)
+
+                safe_orders = {
+                    "last_accessed_at DESC": "last_accessed_at DESC",
+                    "created_at DESC": "created_at DESC",
+                    "access_count DESC": "access_count DESC",
+                    "confidence DESC": "confidence DESC",
+                }
+                order_clause = safe_orders.get(order_by, "last_accessed_at DESC")
+
+                where_clause = "WHERE " + " AND ".join(conditions)
+                sql = f"""
+                    SELECT * FROM memories
+                    {where_clause}
+                    ORDER BY {order_clause}
+                    LIMIT %s
+                """
+                params.append(limit)
+                cur.execute(sql, tuple(params))
+                rows = cur.fetchall()
+                return [self._decrypt_row(dict(r)) for r in rows]
+        except Exception as e:
+            self._handle_db_error("query_candidates", e)
             return []
         finally:
             self._return_connection(conn)
