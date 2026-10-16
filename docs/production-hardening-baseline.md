@@ -65,7 +65,7 @@
 9. ~~Phase 7.3 load/resilience tests~~ → DONE this batch: `tests/test_load_resilience.py`
    (17 offline tests — concurrency, DB interruption, slow provider, worker/DB restart,
    large batches, incl. HTTP bursts / 100-item bulk / gateway outage via TestClient).
-   Phase 7.4 ops runbook → NOT STARTED.
+   Phase 7.4 ops runbook → DONE (see docs/ops-runbook.md).
 10. ~~Helm `Chart.yaml` inert `postgresql:` values subtree~~ → DONE this batch (P1-2 residual):
     PostgreSQL is now a documented EXTERNAL dependency (values subtree removed, operator
     checklist in `values.yaml` + `templates/NOTES.txt`, `applyDbSchema` toggle); gateway

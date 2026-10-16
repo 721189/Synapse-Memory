@@ -3,7 +3,7 @@ Production-grade LlamaIndex drop-in memory integration for Synapse Memory.
 Compliant with llama_index.core.memory.BaseMemory.
 """
 
-from typing import Dict, Any, List, Optional, cast
+from typing import Dict, Any, List, Optional
 import time
 import logging
 
@@ -22,21 +22,21 @@ try:
     from llama_index.core.bridge.pydantic import Field, PrivateAttr
     HAS_LLAMAINDEX = True
 except ImportError:
-    class BaseMemory:  # type: ignore[no-redef]
+    class BaseMemory:  # type: ignore[no-redef]  # noqa: F811
         pass
 
-    def Field(default: Any = None, **kwargs: Any) -> Any:  # type: ignore[no-redef]
+    def Field(default: Any = None, **kwargs: Any) -> Any:  # type: ignore[no-redef]  # noqa: F811
         return default
 
-    def PrivateAttr(default: Any = None, **kwargs: Any) -> Any:  # type: ignore[no-redef]
+    def PrivateAttr(default: Any = None, **kwargs: Any) -> Any:  # type: ignore[no-redef]  # noqa: F811
         return default
 
-    class MessageRole:  # type: ignore[no-redef]
+    class MessageRole:  # type: ignore[no-redef]  # noqa: F811
         USER = "user"
         ASSISTANT = "assistant"
         SYSTEM = "system"
 
-    class ChatMessage:  # type: ignore[no-redef]
+    class ChatMessage:  # type: ignore[no-redef]  # noqa: F811
         def __init__(
             self,
             role: Any = MessageRole.USER,
