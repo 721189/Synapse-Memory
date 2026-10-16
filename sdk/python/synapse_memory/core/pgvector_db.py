@@ -874,6 +874,63 @@ class PGVectorMemoryStore:
         finally:
             self._return_connection(conn)
 
+    def query_candidates(
+        self,
+        tenant_id: str,
+        limit: int = 50,
+    ) -> List[Dict[str, Any]]:
+        """Return candidate memories scoped to one tenant.
+
+        This method intentionally keeps tenant scoping in both the session
+        context and the SQL predicate. RLS remains the database-level
+        enforcement layer, while the predicate prevents accidental
+        cross-tenant candidate selection.
+        """
+        if not tenant_id:
+            return []
+
+        if limit <= 0:
+            return []
+
+        conn = self._get_connection()
+        try:
+            with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                self._set_tenant_context(cur, tenant_id)
+
+                cur.execute(
+                    """
+                    SELECT
+                        id,
+                        tenant_id,
+                        content,
+                        content_plain,
+                        category,
+                        confidence,
+                        created_at,
+                        last_accessed_at,
+                        access_count,
+                        token_cost,
+                        feedback_multiplier,
+                        embedding,
+                        embedding_dimension,
+                        model_version
+                    FROM memories
+                    WHERE tenant_id = %s
+                    ORDER BY
+                        confidence DESC NULLS LAST,
+                        last_accessed_at DESC NULLS LAST,
+                        created_at DESC
+                    LIMIT %s;
+                    """,
+                    (tenant_id, limit),
+                )
+                return [dict(row) for row in cur.fetchall()]
+        except Exception as exc:
+            self._handle_db_error("query candidates", exc)
+            return []
+        finally:
+            self._return_connection(conn)
+
     def delete_memory(self, memory_id: str, tenant_id: Optional[str] = None) -> None:
         self._fallback_cache.pop(memory_id, None)
         if not self._connected or not HAS_PSYCOPG2:
