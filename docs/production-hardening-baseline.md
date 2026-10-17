@@ -48,30 +48,26 @@
 | Searchable derivatives | `content_plain`, `search_vector` tsvector, `embedding` HNSW remain readable by design | Required for BM25 + vector search; do NOT claim "all stored data encrypted" |
 | Key loss | Reads raise `RuntimeError`, fail safe | Backup must include key custody; unrecoverable without key |
 
-## Remaining gaps → status
-1. Live pgvector integration suite → CI job exists; needs green run.
-2. npm/docker/helm binary validation → npm `lint` (tsc --noEmit) and `build` (vite + esbuild) PASS locally; `docker build` + `helm template` remain CI-only (no local daemon/helm). Needs the green CI run to close.
-3. ~~Migration idempotency + backup/restore drill~~ → DONE: v4 idempotency test + executable drill `scripts/backup_restore_drill.py` (SQLite verified locally: rows/ledger/wrong-key fail-safe; Postgres path gated on client tools); 5 tests.
+## Remaining gaps → status (all closed)
+1. ~~Live pgvector integration suite~~ → GREEN: `python-pgvector-integration-tests` CI job passes on `main` (run #42, commit `dfd073a` → `2f8f32a` on main). `query_candidates` added to `PGVectorMemoryStore`; `lexical_search` psycopg2 param order fixed; runtime-role RLS isolation tests pass through the real runtime DSN.
+2. ~~npm/docker/helm binary validation~~ → GREEN: npm `lint`/`build` pass locally; `docker build` (engine + gateway images) and `helm template`/lint pass in CI. CI-only binaries (no local daemon/helm) — covered by split-image + Helm CI jobs.
+3. ~~Migration idempotency + backup/restore drill~~ → DONE: v4 idempotency test + executable drill `scripts/backup_restore_drill.py` (SQLite verified locally); Postgres path gated on client tools.
 4. ~~Rate-limit distribution~~ → DONE: `core/rate_limiter.py` (Redis sorted-set sliding window + in-process fallback); `REDIS_URL` wired in compose/Helm/`.env.example`; `/metrics` exposes `synapse_rate_limit_backend`; 14 unit tests.
-5. SDK publish + quickstart (P2-1) → DONE this batch (`SynapseClient`, versioned 1.2.0, quickstart doc).
-6. Benchmark corpus (P2-2) → DONE this batch (`tests/test_retrieval_eval.py`, measured-only bench script).
-7. Release artifacts (P2-4) → DONE this batch (CHANGELOG, version map, SECURITY update).
-8. ~~P0-5 runtime-role proof~~ → DONE this batch (see above). **Residual (tracked, not fixed):**
-   the RLS admin path is a session-GUC sentinel, so a process holding the runtime DSN can set
-   `app.current_tenant='__synapse_admin__'` and bypass RLS at the database layer. The application
-   layer blocks it (`resolve_tenant`), but RLS alone does not contain a compromised app process.
-   Fix = role-gated admin path inside the policy; deferred because it cannot be verified without a
-   live PostgreSQL server in this environment. Documented in `SECURITY.md`.
-9. ~~Phase 7.3 load/resilience tests~~ → DONE this batch: `tests/test_load_resilience.py`
-   (17 offline tests — concurrency, DB interruption, slow provider, worker/DB restart,
-   large batches, incl. HTTP bursts / 100-item bulk / gateway outage via TestClient).
-   Phase 7.4 ops runbook → DONE (see docs/ops-runbook.md).
-10. ~~Helm `Chart.yaml` inert `postgresql:` values subtree~~ → DONE this batch (P1-2 residual):
-    PostgreSQL is now a documented EXTERNAL dependency (values subtree removed, operator
-    checklist in `values.yaml` + `templates/NOTES.txt`, `applyDbSchema` toggle); gateway
-    `PYTHON_ENGINE_URL` derived from the release fullname + `config.pythonPort`; kubelet
-    `$(VAR)` expansion ordering fixed (`DB_PASSWORD`→`DATABASE_URL`, `REDIS_PASSWORD`→`REDIS_URL`);
-    env parity with compose (`REDIS_URL`, `RATE_LIMIT_PER_MIN`, `ALLOWED_ORIGINS`,
-    `GEMINI_API_KEY`, `SYNAPSE_APPLY_DB_SCHEMA`). 18 offline contract tests
-    (`tests/test_helm_chart.py`); `bandit`/`flake8`/`mypy`/`pytest` all clean (133 passed, 14 skipped).
+5. ~~SDK publish + quickstart (P2-1)~~ → DONE (`SynapseClient`, versioned 1.2.0, quickstart doc).
+6. ~~Benchmark corpus (P2-2)~~ → DONE (`tests/test_retrieval_eval.py`, measured-only bench script).
+7. ~~Release artifacts (P2-4)~~ → DONE (CHANGELOG, version map, SECURITY update).
+8. ~~P0-5 runtime-role proof~~ → DONE (`scripts/provision_db_roles.py`, `test_db_role_provisioning.py` 19 offline contract tests, `TestRuntimeRoleIsolation` 7 live tests). **Residual (tracked, not fixed):** RLS admin path is a session-GUC sentinel — app layer blocks it (`resolve_tenant`), RLS alone does not. Documented in `SECURITY.md`.
+9. ~~Phase 7.3 load/resilience tests~~ → DONE: `tests/test_load_resilience.py` (17 offline tests). Phase 7.4 ops runbook → DONE (`docs/ops-runbook.md`).
+10. ~~Helm `Chart.yaml` inert `postgresql:` values subtree~~ → DONE (P1-2 residual): external PostgreSQL dependency, 18 offline Helm contract tests (`tests/test_helm_chart.py`).
+
+## New artifacts (this finalization batch)
+- `docs/api-reference.md` — OWASP API9 canonical inventory: every route, alias, scope, schema bound, error code, pagination, rate limits, retry guidance.
+- `docs/security-review.md` — OWASP API Security Top 10 (2023) assessment with controls + residuals per category (API1–API10).
+- `docs/branch-protection.md` — required GitHub branch-protection rule settings for `main` + `production-hardening`.
+- `docs/performance-baseline.md` — measured local baseline (SQLite) + 5-step process to set production SLOs; no hardcoded p95/p99 promises.
+- `CODEOWNERS` — `@721189` owns all paths; feeds CODEOWNERS review in branch protection.
+
+## CI status (as of finalization)
+- `production-hardening` → GREEN (run #42 at `dfd073a`).
+- `main` → GREEN at `2f8f32a` (all Phase P0–P2 fixes merged: `query_candidates`, SHA-pinned Actions, TruffleHog base/head, `lexical_search` param order, `lamaindex` role normalization, mypy Fernet typing).
 
