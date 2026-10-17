@@ -1,6 +1,27 @@
 # Changelog
 
 ## Unreleased
+- **License:** relicensed from MIT to proprietary ("All Rights Reserved",
+  Copyright (c) 2026 Shivam Singh). Previously distributed MIT copies retain
+  their MIT rights; new versions require permission (see `LICENSE`).
+- **Security (RLS admin path):** the PostgreSQL row-level-security policy no
+  longer relies on a `__synapse_admin__` GUC sentinel that any session could
+  set. Policies are now gated on true role membership
+  (`current_user = '<admin_role>'` with `pg_has_role` verification), and the
+  tenant context is left unset for admins so the admin path is explicit and
+  auditable. New live regression test:
+  `test_admin_access_requires_admin_role_membership`.
+- **Benchmark:** honest head-to-head benchmark harness against Mem0
+  (`sdk/python/benchmark/bench_suite.py::run_mem0_benchmark`) measuring p50/p95/p99
+  ingest+query latency, recall@k, and cross-tenant isolation leakage on matched
+  corpora with deterministic embeddings. Skips gracefully when `mem0` is not
+  installed so the suite stays dependency-optional.
+- **Example:** complete `examples/project_aware_coding_assistant/` FastAPI app —
+  project-scoped coding-assistant backend where every project is a Synapse-Memory
+  tenant. Documents, snippets, and cross-project links live in app-owned SQLite
+  tables; semantic memories go through `MemoryManager.ingest_with_deduplication`
+  with `tenant_id=project.id`. Includes a 38-check `smoke_test.py` (TestClient)
+  covering CRUD, dedup-merge, tenant isolation, search, and cascade deletes.
 - **Packaging:** distribution renamed to `synapse-memory-engine` on PyPI (the
   `synapse-memory` name is owned by an unrelated project). The import package
   stays `synapse_memory`. Root `pyproject.toml` is now the

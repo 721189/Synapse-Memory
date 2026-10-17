@@ -56,7 +56,7 @@
 5. ~~SDK publish + quickstart (P2-1)~~ → DONE (`SynapseClient`, versioned 1.2.0, quickstart doc).
 6. ~~Benchmark corpus (P2-2)~~ → DONE (`tests/test_retrieval_eval.py`, measured-only bench script).
 7. ~~Release artifacts (P2-4)~~ → DONE (CHANGELOG, version map, SECURITY update).
-8. ~~P0-5 runtime-role proof~~ → DONE (`scripts/provision_db_roles.py`, `test_db_role_provisioning.py` 19 offline contract tests, `TestRuntimeRoleIsolation` 7 live tests). **Residual (tracked, not fixed):** RLS admin path is a session-GUC sentinel — app layer blocks it (`resolve_tenant`), RLS alone does not. Documented in `SECURITY.md`.
+8. ~~P0-5 runtime-role proof~~ → DONE (`scripts/provision_db_roles.py`, `test_db_role_provisioning.py` 19 offline contract tests, `TestRuntimeRoleIsolation` 7 live tests). **Fixed in v1.3.0:** RLS admin path is now role-gated via `current_user = '<admin_role>'` inside `tenant_isolation_policy`; settable `app.*` GUCs can no longer bypass RLS.
 9. ~~Phase 7.3 load/resilience tests~~ → DONE: `tests/test_load_resilience.py` (17 offline tests). Phase 7.4 ops runbook → DONE (`docs/ops-runbook.md`).
 10. ~~Helm `Chart.yaml` inert `postgresql:` values subtree~~ → DONE (P1-2 residual): external PostgreSQL dependency, 18 offline Helm contract tests (`tests/test_helm_chart.py`).
 

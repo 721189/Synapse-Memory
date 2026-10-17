@@ -16,9 +16,13 @@ compliance. Each item maps to the actual control in this repo.
 - **Evidence:** `test_pgvector_integration.py::TestRuntimeRoleIsolation`
   (cross-tenant read/write rejection, raw-SQL isolation), load tests assert
   cross-tenant invisibility on a 400-row 2-tenant matrix.
-- **Residual:** RLS admin path is a session-GUC sentinel — a compromised app
-  process holding the runtime DSN can set it. App layer blocks this; RLS alone
-  does not. Tracked in `SECURITY.md`. Fix = role-gated admin path.
+- **Residual:** RLS admin path is role-gated. `PGVectorMemoryStore` still sets
+  `app.current_tenant = ''` when admin access is requested, but the policy's
+  admin bypass is now `current_user = '<admin_role>'` instead of a GUC sentinel.
+  Raising `app.current_tenant` (or any `app.*` GUC) can no longer bypass RLS —
+  only a session whose database `current_user` is the configured admin role is
+  exempt. App layer remains authoritative for tenant binding (`resolve_tenant`).
+  Fix applied in v1.3.0.
 
 ## API2 Broken Authentication
 
@@ -118,5 +122,5 @@ compliance. Each item maps to the actual control in this repo.
 - Independent penetration test before storing regulated data (recommended,
   not yet commissioned).
 - Route-vs-doc drift detection in CI (recommended job).
-- Role-gated RLS admin path (tracked in `SECURITY.md`, needs live PG).
+- Role-gated RLS admin path (implementing v1.3.0 fix recorded in `SECURITY.md`).
 - Step-up auth / MFA for destructive admin flows (operator IdP concern).

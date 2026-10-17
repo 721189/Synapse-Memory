@@ -6,6 +6,7 @@ and PostgreSQL Row-Level Security (RLS).
 import json
 import logging
 import os
+import re
 import time
 from typing import Any, Dict, List, Optional
 
@@ -58,6 +59,7 @@ class PGVectorMemoryStore:
         auto_init: bool = True,
         fail_closed: bool = False,
         apply_schema: bool = True,
+        admin_role: str = "synapse_admin",
     ):
         # SECURITY: never ship a default password. Require explicit DATABASE_URL in prod.
         # Local dev convenience default uses an obviously-insecure placeholder and logs a warning.
@@ -78,6 +80,12 @@ class PGVectorMemoryStore:
         # See scripts/provision_db_roles.py. Default True preserves the
         # single-role local/dev behaviour.
         self.apply_schema = apply_schema
+        # Admin role whose current_user bypasses RLS in tenant_isolation_policy.
+        # Gated on current_user (not a settable GUC) so a compromised runtime DSN
+        # cannot set `app.current_tenant` to a sentinel and read all tenants.
+        if not re.match(r"^[A-Za-z_][A-Za-z0-9_]{0,62}$", admin_role):
+            raise ValueError(f"admin_role must be a safe identifier, got: {admin_role!r}")
+        self.admin_role = admin_role
         self._pool: Optional[Any] = None
         self._connected = False
 
@@ -283,39 +291,72 @@ class PGVectorMemoryStore:
                 # 6. Database Row-Level Security (RLS)
                 cur.execute("ALTER TABLE memories ENABLE ROW LEVEL SECURITY;")
                 cur.execute("ALTER TABLE memories FORCE ROW LEVEL SECURITY;")
-                cur.execute("""
-                    DO $$
-                    BEGIN
-                        IF NOT EXISTS (
-                            SELECT 1 FROM pg_policies WHERE tablename = 'memories' AND policyname = 'tenant_isolation_policy'
-                        ) THEN
-                            CREATE POLICY tenant_isolation_policy ON memories
-                            FOR ALL
-                            USING (
-                                tenant_id = NULLIF(current_setting('app.current_tenant', true), '')
-                                -- Admin/unscoped connections bypass RLS via sentinel GUC value.
-                                OR current_setting('app.current_tenant', true) = '__synapse_admin__'
-                            )
-                            WITH CHECK (
-                                tenant_id = NULLIF(current_setting('app.current_tenant', true), '')
-                                OR current_setting('app.current_tenant', true) = '__synapse_admin__'
-                            );
-                        ELSE
-                            -- Migrate legacy policy (no admin bypass) to the current version.
-                            DROP POLICY IF EXISTS tenant_isolation_policy ON memories;
-                            CREATE POLICY tenant_isolation_policy ON memories
-                            FOR ALL
-                            USING (
-                                tenant_id = NULLIF(current_setting('app.current_tenant', true), '')
-                                OR current_setting('app.current_tenant', true) = '__synapse_admin__'
-                            )
-                            WITH CHECK (
-                                tenant_id = NULLIF(current_setting('app.current_tenant', true), '')
-                                OR current_setting('app.current_tenant', true) = '__synapse_admin__'
-                            );
-                        END IF;
-                    END $$;
-                """)
+                # Build a SQL string literal for the admin role. current_user is
+                # evaluated at query time; only the actual admin DB role bypasses
+                # RLS. A settable GUC sentinel can no longer be abused by a
+                # compromised runtime DSN.
+                _admin_role_sql = "current_user = '" + self.admin_role.replace("'", "''") + "'"
+                _rls_sql = (
+                    "DO $$\n"
+                    "BEGIN\n"
+                    "    IF NOT EXISTS (\n"
+                    "        SELECT 1 FROM pg_policies WHERE tablename = 'memories' AND policyname = 'tenant_isolation_policy'\n"
+                    "    ) THEN\n"
+                    "        CREATE POLICY tenant_isolation_policy ON memories\n"
+                    "        FOR ALL\n"
+                    "        USING (\n"
+                    "            (\n"
+                    "                tenant_id = NULLIF(current_setting('app.current_tenant', true), '')\n"
+                    "                AND tenant_id IS NOT NULL\n"
+                    "            )\n"
+                    "            OR " + _admin_role_sql + "\n"
+                    "        )\n"
+                    "        WITH CHECK (\n"
+                    "            (\n"
+                    "                tenant_id = NULLIF(current_setting('app.current_tenant', true), '')\n"
+                    "                AND tenant_id IS NOT NULL\n"
+                    "            )\n"
+                    "            OR " + _admin_role_sql + "\n"
+                    "        );\n"
+                    "    ELSE\n"
+                    "        -- Migrate legacy policy (no admin bypass) to the current version.\n"
+                    "        DROP POLICY IF EXISTS tenant_isolation_policy ON memories;\n"
+                    "        CREATE POLICY tenant_isolation_policy ON memories\n"
+                    "        FOR ALL\n"
+                    "        USING (\n"
+                    "            (\n"
+                    "                tenant_id = NULLIF(current_setting('app.current_tenant', true), '')\n"
+                    "                AND tenant_id IS NOT NULL\n"
+                    "            )\n"
+                    "            OR " + _admin_role_sql + "\n"
+                    "        )\n"
+                    "        WITH CHECK (\n"
+                    "            (\n"
+                    "                tenant_id = NULLIF(current_setting('app.current_tenant', true), '')\n"
+                    "                AND tenant_id IS NOT NULL\n"
+                    "            )\n"
+                    "            OR " + _admin_role_sql + "\n"
+                    "        );\n"
+                    "    END IF;\n"
+                    "END $$;\n"
+                )
+                cur.execute(_rls_sql)
+
+                # Verify the current DB session's role membership. Error out with
+                # a mapped 403 TenantIsolationError if the engine is running as a
+                # role that is NOT a member of the configured admin role, so a
+                # misconfigured runtime DSN cannot silently gain unscoped access.
+                _verify_role_sql = (
+                    "DO $$\n"
+                    "BEGIN\n"
+                    "    IF NOT pg_has_role(current_user, '" + self.admin_role.replace("'", "''") + "', 'MEMBER') THEN\n"
+                    "        RAISE EXCEPTION 'security: current_user % is not a member of admin role %' USING\n"
+                    "            ERRCODE = 'P0001', -- internal_error (mapped to TenantIsolationError)\n"
+                    "            MESSAGE = 'Forbidden: unscoped admin access requires membership in admin role';\n"
+                    "    END IF;\n"
+                    "END $$;\n"
+                )
+                cur.execute(_verify_role_sql)
 
                 conn.commit()
         except Exception as e:
@@ -414,11 +455,12 @@ class PGVectorMemoryStore:
                 pass
 
     def _set_tenant_context(self, cur: Any, tenant_id: Optional[str]) -> None:
-        # None / "*" means admin (unscoped) access: bypass RLS via a sentinel
-        # GUC value that the RLS policy explicitly allows. Empty string means
-        # "no tenant" and must see zero rows (fail-closed isolation).
+        # None / "*" means admin (unscoped) access: the RLS policy gates the
+        # admin bypass on current_user = <admin_role>, not on a settable GUC
+        # sentinel. Empty string means "no tenant" and must see zero rows
+        # (fail-closed isolation).
         if tenant_id is None or tenant_id == "*":
-            ctx = "__synapse_admin__"
+            ctx = ""
         else:
             ctx = tenant_id
         cur.execute("SET LOCAL app.current_tenant = %s;", (ctx,))

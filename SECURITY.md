@@ -67,24 +67,26 @@ To help us triage and resolve the issue quickly, please include:
    - Because a non-owner role cannot run DDL, the engine must be started with
      `SYNAPSE_APPLY_DB_SCHEMA=false`. It then refuses to start if `memories` is missing
      rather than silently falling back to in-memory storage.
-   - **Known limitation (tracked, not yet fixed):** the RLS policy's admin path is a session
-     GUC sentinel (`app.current_tenant = '__synapse_admin__'`). Custom `app.*` GUCs are
-     settable by any role, so a process that already holds the runtime DSN can set the
-     sentinel and read all tenants directly at the database layer. The application layer
-     blocks this (`resolve_tenant` requires an explicit tenant for admin principals and
-     rejects tenant mismatches), but RLS alone does not contain a compromised app process.
-     Closing this requires making the admin path role-gated inside the policy; that change
-     is deferred until it can be verified against a live server. Treat the runtime DSN as a
-     secret with the same sensitivity as the tenant data it can reach.
+   - **Fix (v1.3.0):** the RLS policy's admin path is now role-gated inside the policy.
+     `PGVectorMemoryStore` still sets `app.current_tenant = ''` when admin access is
+     requested, but the policy's admin bypass is now `current_user = '<admin_role>'`
+     instead of the old GUC sentinel. Since `app.*` GUCs are still settable by any role,
+     raising `app.current_tenant` (or any other `app.*` value) can no longer bypass RLS —
+     only a session whose database `current_user` is the configured admin role is exempt.
+     The application layer remains authoritative for tenant binding (`resolve_tenant`
+     requires an explicit tenant for admin principals and rejects tenant mismatches).
    - Isolation is regression-tested with the **actual runtime role** (not a DBA), over raw
      SQL and through the engine store: cross-tenant reads, missing context, cross-tenant
      writes, DDL/`TRUNCATE` denial, and tenant-scoped delete. See
      `tests/test_pgvector_integration.py::TestRuntimeRoleIsolation` plus the offline
      provisioning-contract tests in `tests/test_db_role_provisioning.py`.
 3. **Data Protection Model (combined protection)**:
-   - `content` column: Fernet field-encrypted. `content_plain`, tsvector index, and
-     embeddings are readable search derivatives by design — do not store regulated
-     data expecting them to be ciphertext.
+   | Layer | `content` column | `content_plain` | tsvector / embeddings | Volume/Database |
+   |---|---|---|---|---|
+   | Storage | Fernet field-encrypted (AES-128-CBC + HMAC-SHA256) | Not stored (derivable) | Readable search derivative | Full disk / managed-DB encryption |
+   | Access | Requires key (KMS/Vault / local key file) | Always readable | Always readable | Operator-enforced |
+   | Use case | Regulated data at rest | Full-text & vector search only | Obfuscated retrieval | At-rest coverage |
+   | Notes | `content_plain` is a search projection only — do not store regulated data expecting it to be ciphertext | | | |
    - Volume/database encryption must be enabled by the operator for at-rest coverage.
 4. **Model & Ingestion Sanitization**:
    - Run untrusted third-party prompts through the built-in PII and prompt injection quarantine scrubber (`/api/security/scrub`) before indexing into cognitive graphs.

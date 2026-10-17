@@ -602,6 +602,30 @@ class TestRuntimeRoleIsolation(unittest.TestCase):
         self.assertEqual(store.count_memories(tenant_id=self.TENANT_A), 0)
         self.assertEqual(store.count_memories(tenant_id=self.TENANT_B), 1)
 
+    def test_admin_access_requires_admin_role_membership(self):
+        """Unscoped access must be role-gated, not GUC-gatable.
+
+        The engine sets app.current_tenant='' only when it is running as a
+        member of the admin role. A runtime-role session (not a member) must
+        be refused at connection/validation time, and the error must map to a
+        403 TenantIsolationError at the API layer.
+        """
+        # Raw connection as runtime role (no tenant context set)
+        conn = psycopg2.connect(self.app_url)
+        try:
+            with conn.cursor() as cur:
+                # The new pg_has_role guard should raise before any cross-tenant
+                # query is even reachable.
+                with self.assertRaises(psycopg2.Error) as ctx:
+                    cur.execute(
+                        "SELECT 1 FROM memories WHERE tenant_id IS NULL "
+                        "OR tenant_id = 'spoofed' LIMIT 1;"
+                    )
+                self.assertIn("P0001", str(ctx.exception))
+                self.assertIn("not a member of admin role", str(ctx.exception))
+        finally:
+            conn.close()
+
     def test_runtime_start_refuses_to_run_without_provisioned_schema(self):
         """apply_schema=False with a missing schema must fail closed rather than
         silently degrading to the in-memory cache (which would fake write
