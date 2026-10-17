@@ -14,7 +14,7 @@ Database-level tenant isolation (PostgreSQL RLS) · Fail-closed by design · Pro
 [![PostgreSQL](https://img.shields.io/badge/postgres-16%20%2B%20pgvector%20HNSW-336791.svg)](https://github.com/pgvector/pgvector)
 [![Tests](https://img.shields.io/badge/tests-150%2B%20passed%20%C2%B7%2014%20gated-brightgreen.svg)](sdk/python/tests)
 [![Security](https://img.shields.io/badge/security-bandit%20%C2%B7%20Trivy%20%C2%B7%20TruffleHog%20clean-red.svg)](SECURITY.md)
-[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![License: Proprietary](https://img.shields.io/badge/license-Proprietary-red.svg)](LICENSE)
 
 </div>
 
@@ -700,10 +700,7 @@ flowchart TD
 
 ### Known limitations (tracked in SECURITY.md)
 
-1. **RLS admin path** — the admin connection sets `app.current_tenant` as a session-GUC sentinel;
-   the app layer blocks cross-tenant access via `resolve_tenant`, but RLS *alone* does not contain a
-   compromised app process holding the runtime DSN. Fix: role-gated admin path inside the policy
-   (requires a live PostgreSQL server to verify — deferred).
+1. **RLS admin path (fixed in v1.3.0)** — the admin connection now bypasses RLS via `current_user = '<admin_role>'` inside the policy, not a settable GUC sentinel. The app layer remains authoritative for tenant binding (`resolve_tenant` requires an explicit tenant for admin principals). Raising `app.current_tenant` or any other `app.*` GUC can no longer bypass RLS.
 2. **Readable derivatives** — embeddings and `tsvector` are derived from plaintext at query time;
    field encryption covers `content`. Treat backup/volume encryption as mandatory.
 3. **Retention windows are operator policy** — no background hard-delete job ships; GDPR delete is
@@ -872,7 +869,7 @@ flowchart TD
 
 ```
 Synapse-Memory/
-├── sdk/python/                     # Python package (published as synapse-memory)
+├── sdk/python/                     # Python package (published as synapse-memory-engine)
 │   ├── synapse_memory/
 │   │   ├── core/                   # engines: memory_manager, hybrid_search, knapsack_packer,
 │   │   │                           # decay_engine, deduplicator, auth, encryption, embedder,
@@ -940,7 +937,7 @@ flowchart LR
 
 ## 20. License
 
-MIT — see [`LICENSE`](LICENSE).
+Proprietary — see [`LICENSE`](LICENSE).
 
 ---
 

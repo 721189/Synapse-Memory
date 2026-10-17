@@ -122,4 +122,4 @@ npm ci && npm run lint && npm run build
 
 ## License
 
-MIT — see [LICENSE](../LICENSE).
+Proprietary — see [LICENSE](../LICENSE).
