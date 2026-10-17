@@ -4,8 +4,8 @@ Install, configure a backend, create a memory, retrieve it, handle an error.
 
 ## 1. Install (fresh environment)
 ```bash
-pip install "synapse-memory[pgvector]"   # prod backend
-# or: pip install synapse-memory         # SQLite dev backend only
+pip install "synapse-memory-engine[pgvector]"   # prod backend
+# or: pip install synapse-memory-engine         # SQLite dev backend only
 ```
 
 ## 2. Start the engine

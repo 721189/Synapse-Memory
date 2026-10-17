@@ -80,7 +80,7 @@ LocalEmbeddingProvider = DeterministicHashEmbeddingProvider
 class SentenceTransformerEmbeddingProvider(EmbeddingProvider):
     """
     Production-grade local neural semantic embedding provider using sentence-transformers.
-    Requires: sentence-transformers (pip install 'synapse-memory[local-models]')
+    Requires: sentence-transformers (pip install 'synapse-memory-engine[local-models]')
     """
     def __init__(self, model_name: str = "all-MiniLM-L6-v2", allow_fallback: bool = False):
         self.model_name = model_name

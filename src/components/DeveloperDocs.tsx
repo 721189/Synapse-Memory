@@ -48,7 +48,7 @@ await memory.recordInteraction({
 });`
     },
     {
-      title: "3. Python SDK Integration (`synapse-memory`)",
+      title: "3. Python SDK Integration (`synapse-memory-engine`)",
       language: "python",
       code: `from synapse_memory import SynapseClient
 

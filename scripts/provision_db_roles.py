@@ -384,7 +384,7 @@ def main(argv=None):
         import psycopg2  # noqa: F401
     except ImportError:
         print("psycopg2 is not installed; cannot provision. "
-              "Install with: pip install 'synapse-memory[pgvector]'")
+              "Install with: pip install 'synapse-memory-engine[pgvector]'")
         return 2
 
     print("== SynapseMemory DB role provisioning ==")

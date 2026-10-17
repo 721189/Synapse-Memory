@@ -61,7 +61,7 @@ truncation.
 | | |
 |---|---|
 | **Status** | Production-hardened — P0/P1/P2 roadmap complete, CI green on `main` and `production-hardening` |
-| **Surfaces** | HTTP engine (FastAPI, `:8008`) · Node gateway + React dashboard (`:3000`) · Python SDK (`synapse-memory` 1.2.0) |
+| **Surfaces** | HTTP engine (FastAPI, `:8008`) · Node gateway + React dashboard (`:3000`) · Python SDK (`synapse-memory-engine` 1.2.0) |
 | **Storage** | PostgreSQL 16 + pgvector HNSW (production) · SQLite (single-node dev) — both with Fernet field encryption |
 | **Integrations** | LangChain · LlamaIndex · raw HTTP (any language) |
 | **Deployment** | Docker Compose (4 services) · Kubernetes Helm chart (split engine/gateway + HPA) · bare `uvicorn` |
@@ -342,8 +342,8 @@ and Redis. No service starts against an unhealthy dependency.
 ### 6.2 Python SDK (5-minute path)
 
 ```bash
-pip install "synapse-memory[pgvector]"   # production backend
-# or: pip install synapse-memory         # SQLite dev backend only
+pip install "synapse-memory-engine[pgvector]"   # production backend
+# or: pip install synapse-memory-engine         # SQLite dev backend only
 ```
 
 ```python
@@ -471,7 +471,7 @@ python scripts/provision_db_roles.py --verify-only   # must exit 0
 
 | Component | Version | Notes |
 |---|---|---|
-| Python SDK (`synapse-memory`) | **1.2.0** | `SynapseClient`, `__version__ = "1.2.0"` |
+| Python SDK (`synapse-memory-engine`) | **1.2.0** | `SynapseClient`, `__version__ = "1.2.0"` |
 | HTTP API compat | **v1** | canonical `{success, data, request_id}` envelope; `/api/*` aliases stable |
 | Engine / gateway images | **1.2.0 pair** | must deploy matching tags |
 | Helm chart | **0.1.0** (app 1.2.0) | chart version ≠ app version; see `Chart.yaml` |
@@ -613,7 +613,7 @@ Errors: `SynapseError(message, status=?, retryable=?)` — `retryable=True` on 4
 back off safely; `400`/`403`/`404` are terminal.
 
 ```bash
-pip install "synapse-memory[all]"      # everything: pgvector, langchain, llamaindex, redis, local models
+pip install "synapse-memory-engine[all]"   # everything: pgvector, langchain, llamaindex, redis, local models
 ```
 
 Optional extras: `[pgvector]`, `[local-models]`, `[redis]`, `[langchain]`, `[llamaindex]`, `[all]`, `[dev]`.
@@ -860,6 +860,7 @@ flowchart TD
 | [`docs/performance-baseline.md`](docs/performance-baseline.md) | measured baseline + 5-step SLO process |
 | [`docs/production-hardening-baseline.md`](docs/production-hardening-baseline.md) | P0–P2 gap register — all gaps marked closed, CI status |
 | [`docs/branch-protection.md`](docs/branch-protection.md) | GitHub rule settings: required checks, CODEOWNERS, stale-dismiss |
+| [`docs/publishing.md`](docs/publishing.md) | PyPI release pipeline (`synapse-memory-engine`), trusted publishing, fresh-install guarantee |
 | [`SECURITY.md`](SECURITY.md) | threat model, known limitations, vulnerability disclosure |
 | [`CHANGELOG.md`](CHANGELOG.md) | release history + compatibility matrix |
 | [`CONTRIBUTING.md`](CONTRIBUTING.md) · [`CODE_OF_CONDUCT.md`](CODE_OF_CONDUCT.md) | PR workflow, code of conduct |

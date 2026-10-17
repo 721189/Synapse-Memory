@@ -1,7 +1,7 @@
 from setuptools import setup, find_packages
 
 setup(
-    name="synapse-memory",
+    name="synapse-memory-engine",
     version="1.2.0",
     description="Sovereign, active RAG & cognitive long-term memory engine for AI agents",
     author="Synapse Cognitive Systems",

@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+- **Packaging:** distribution renamed to `synapse-memory-engine` on PyPI (the
+  `synapse-memory` name is owned by an unrelated project). The import package
+  stays `synapse_memory`. Root `pyproject.toml` is now the
+  `synapse-memory-workspace` tooling manifest; the published SDK lives in
+  `sdk/python`. New tag-triggered publish workflow builds, fresh-venv-verifies
+  and trusted-publishes the wheel (see `docs/publishing.md`).
+
 ## 1.2.0 — Production-hardening release (2026-10-15)
 - NULL-safe hybrid RRF (`COALESCE` per channel) + lexical param-count fix.
 - Combined-protection field encryption (`content` ciphertext + `content_plain`
@@ -42,7 +50,7 @@
 ### Compatibility
 | Component | Version | Notes |
 |---|---|---|
-| Python SDK (`synapse-memory`) | 1.2.0 | `SynapseClient`, `__version__ = "1.2.0"` |
+| Python SDK (`synapse-memory-engine`) | 1.2.0 | `SynapseClient`, `__version__ = "1.2.0"` |
 | HTTP API compat | v1 | canonical `{success, data, request_id}` envelope; `/api/*` aliases stable |
 | Engine / gateway images | 1.2.0 pair | must deploy matching tags |
 | Helm chart | 0.1.0 (app 1.2.0) | chart version ≠ app version; see Chart.yaml |

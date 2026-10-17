@@ -3,7 +3,10 @@ requires = ["setuptools>=61.0"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "synapse-memory"
+# Workspace/tooling manifest — NOT the published distribution. The pip-installable
+# SDK is sdk/python (`synapse-memory-engine` on PyPI). Do not upload this root
+# project to any package index.
+name = "synapse-memory-workspace"
 version = "1.2.0"
 authors = [
   { name = "Synapse Cognitive Systems", email = "singhshivam20009@gmail.com" },

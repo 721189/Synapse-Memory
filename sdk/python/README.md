@@ -14,6 +14,8 @@ Core Python SDK and algorithms for the Synapse Cognitive Memory substrate.
 ## Installation
 
 ```bash
+pip install synapse-memory-engine          # from PyPI
+# or, from a checkout of this repository:
 pip install -e .
 ```
 
