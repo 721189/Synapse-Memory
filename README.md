@@ -1,5 +1,7 @@
 # Synapse Memory
 
+<!-- Automated fix commit -->
+
 <div align="center">
 
 **Enterprise-grade, multi-tenant cognitive memory substrate for LLM applications.**
