@@ -1,0 +1,79 @@
+{
+  "timestamp": "2026-10-17 22:31:22Z",
+  "validation_type": "Empirical Measured Execution (No Synthetic Extrapolations)",
+  "mem0_head_to_head": {
+    "skipped": false,
+    "corpus_size": 1000,
+    "needle_count": 5,
+    "top_k": 10,
+    "n_queries": 50,
+    "seed": 42,
+    "embedder": {
+      "provider": "deterministic",
+      "dim": 128,
+      "shared_by_both_engines": true,
+      "semantic": false
+    },
+    "versions": {
+      "mem0": "2.2.1",
+      "synapse_memory_engine": "1.2.0"
+    },
+    "synapse": {
+      "ingest_raw_ms": {
+        "p50": 115.226,
+        "p95": 438.725,
+        "p99": 1196.066,
+        "mean": 178.89,
+        "samples": 1005
+      },
+      "ingest_with_dedup_ms": {
+        "p50": 309.261,
+        "p95": 1129.35,
+        "p99": 2048.017,
+        "mean": 453.935,
+        "samples": 200
+      },
+      "query_ms": {
+        "p50": 360.449,
+        "p95": 671.969,
+        "p99": 704.612,
+        "mean": 390.508,
+        "samples": 50
+      },
+      "recall_at_k": 78.0,
+      "mrr": 0.744,
+      "cross_tenant_leak_count": 0,
+      "avg_tokens_topk": 237.0,
+      "knapsack_packed_tokens_mean": 165.9,
+      "knapsack_tokens_saved_mean": 71.1
+    },
+    "mem0": {
+      "ingest_ms": {
+        "p50": 12.445,
+        "p95": 38.429,
+        "p99": 237.536,
+        "mean": 1049.679,
+        "samples": 1005
+      },
+      "query_ms": {
+        "p50": 34.756,
+        "p95": 62.699,
+        "p99": 134.633,
+        "mean": 40.314,
+        "samples": 50
+      },
+      "recall_at_k": 78.0,
+      "mrr": 0.7447,
+      "cross_tenant_leak_count": 0,
+      "avg_tokens_topk": 237.0,
+      "packing": "none - mem0 returns a raw ranked list (no token-budget packer)",
+      "dedup": "disabled (infer=False raw mode; LLM fact extraction needs an API key)"
+    },
+    "notes": [
+      "All numbers are measured on this machine in a single run; no projections.",
+      "Identical deterministic embeddings isolate the storage/retrieval engines.",
+      "Synapse ingest_raw includes per-row field encryption (Fernet) + commit.",
+      "SQLite backend is an exact O(N) scan; production path is pgvector HNSW."
+    ]
+  }
+}

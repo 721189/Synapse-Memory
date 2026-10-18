@@ -17,7 +17,7 @@ import random
 import statistics
 import sys
 import time
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 # Ensure correct package imports
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -34,140 +34,418 @@ from synapse_memory.core.sqlite_db import SQLiteMemoryStore
 # ---------------------------------------------------------------------------
 
 
-def run_mem0_benchmark(embedder: SynapseEmbedder,
-                       corpus_size: int = 1000,
-                       top_k: int = 10,
-                       runs: int = 5,
-                       output: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
-    """Head-to-head benchmark of Synapse Memory vs Mem0 on the same corpus.
+def _percentile(values: List[float], p: float) -> float:
+    """Nearest-rank percentile of a latency sample (p in [0, 100])."""
+    if not values:
+        return 0.0
+    ordered = sorted(values)
+    idx = min(len(ordered) - 1, int(round((p / 100.0) * (len(ordered) - 1))))
+    return ordered[idx]
 
-    Both implementations are evaluated on identical metrics:
-      - p50/p95/p99 latency (ms)
-      - recall@k (exactly, by corpus scan)
-      - precision@k
-      - tokens saved per query
-      - throughput (queries/sec)
-      - cross-tenant isolation (query as tenant B sees tenant A rows)
 
-    NOTE: This is a measured comparison on a synthetic corpus of the given size.
-    No extrapolation to production scale is performed here; the production-scale
-    projections are recorded separately in benchmark_results.json under the
-    "managed_service_projections" key.
+def _latency_stats(samples_ms: List[float]) -> Dict[str, float]:
+    """p50/p95/p99/mean summary of a latency sample list (milliseconds)."""
+    if not samples_ms:
+        return {"p50": 0.0, "p95": 0.0, "p99": 0.0, "mean": 0.0, "samples": 0}
+    return {
+        "p50": round(_percentile(samples_ms, 50), 3),
+        "p95": round(_percentile(samples_ms, 95), 3),
+        "p99": round(_percentile(samples_ms, 99), 3),
+        "mean": round(statistics.mean(samples_ms), 3),
+        "samples": len(samples_ms),
+    }
+
+
+def _estimate_tokens(text: str) -> int:
+    """Shared token estimator (same formula as corpus token_cost)."""
+    return max(15, int(len(text.split()) * 1.3) + 8)
+
+
+_MEM0_BENCH_PROVIDER: Any = None
+
+
+class _Mem0SharedEmbedder:
+    """mem0 embedder adapter delegating to the Synapse embedding provider.
+
+    Registered with mem0's EmbedderFactory so both engines score with
+    byte-identical vectors; the storage/retrieval engines are then the
+    only variable under test.
+    """
+
+    def __init__(self, config: Any = None):
+        self.config = config
+
+    @property
+    def embedding_dims(self) -> int:
+        return int(_MEM0_BENCH_PROVIDER.dimension)
+
+    def embed(self, text: str, memory_action: str = "add") -> List[float]:
+        return _MEM0_BENCH_PROVIDER.embed(text)
+
+    def embed_batch(self, texts: List[str], memory_action: str = "add") -> List[List[float]]:
+        return [_MEM0_BENCH_PROVIDER.embed(t) for t in texts]
+
+
+def run_mem0_benchmark(
+    embedder: SynapseEmbedder,
+    corpus_size: int = 1000,
+    top_k: int = 10,
+    n_queries: int = 50,
+    seed: int = 42,
+) -> Dict[str, Any]:
+    """Head-to-head benchmark of Synapse Memory vs mem0 on one shared corpus.
+
+    Fairness protocol (everything measured, nothing projected):
+      * Both engines embed with the SAME deterministic word-hash provider
+        (dim from SynapseEmbedder), so rankings reflect the storage/retrieval
+        engines rather than embedding-model quality.
+      * Identical corpus text, identical ground-truth queries, identical top_k.
+      * Synapse path: raw SQLiteMemoryStore.insert_memory + exact-scan
+        vector_search (the documented local/dev backend).
+      * mem0 path: Memory.add(infer=False) + search(filters={'user_id': ...})
+        over qdrant local (:memory:) - raw storage mode; mem0's LLM fact
+        extraction is disabled so no API keys or network calls are needed.
+      * Ingest latency includes encryption (Synapse) and vector upsert (both).
+      * Cross-tenant leakage: needle queries issued under tenant_b scope are
+        counted if any tenant_a row comes back.
+
+    Known limitations (disclosed):
+      * Deterministic hash embeddings are lexical, not semantic; recall values
+        are comparable BETWEEN engines but are not a claim about production
+        embedding quality.
+      * SQLite backend is an O(N) exact scan (production path is pgvector).
 
     Returns:
-        Dict with keys: 'synapse', 'mem0', 'mem0_bench_time_s', 'corpus_size'
+        {'skipped': True, 'reason': ...} when mem0 is not importable, else a
+        metrics dict for both engines.
     """
-    import os
-    import shutil
-    import sqlite3
-    from synapse_memory.core.memory_manager import MemoryManager
+    global _MEM0_BENCH_PROVIDER
 
-    results = {"synapse": {}, "mem0": {}, "mem0_bench_time_s": None, "corpus_size": corpus_size}
+    import tempfile
 
-    # ---- Build identical synthetic corpus ----
-    random.seed(0xDEADBEEF)
-    embed_dim = getattr(embedder, "dimension", 384)
-    corpus = []
-    for i in range(corpus_size):
-        content, token_cost = generate_distractor_memory(i, embed_dim)
-        embedding = [random.uniform(-1.0, 1.0) for _ in range(embed_dim)]
-        corpus.append({
-            "id": f"mem_{i:05d}",
+    # Telemetry off + no LLM key needed: infer=False never calls an LLM, and
+    # the benchmark must run fully offline. Set BEFORE importing mem0 so its
+    # telemetry init reads the flag.
+    os.environ.setdefault("MEM0_TELEMETRY", "False")
+    os.environ.setdefault("OPENAI_API_KEY", "benchmark-offline-not-used")
+    os.environ.setdefault("MEM0_DIR", tempfile.mkdtemp(prefix="mem0_bench_"))
+
+    try:
+        import mem0  # type: ignore
+        from mem0 import Memory  # type: ignore
+        from mem0.configs.base import MemoryConfig  # type: ignore
+        from mem0.embeddings.configs import EmbedderConfig  # type: ignore
+        from mem0.utils import factory  # type: ignore
+        from pydantic import field_validator  # type: ignore
+    except ImportError as exc:
+        return {"skipped": True, "reason": f"mem0 not importable: {exc}"}
+
+    dim = embedder.dimension
+    _MEM0_BENCH_PROVIDER = embedder.manager.provider
+    rng = random.Random(seed)
+
+    class _LenientEmbedderConfig(EmbedderConfig):
+        # mem0 whitelists embedder providers; bypass the check for our
+        # factory-registered benchmark provider (registered right below).
+        @field_validator("config")
+        def validate_config(cls, v: Any, values: Any) -> Any:
+            return v
+
+    # Key = provider string referenced from the embedder config; value = the
+    # dotted class path (resolves to __main__._Mem0SharedEmbedder as a script).
+    factory.EmbedderFactory.provider_to_class["synapse_shared"] = (
+        f"{__name__}._Mem0SharedEmbedder"
+    )
+    # ---- Shared corpus: seeded distractors (90% tenant_a / 10% tenant_b)
+    # ---- plus the evaluation needles (all tenant_a).
+    topics = [
+        "kubernetes", "fastapi", "postgres", "redis", "kafka", "terraform",
+        "graphql", "prometheus", "nginx", "celery", "pydantic", "grpc",
+    ]
+    snippets = [
+        "Kubernetes deployment rollout status check for worker pod replicas",
+        "Next.js server-side rendering performance metrics and hydration times",
+        "SQLite Write-Ahead Logging WAL mode enabled for concurrent reads",
+        "OAuth2 token refresh rotation policy and JWT validation flow",
+        "Tailwind typography plugin configuration and font scale ratios",
+        "Docker multi-stage build caching layers for minimal container size",
+        "PostgreSQL connection pool sizing and transaction isolation levels",
+        "BM25 term frequency saturation and document length normalization",
+    ]
+
+    def _make_content(idx: int) -> str:
+        snippet = snippets[idx % len(snippets)]
+        topic = topics[idx % len(topics)]
+        return (
+            f"Distractor {idx}: {snippet} "
+            f"[topic={topic}_module_{idx} sys_hash={rng.randint(1000, 9999)}]."
+        )
+
+    ts = time.time()
+    contents = [_make_content(i) for i in range(corpus_size)]
+    needles = [t["content"] for t in TARGET_EVALUATION_SPECS]
+    tenant_of = [
+        "tenant_b" if rng.random() < 0.10 else "tenant_a" for _ in range(corpus_size)
+    ]
+
+    # ---------------------------- Synapse ingest (raw, measured) --------------
+    syn_db = "bench_mem0_synapse.db"
+    for suffix in ("", "-wal", "-shm"):
+        if os.path.exists(syn_db + suffix):
+            try:
+                os.remove(syn_db + suffix)
+            except OSError:
+                pass
+    store = SQLiteMemoryStore(syn_db)
+
+    syn_ingest_ms: List[float] = []
+    for i, content in enumerate(contents):
+        t0 = time.perf_counter()
+        vec = _MEM0_BENCH_PROVIDER.embed(content)
+        store.insert_memory({
+            "id": f"distractor_{i}",
             "content": content,
             "category": "interaction",
             "confidence": 0.9,
-            "created_at": time.time(),
-            "embedding": embedding,
+            "created_at": ts + i * 1e-4,
+            "token_cost": _estimate_tokens(content),
+            "embedding": vec,
+            "tenant_id": tenant_of[i],
+        })
+        syn_ingest_ms.append((time.perf_counter() - t0) * 1000.0)
+
+    for j, content in enumerate(needles):
+        t0 = time.perf_counter()
+        vec = _MEM0_BENCH_PROVIDER.embed(content)
+        store.insert_memory({
+            "id": f"needle_{j}",
+            "content": content,
+            "category": TARGET_EVALUATION_SPECS[j]["category"],
+            "confidence": 0.95,
+            "created_at": ts + j * 1e-4,
+            "token_cost": _estimate_tokens(content),
+            "embedding": vec,
             "tenant_id": "tenant_a",
         })
+        syn_ingest_ms.append((time.perf_counter() - t0) * 1000.0)
 
-    # Insert ~10% cross-tenant rows (tenant_b) for isolation testing
-    tenant_b_rows = int(corpus_size * 0.1)
-    for i in range(tenant_b_rows):
-        mem = dict(corpus[i])
-        mem["tenant_id"] = "tenant_b"
-        corpus.insert(i, mem)
+    print(
+        f"    - Synapse raw ingest done: {len(syn_ingest_ms)} inserts, "
+        f"p50={_latency_stats(syn_ingest_ms)['p50']} ms",
+        flush=True,
+    )
 
-    # ------------------------------ Synapse Memory ------------------------------
-    store = SQLiteMemoryStore(fail_closed=True)
-    store.clear_memories()
-    for mem in corpus:
-        store.insert_memory(mem)
+    # ------------------------------ mem0 ingest (raw, measured) ---------------
+    mem0_client = Memory(config=MemoryConfig(
+        vector_store={
+            "provider": "qdrant",
+            "config": {
+                "path": ":memory:",
+                "collection_name": "synapse_bench",
+                "embedding_model_dims": dim,
+            },
+        },
+        embedder=_LenientEmbedderConfig(
+            provider="synapse_shared", config={"embedding_dims": dim}
+        ),
+    ))
 
-    # Measure retrieval
-    queries = [
-        f"Query {i}: search for the target configuration in the {random.choice(['infrastructure', 'preference', 'interaction', 'system_log'])} category"  # noqa
-        for i in range(50)
-    ]
-
-    mem0_results = []
-    for query in queries:
+    m0_ingest_ms: List[float] = []
+    for i, content in enumerate(contents):
         t0 = time.perf_counter()
-        results_s = store.vector_search(queries[i % len(queries)], top_k=top_k)
-        t1 = time.perf_counter()
-        mem0_results.append((t1 - t0) * 1000)
+        mem0_client.add(content, user_id=tenant_of[i], infer=False)
+        m0_ingest_ms.append((time.perf_counter() - t0) * 1000.0)
+    for content in needles:
+        t0 = time.perf_counter()
+        mem0_client.add(content, user_id="tenant_a", infer=False)
+        m0_ingest_ms.append((time.perf_counter() - t0) * 1000.0)
+    print(
+        f"    - mem0 ingest done: {len(m0_ingest_ms)} adds, "
+        f"p50={_latency_stats(m0_ingest_ms)['p50']} ms",
+        flush=True,
+    )
 
-    results["synapse"]["p50_latency_ms"] = statistics.median(mem0_results)
-    results["synapse"]["p95_latency_ms"] = sorted(mem0_results)[int(len(mem0_results) * 0.95)]
-    results["synapse"]["p99_latency_ms"] = sorted(mem0_results)[int(len(mem0_results) * 0.99)]
+    # ---- Query set: all needle queries + word-dropped distractor queries.
+    queries: List[Tuple[str, str]] = []  # (query_text, ground_truth_content)
+    for target in TARGET_EVALUATION_SPECS:
+        queries.append((target["query"], target["content"]))
+    n_fill = max(0, n_queries - len(queries))
+    sample_idx = rng.sample(range(corpus_size), min(n_fill, corpus_size))
+    for idx in sample_idx:
+        words = contents[idx].split()
+        keep = [w for w in words if rng.random() > 0.30]
+        if len(keep) < 4:
+            keep = words[: max(4, len(words) // 2)]
+        queries.append((" ".join(keep), contents[idx]))
 
-    # ------------------------------ Mem0 storage setup ----------------------------
-    mem0_db_path = output.get("_mem0_db_path", f"/tmp/mem0_benchmark_{os.getpid()}.sqlite")
-    if os.path.exists(mem0_db_path):
-        os.remove(mem0_db_path)
-    try:
-        import mem0  # type: ignore
+    def _rank_of(results: List[Dict[str, Any]], truth: str, key: str) -> Optional[int]:
+        for pos, row in enumerate(results):
+            if str(row.get(key, "")) == truth:
+                return pos
+        return None
 
-        # Initialize Mem0 with SQLite
-        mem0.init(
-            provider="local",
-            config={"storage": {"provider": "sqlite", "config": {"db_path": mem0_db_path}}},
+    syn_query_ms: List[float] = []
+    m0_query_ms: List[float] = []
+    syn_ranks: List[int] = []
+    m0_ranks: List[int] = []
+    syn_topk_tokens: List[int] = []
+    m0_topk_tokens: List[int] = []
+    packed_tokens: List[int] = []
+    saved_tokens: List[int] = []
+    packer = KnapsackPacker(token_budget=180)
+
+    for q_text, truth in queries:
+        q_vec = _MEM0_BENCH_PROVIDER.embed(q_text)
+
+        t0 = time.perf_counter()
+        syn_hits = store.vector_search(q_vec, top_k=top_k, tenant_id="tenant_a")
+        syn_query_ms.append((time.perf_counter() - t0) * 1000.0)
+
+        t0 = time.perf_counter()
+        m0_resp = mem0_client.search(
+            q_text, filters={"user_id": "tenant_a"}, top_k=top_k
+        )
+        m0_query_ms.append((time.perf_counter() - t0) * 1000.0)
+        m0_hits = m0_resp.get("results", []) if isinstance(m0_resp, dict) else []
+
+        rank = _rank_of(syn_hits, truth, "content")
+        syn_ranks.append(rank + 1 if rank is not None else top_k + 1)
+        rank = _rank_of(m0_hits, truth, "memory")
+        m0_ranks.append(rank + 1 if rank is not None else top_k + 1)
+
+        syn_topk_tokens.append(
+            sum(_estimate_tokens(str(h.get("content", ""))) for h in syn_hits)
+        )
+        m0_topk_tokens.append(
+            sum(_estimate_tokens(str(h.get("memory", ""))) for h in m0_hits)
         )
 
-        # Load same corpus into Mem0
-        mem0_client = mem0.InMemoryStore()  # type: ignore
-        for mem in corpus:
-            mem0_client.upsert({"id": mem["id"], "data": mem["content"]})
+        packed = packer.pack(syn_hits, token_budget=180)
+        p_tokens = sum(int(p.get("token_cost", 0)) for p in packed)
+        packed_tokens.append(p_tokens)
+        saved_tokens.append(syn_topk_tokens[-1] - p_tokens)
 
-        mem0_client = mem0.MemoryServer(
-            config=mem0.MemoryServerConfig(
-                storage=mem0.SQLiteStorage(db_path=mem0_db_path),
-            )
+    def _recall_mrr(ranks: List[int]) -> Tuple[float, float]:
+        hits = sum(1 for r in ranks if r <= top_k)
+        recall = round(100.0 * hits / len(ranks), 2) if ranks else 0.0
+        mrr = round(sum(1.0 / r for r in ranks) / len(ranks), 4) if ranks else 0.0
+        return recall, mrr
+
+    syn_recall, syn_mrr = _recall_mrr(syn_ranks)
+    m0_recall, m0_mrr = _recall_mrr(m0_ranks)
+
+    print(
+        f"    - Query eval done: {len(queries)} queries x 2 engines "
+        f"(synapse p50={_latency_stats(syn_query_ms)['p50']} ms, "
+        f"mem0 p50={_latency_stats(m0_query_ms)['p50']} ms)",
+        flush=True,
+    )
+
+    # ---- Cross-tenant leakage probe: needle queries scoped as tenant_b.
+    syn_leaks = 0
+    m0_leaks = 0
+    for target in TARGET_EVALUATION_SPECS:
+        q_vec = _MEM0_BENCH_PROVIDER.embed(target["query"])
+        for row in store.vector_search(q_vec, top_k=top_k, tenant_id="tenant_b"):
+            if row.get("tenant_id") != "tenant_b":
+                syn_leaks += 1
+        resp = mem0_client.search(
+            target["query"], filters={"user_id": "tenant_b"}, top_k=top_k
         )
+        for row in (resp.get("results", []) if isinstance(resp, dict) else []):
+            if row.get("user_id") != "tenant_b":
+                m0_leaks += 1
+    print(
+        f"    - Leakage probe done: synapse={syn_leaks}, mem0={m0_leaks}",
+        flush=True,
+    )
 
-        mem0_latencies = []
-        for i, query in enumerate(queries):
-            t0 = time.perf_counter()
-            # Mem0 search returns records with "memory" field
-            mem0_client.search(
-                query=query,
-                user_id="test_user",
-                limit=top_k,
-            )
-            t1 = time.perf_counter()
-            mem0_latencies.append((t1 - t0) * 1000)
+    # ---- Synapse ingest with dedup (feature-inclusive path, bounded sample).
+    dedup_sample = min(200, corpus_size)
+    dedup_db = "bench_mem0_dedup.db"
+    if os.path.exists(dedup_db):
+        try:
+            os.remove(dedup_db)
+        except OSError:
+            pass
+    dedup_store = SQLiteMemoryStore(dedup_db)
+    manager = MemoryManager(
+        store=dedup_store,
+        embedder=embedder,
+        category_thresholds={"preference": 0.85, "interaction": 0.85},
+        max_record_limit=5000,
+    )
+    dedup_ms: List[float] = []
+    for i in range(dedup_sample):
+        t0 = time.perf_counter()
+        manager.ingest_with_deduplication(
+            content=contents[i], category="interaction", confidence=0.9
+        )
+        dedup_ms.append((time.perf_counter() - t0) * 1000.0)
 
-        results["mem0"]["p50_latency_ms"] = statistics.median(mem0_latencies)
-        results["mem0"]["p95_latency_ms"] = sorted(mem0_latencies)[int(len(mem0_latencies) * 0.95)]
-        results["mem0"]["p99_latency_ms"] = sorted(mem0_latencies)[int(len(mem0_latencies) * 0.99)]
-
-        # Token efficiency (mem0 stores raw strings, not packed)
-        results["mem0"]["tokens_saved"] = 0
-        results["mem0"]["packing_efficiency_pct"] = 0.0
-        results["mem0"]["note"] = "Mem0 stores raw strings; no packing applied"
-
-    finally:
-        # Cleanup
-        if os.path.exists(mem0_db_path):
+    # ---- Cleanup benchmark databases.
+    store.close()
+    dedup_store.close()
+    for db in (syn_db, dedup_db):
+        for suffix in ("", "-wal", "-shm"):
             try:
-                os.remove(mem0_db_path)
+                if os.path.exists(db + suffix):
+                    os.remove(db + suffix)
             except OSError:
                 pass
 
-    # Measure time for the entire mem0 benchmark
-    results["mem0_bench_time_s"] = time.perf_counter() - time.perf_counter()
+    try:
+        from importlib import metadata as _md
+        engine_version = _md.version("synapse-memory-engine")
+    except Exception:
+        engine_version = "unknown"
 
-    return results
+    return {
+        "skipped": False,
+        "corpus_size": corpus_size,
+        "needle_count": len(TARGET_EVALUATION_SPECS),
+        "top_k": top_k,
+        "n_queries": len(queries),
+        "seed": seed,
+        "embedder": {
+            "provider": embedder.provider_name,
+            "dim": dim,
+            "shared_by_both_engines": True,
+            "semantic": False,
+        },
+        "versions": {
+            "mem0": mem0.__version__,
+            "synapse_memory_engine": engine_version,
+        },
+        "synapse": {
+            "ingest_raw_ms": _latency_stats(syn_ingest_ms),
+            "ingest_with_dedup_ms": _latency_stats(dedup_ms),
+            "query_ms": _latency_stats(syn_query_ms),
+            "recall_at_k": syn_recall,
+            "mrr": syn_mrr,
+            "cross_tenant_leak_count": syn_leaks,
+            "avg_tokens_topk": round(statistics.mean(syn_topk_tokens), 1),
+            "knapsack_packed_tokens_mean": round(statistics.mean(packed_tokens), 1),
+            "knapsack_tokens_saved_mean": round(statistics.mean(saved_tokens), 1),
+        },
+        "mem0": {
+            "ingest_ms": _latency_stats(m0_ingest_ms),
+            "query_ms": _latency_stats(m0_query_ms),
+            "recall_at_k": m0_recall,
+            "mrr": m0_mrr,
+            "cross_tenant_leak_count": m0_leaks,
+            "avg_tokens_topk": round(statistics.mean(m0_topk_tokens), 1),
+            "packing": "none - mem0 returns a raw ranked list (no token-budget packer)",
+            "dedup": "disabled (infer=False raw mode; LLM fact extraction needs an API key)",
+        },
+        "notes": [
+            "All numbers are measured on this machine in a single run; no projections.",
+            "Identical deterministic embeddings isolate the storage/retrieval engines.",
+            "Synapse ingest_raw includes per-row field encryption (Fernet) + commit.",
+            "SQLite backend is an exact O(N) scan; production path is pgvector HNSW.",
+        ],
+    }
+
 
 TARGET_EVALUATION_SPECS = [
     {
@@ -488,7 +766,30 @@ def main():
         print(f"        - Avg Tokens Saved: {res['avg_tokens_saved']} tokens")
         print(f"        - Packing Efficiency: {res['packing_efficiency_pct']}%")
 
-    # 3. Dedicated Architectural Projections for Managed Cloud Service
+    # 3. Mem0 head-to-head (skips gracefully when mem0 is not installed)
+    print("\n[Phase 3] Head-to-head benchmark vs mem0...")
+    bench_embedder = SynapseEmbedder(provider="deterministic")
+    mem0_metrics = run_mem0_benchmark(bench_embedder)
+    if mem0_metrics.get("skipped"):
+        print(f"    - Skipped: {mem0_metrics.get('reason')}")
+    else:
+        s, m = mem0_metrics["synapse"], mem0_metrics["mem0"]
+        print(f"    - Corpus: {mem0_metrics['corpus_size']:,} "
+              f"(+{mem0_metrics['needle_count']} needles), "
+              f"top_k={mem0_metrics['top_k']}, queries={mem0_metrics['n_queries']}")
+        print(f"    - Ingest p50 ms   | synapse raw {s['ingest_raw_ms']['p50']} | "
+              f"dedup {s['ingest_with_dedup_ms']['p50']} | mem0 {m['ingest_ms']['p50']}")
+        print(f"    - Query p50/p95   | synapse {s['query_ms']['p50']}/{s['query_ms']['p95']} ms | "
+              f"mem0 {m['query_ms']['p50']}/{m['query_ms']['p95']} ms")
+        print(f"    - Recall@{mem0_metrics['top_k']}         | synapse {s['recall_at_k']}% | "
+              f"mem0 {m['recall_at_k']}%")
+        print(f"    - MRR             | synapse {s['mrr']} | mem0 {m['mrr']}")
+        print(f"    - Tenant leaks    | synapse {s['cross_tenant_leak_count']} | "
+              f"mem0 {m['cross_tenant_leak_count']}")
+        print(f"    - Knapsack saved  | {s['knapsack_tokens_saved_mean']} tokens/query avg "
+              f"(mem0: no packer)")
+
+    # 4. Dedicated Architectural Projections for Managed Cloud Service
     # Explicitly labeled as theoretical analytical projection based on pgvector HNSW O(log N)
     architectural_projections = [
         {
@@ -507,6 +808,7 @@ def main():
         "validation_type": "Empirical Measured Execution (No Synthetic Extrapolations)",
         "deduplication_metrics": dedup_metrics,
         "empirical_scale_benchmarks": scale_results,
+        "mem0_head_to_head": mem0_metrics,
         "managed_service_projections": architectural_projections,
     }
 
@@ -527,4 +829,18 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    if "--mem0-only" in sys.argv:
+        print("=" * 85)
+        print("       MEM0 HEAD-TO-HEAD BENCHMARK (standalone)")
+        print("=" * 85)
+        metrics = run_mem0_benchmark(SynapseEmbedder(provider="deterministic"))
+        scorecard = {
+            "timestamp": time.strftime("%Y-%m-%d %H:%M:%SZ", time.gmtime()),
+            "validation_type": "Empirical Measured Execution (No Synthetic Extrapolations)",
+            "mem0_head_to_head": metrics,
+        }
+        with open("benchmark_results.json", "w") as f:
+            json.dump(scorecard, f, indent=2)
+        print(json.dumps(metrics, indent=2))
+    else:
+        main()
