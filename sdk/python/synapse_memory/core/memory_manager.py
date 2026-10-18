@@ -18,13 +18,13 @@ logger = logging.getLogger("SynapseMemoryManager")
 # Override with SYNAPSE_MAX_RECORD_LIMIT (must be a positive integer).
 # The historical default was 50 records; change this only with capacity planning.
 try:
-    DEFAULT_MAX_RECORD_LIMIT = int(os.environ.get("SYNAPSE_MAX_RECORD_LIMIT", "200"))
+    DEFAULT_MAX_RECORD_LIMIT = int(os.environ.get("SYNAPSE_MAX_RECORD_LIMIT", "50"))
     if DEFAULT_MAX_RECORD_LIMIT <= 0:
         raise ValueError
 except (TypeError, ValueError):
-    DEFAULT_MAX_RECORD_LIMIT = 200
+    DEFAULT_MAX_RECORD_LIMIT = 50
     logger.warning(
-        "Invalid SYNAPSE_MAX_RECORD_LIMIT; using default max_record_limit=200"
+        "Invalid SYNAPSE_MAX_RECORD_LIMIT; using default max_record_limit=50"
     )
 
 

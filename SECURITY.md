@@ -67,15 +67,15 @@ To help us triage and resolve the issue quickly, please include:
    - Because a non-owner role cannot run DDL, the engine must be started with
      `SYNAPSE_APPLY_DB_SCHEMA=false`. It then refuses to start if `memories` is missing
      rather than silently falling back to in-memory storage.
-   - **Fix (v1.3.0):** the RLS policy's admin path is now role-gated inside the policy.
-     `PGVectorMemoryStore` still sets `app.current_tenant = ''` when admin access is
-     requested, but the policy's admin bypass is now `current_user = '<admin_role>'`
-     instead of the old GUC sentinel. Since `app.*` GUCs are still settable by any role,
-     raising `app.current_tenant` (or any other `app.*` value) can no longer bypass RLS —
-     only a session whose database `current_user` is the configured admin role is exempt.
-     The application layer remains authoritative for tenant binding (`resolve_tenant`
-     requires an explicit tenant for admin principals and rejects tenant mismatches).
-   - Isolation is regression-tested with the **actual runtime role** (not a DBA), over raw
+   - **Row-Level Security (RLS) Policy Mechanics (v1.3.1):**
+     The PostgreSQL RLS policy `tenant_isolation_policy` on `memories` enforces strict tenant isolation:
+     `tenant_id = NULLIF(current_setting('app.current_tenant', true), '') AND tenant_id IS NOT NULL`
+     with identical `USING` and `WITH CHECK` clauses.
+     - **Reads (`SELECT`):** Rows belonging to other tenants (or all rows if `app.current_tenant` is empty/unset) are filtered out by the `USING` clause, returning zero unauthorized rows.
+     - **Writes (`INSERT`/`UPDATE`):** Any attempt to insert or update a row with a mismatched `tenant_id` violates the `WITH CHECK` clause and fails closed by raising SQLSTATE `42501` (`InsufficientPrivilege`).
+     - **Administrative Cross-Tenant Access:** Intentional cross-tenant administrative operations (e.g. maintenance `clear_memories()`, corpus re-embedding) require both that the database session user is the configured admin role (`current_user = '<admin_role>'`) AND that an explicit bypass setting is enabled (`current_setting('app.admin_bypass_rls', true) = 'on'`). A non-empty tenant GUC alone never grants cross-tenant access. Runtime roles (`synapse_app`) are structurally denied from using this bypass.
+     - **Limitations:** RLS enforcement relies on the runtime connection having `FORCE ROW LEVEL SECURITY`, `NOSUPERUSER`, `NOBYPASSRLS`, and not owning the `memories` table. The engine validates these structural invariants on startup when `apply_schema=false`.
+   - Isolation is regression-tested with the **actual runtime role** (not an admin/DBA), over raw
      SQL and through the engine store: cross-tenant reads, missing context, cross-tenant
      writes, DDL/`TRUNCATE` denial, and tenant-scoped delete. See
      `tests/test_pgvector_integration.py::TestRuntimeRoleIsolation` plus the offline

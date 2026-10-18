@@ -19,6 +19,7 @@ class TestPGVectorIntegration(unittest.TestCase):
         if not HAS_PSYCOPG2:
             raise unittest.SkipTest("psycopg2 not installed; skipping PGVector integration tests.")
         cls.db_url = os.environ.get("DATABASE_URL")
+        cls.app_url = os.environ.get("SYNAPSE_APP_DATABASE_URL") or cls.db_url
         if not cls.db_url or not cls.db_url.startswith("postgres"):
             raise unittest.SkipTest("DATABASE_URL environment variable is not configured for PostgreSQL; skipping integration tests.")
 
@@ -46,6 +47,9 @@ class TestPGVectorIntegration(unittest.TestCase):
                     pass
         if not installed:
             raise unittest.SkipTest("pgvector extension is not installed in this database.")
+
+    def _app_connection(self):
+        return psycopg2.connect(self.app_url)
 
     def setUp(self):
         self.store = PGVectorMemoryStore(
@@ -80,21 +84,22 @@ class TestPGVectorIntegration(unittest.TestCase):
 
         # 3. Cross-tenant write rejection:
         # Tenant A tries to write as tenant_b while tenant_a context is enforced.
-        conn = self.store._get_connection()
+        conn = self._app_connection()
         try:
             with conn.cursor() as cur:
                 # Set tenant context to tenant_a
-                self.store._set_tenant_context(cur, "tenant_a")
+                cur.execute("SET LOCAL app.current_tenant = 'tenant_a';")
                 # Try inserting a record with tenant_id='tenant_b'
-                with self.assertRaises(psycopg2.Error):
+                with self.assertRaises(psycopg2.Error) as ctx:
                     cur.execute("""
-                        INSERT INTO memories (id, tenant_id, content, category, confidence, created_at, embedding)
-                        VALUES ('mem_cross_tenant', 'tenant_b', 'Illegal write', 'fact', 0.9, %s, %s);
-                    """, (time.time(), [0.1] * 384))
+                        INSERT INTO memories (id, tenant_id, content, content_plain, category, confidence, created_at, last_accessed_at, embedding)
+                        VALUES ('mem_cross_tenant', 'tenant_b', 'Illegal write', 'Illegal write', 'fact', 0.9, %s, %s, %s);
+                    """, (time.time(), time.time(), [0.1] * 384))
                     conn.commit()
+                self.assertEqual(ctx.exception.pgcode, "42501")
         finally:
             conn.rollback()
-            self.store._return_connection(conn)
+            conn.close()
 
     def test_missing_tenant_context_zero_access(self):
         # Insert a memory under tenant_a
@@ -109,7 +114,7 @@ class TestPGVectorIntegration(unittest.TestCase):
         }
         self.store.insert_memory(mem_a)
 
-        conn = self.store._get_connection()
+        conn = self._app_connection()
         try:
             with conn.cursor() as cur:
                 # Set local app.current_tenant to empty
@@ -118,13 +123,13 @@ class TestPGVectorIntegration(unittest.TestCase):
                 rows = cur.fetchall()
                 self.assertEqual(len(rows), 0)
         finally:
-            self.store._return_connection(conn)
+            conn.close()
 
     def test_rls_enforced_at_sql_level_bypassing_app(self):
         """Proves RLS blocks cross-tenant reads even when the app layer is bypassed.
 
-        Inserts one row per tenant with a raw superuser-ish connection, then runs
-        plain SELECTs under each tenant's GUC context and asserts hard isolation.
+        Inserts one row per tenant with a migration/admin connection, then runs
+        plain SELECTs under each tenant's GUC context using the runtime role and asserts hard isolation.
         """
         tenants = {"tenant_rls_a": "RLS secret for tenant A", "tenant_rls_b": "RLS secret for tenant B"}
         for tid, text in tenants.items():
@@ -138,7 +143,7 @@ class TestPGVectorIntegration(unittest.TestCase):
                 "tenant_id": tid,
             })
 
-        conn = self.store._get_connection()
+        conn = self._app_connection()
         try:
             with conn.cursor() as cur:
                 # Tenant A context sees only its own row.
@@ -159,7 +164,7 @@ class TestPGVectorIntegration(unittest.TestCase):
                 self.assertEqual(cur.fetchall(), [])
             conn.rollback()
         finally:
-            self.store._return_connection(conn)
+            conn.close()
 
     def test_rls_blocks_cross_tenant_vector_and_hybrid_search(self):
         """Vector + hybrid SQL search must never leak across tenants (HNSW path)."""
@@ -574,7 +579,7 @@ class TestRuntimeRoleIsolation(unittest.TestCase):
         try:
             with conn.cursor() as cur:
                 cur.execute("SET LOCAL app.current_tenant = %s;", (self.TENANT_A,))
-                with self.assertRaises(psycopg2.Error):
+                with self.assertRaises(psycopg2.Error) as ctx:
                     cur.execute(
                         "INSERT INTO memories (id, tenant_id, content, content_plain, "
                         "category, confidence, created_at, last_accessed_at, "
@@ -582,6 +587,7 @@ class TestRuntimeRoleIsolation(unittest.TestCase):
                         "VALUES ('rt_evil', %s, 'x', 'x', 'fact', 0.9, %s, %s, 0, 1, 1.0);",
                         (self.TENANT_B, time.time(), time.time()))
                     conn.commit()
+                self.assertEqual(ctx.exception.pgcode, "42501")
             conn.rollback()
         finally:
             conn.close()
@@ -605,24 +611,36 @@ class TestRuntimeRoleIsolation(unittest.TestCase):
     def test_admin_access_requires_admin_role_membership(self):
         """Unscoped access must be role-gated, not GUC-gatable.
 
-        The engine sets app.current_tenant='' only when it is running as a
-        member of the admin role. A runtime-role session (not a member) must
-        be refused at connection/validation time, and the error must map to a
-        403 TenantIsolationError at the API layer.
+        An ordinary unauthorized SELECT under RLS filters out rows (asserts zero rows).
+        Cross-tenant INSERT or UPDATE violates the WITH CHECK policy and raises SQLSTATE 42501.
         """
         # Raw connection as runtime role (no tenant context set)
         conn = psycopg2.connect(self.app_url)
         try:
             with conn.cursor() as cur:
-                # The new pg_has_role guard should raise before any cross-tenant
-                # query is even reachable.
+                # 1. Unauthorized SELECT with empty tenant context returns zero rows
+                cur.execute("SET LOCAL app.current_tenant = '';")
+                cur.execute(
+                    "SELECT 1 FROM memories WHERE tenant_id IS NULL "
+                    "OR tenant_id = 'spoofed' LIMIT 1;"
+                )
+                self.assertEqual(cur.fetchall(), [])
+
+                # 2. Attempting to set admin bypass flag as runtime role does not bypass RLS
+                cur.execute("SET LOCAL app.admin_bypass_rls = 'on';")
+                cur.execute("SELECT id FROM memories;")
+                self.assertEqual(cur.fetchall(), [])
+
+                # 3. Cross-tenant write violates WITH CHECK and raises SQLSTATE 42501 (InsufficientPrivilege)
                 with self.assertRaises(psycopg2.Error) as ctx:
                     cur.execute(
-                        "SELECT 1 FROM memories WHERE tenant_id IS NULL "
-                        "OR tenant_id = 'spoofed' LIMIT 1;"
+                        "INSERT INTO memories (id, tenant_id, content, content_plain, "
+                        "category, confidence, created_at, last_accessed_at, "
+                        "access_count, token_cost, feedback_multiplier) "
+                        "VALUES ('rt_unauth', 'spoofed', 'x', 'x', 'fact', 0.9, %s, %s, 0, 1, 1.0);",
+                        (time.time(), time.time())
                     )
-                self.assertIn("P0001", str(ctx.exception))
-                self.assertIn("not a member of admin role", str(ctx.exception))
+                self.assertEqual(ctx.exception.pgcode, "42501")
         finally:
             conn.close()
 

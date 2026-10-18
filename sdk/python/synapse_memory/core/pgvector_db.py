@@ -59,7 +59,8 @@ class PGVectorMemoryStore:
         auto_init: bool = True,
         fail_closed: bool = False,
         apply_schema: bool = True,
-        admin_role: str = "synapse_admin",
+        admin_role: Optional[str] = None,
+        runtime_role: Optional[str] = None,
     ):
         # SECURITY: never ship a default password. Require explicit DATABASE_URL in prod.
         # Local dev convenience default uses an obviously-insecure placeholder and logs a warning.
@@ -80,12 +81,17 @@ class PGVectorMemoryStore:
         # See scripts/provision_db_roles.py. Default True preserves the
         # single-role local/dev behaviour.
         self.apply_schema = apply_schema
-        # Admin role whose current_user bypasses RLS in tenant_isolation_policy.
-        # Gated on current_user (not a settable GUC) so a compromised runtime DSN
-        # cannot set `app.current_tenant` to a sentinel and read all tenants.
-        if not re.match(r"^[A-Za-z_][A-Za-z0-9_]{0,62}$", admin_role):
-            raise ValueError(f"admin_role must be a safe identifier, got: {admin_role!r}")
-        self.admin_role = admin_role
+
+        resolved_admin = admin_role or os.environ.get("SYNAPSE_DB_ADMIN_ROLE", "synapse_admin")
+        if not re.match(r"^[A-Za-z_][A-Za-z0-9_]{0,62}$", resolved_admin):
+            raise ValueError(f"admin_role must be a safe identifier, got: {resolved_admin!r}")
+        self.admin_role = resolved_admin
+
+        resolved_runtime = runtime_role or os.environ.get("SYNAPSE_DB_RUNTIME_ROLE", "synapse_app")
+        if not re.match(r"^[A-Za-z_][A-Za-z0-9_]{0,62}$", resolved_runtime):
+            raise ValueError(f"runtime_role must be a safe identifier, got: {resolved_runtime!r}")
+        self.runtime_role = resolved_runtime
+
         self._pool: Optional[Any] = None
         self._connected = False
 
@@ -151,6 +157,9 @@ class PGVectorMemoryStore:
         schema was provisioned by the migration step; if ``memories`` is absent we
         raise rather than silently degrading to the in-memory fallback cache
         (which would fake successful writes and lose data on restart).
+        Also verifies the connecting runtime database role is not a superuser,
+        does not have BYPASSRLS, does not own table 'memories', and is not the
+        privileged admin role.
         """
         conn = self._get_connection()
         try:
@@ -158,14 +167,79 @@ class PGVectorMemoryStore:
                 cur.execute("SELECT to_regclass('public.memories') IS NOT NULL;")
                 row = cur.fetchone()
                 present = bool(row[0]) if row else False
-            if not present:
-                raise RuntimeError(
-                    "Schema not provisioned: table 'memories' is missing. Run the "
-                    "migration step (SQLite/Postgres DDL + migrations) before starting "
-                    "the engine with apply_schema=False."
+                if not present:
+                    raise RuntimeError(
+                        "Schema not provisioned: table 'memories' is missing. Run the "
+                        "migration step (SQLite/Postgres DDL + migrations) before starting "
+                        "the engine with apply_schema=False."
+                    )
+                cur.execute(
+                    """
+                    SELECT r.rolsuper, r.rolbypassrls, t.tableowner, current_user
+                    FROM pg_roles r
+                    CROSS JOIN (
+                        SELECT tableowner FROM pg_tables WHERE schemaname = 'public' AND tablename = 'memories'
+                    ) t
+                    WHERE r.rolname = current_user;
+                    """
                 )
+                res = cur.fetchone()
+                if res:
+                    is_super = res[0] if isinstance(res, (tuple, list)) else res.get("rolsuper")
+                    has_bypassrls = res[1] if isinstance(res, (tuple, list)) else res.get("rolbypassrls")
+                    owner = res[2] if isinstance(res, (tuple, list)) else res.get("tableowner")
+                    curr_user = res[3] if isinstance(res, (tuple, list)) else res.get("current_user")
+                    if is_super:
+                        raise RuntimeError(f"Security violation: runtime connection user '{curr_user}' is a SUPERUSER.")
+                    if has_bypassrls:
+                        raise RuntimeError(f"Security violation: runtime connection user '{curr_user}' has BYPASSRLS privilege.")
+                    if owner == curr_user:
+                        raise RuntimeError(f"Security violation: runtime connection user '{curr_user}' owns table 'memories'.")
+                    if curr_user == self.admin_role:
+                        raise RuntimeError(f"Security violation: runtime connections must not use admin role '{curr_user}'.")
         finally:
             self._return_connection(conn)
+
+    def _apply_rls_policy(self, cur: Any) -> None:
+        """Applies or updates the row-level security policy idempotently.
+
+        Enforces tenant isolation for normal operations:
+            tenant_id = NULLIF(current_setting('app.current_tenant', true), '') AND tenant_id IS NOT NULL
+        Matching USING and WITH CHECK clauses ensure cross-tenant writes/updates are rejected (SQLSTATE 42501).
+        Intentional cross-tenant administrative operations require the admin role and explicit bypass flag.
+        """
+        cur.execute("ALTER TABLE memories ENABLE ROW LEVEL SECURITY;")
+        cur.execute("ALTER TABLE memories FORCE ROW LEVEL SECURITY;")
+        admin_quoted = self.admin_role.replace("'", "''")
+        rls_sql = f"""
+        DO $$
+        BEGIN
+            DROP POLICY IF EXISTS tenant_isolation_policy ON memories;
+            CREATE POLICY tenant_isolation_policy ON memories
+            FOR ALL
+            USING (
+                (
+                    tenant_id = NULLIF(current_setting('app.current_tenant', true), '')
+                    AND tenant_id IS NOT NULL
+                )
+                OR (
+                    current_user = '{admin_quoted}'
+                    AND current_setting('app.admin_bypass_rls', true) = 'on'
+                )
+            )
+            WITH CHECK (
+                (
+                    tenant_id = NULLIF(current_setting('app.current_tenant', true), '')
+                    AND tenant_id IS NOT NULL
+                )
+                OR (
+                    current_user = '{admin_quoted}'
+                    AND current_setting('app.admin_bypass_rls', true) = 'on'
+                )
+            );
+        END $$;
+        """
+        cur.execute(rls_sql)
 
     def _initialize_database(self) -> None:
         if not self._connected or not HAS_PSYCOPG2:
@@ -289,84 +363,7 @@ class PGVectorMemoryStore:
                     logger.warning(f"Full-Text Search column initialization deferred: {fts_err}")
 
                 # 6. Database Row-Level Security (RLS)
-                cur.execute("ALTER TABLE memories ENABLE ROW LEVEL SECURITY;")
-                cur.execute("ALTER TABLE memories FORCE ROW LEVEL SECURITY;")
-                # Build a SQL string literal for the admin role. current_user is
-                # evaluated at query time; only the actual admin DB role bypasses
-                # RLS. A settable GUC sentinel can no longer be abused by a
-                # compromised runtime DSN.
-                _admin_role_sql = "current_user = '" + self.admin_role.replace("'", "''") + "'"
-                _rls_sql = (
-                    "DO $$\n"
-                    "BEGIN\n"
-                    "    IF NOT EXISTS (\n"
-                    "        SELECT 1 FROM pg_policies WHERE tablename = 'memories' AND policyname = 'tenant_isolation_policy'\n"
-                    "    ) THEN\n"
-                    "        CREATE POLICY tenant_isolation_policy ON memories\n"
-                    "        FOR ALL\n"
-                    "        USING (\n"
-                    "            (\n"
-                    "                tenant_id = NULLIF(current_setting('app.current_tenant', true), '')\n"
-                    "                AND tenant_id IS NOT NULL\n"
-                    "            )\n"
-                    "            OR (" + _admin_role_sql + " AND current_setting('app.current_tenant', true) <> '')\n"
-                    "        )\n"
-                    "        WITH CHECK (\n"
-                    "            (\n"
-                    "                tenant_id = NULLIF(current_setting('app.current_tenant', true), '')\n"
-                    "                AND tenant_id IS NOT NULL\n"
-                    "            )\n"
-                    "            OR (" + _admin_role_sql + " AND current_setting('app.current_tenant', true) <> '')\n"
-                    "        );\n"
-                    "    ELSE\n"
-                    "        -- Migrate legacy policy (no admin bypass) to the current version.\n"
-                    "        DROP POLICY IF EXISTS tenant_isolation_policy ON memories;\n"
-                    "        CREATE POLICY tenant_isolation_policy ON memories\n"
-                    "        FOR ALL\n"
-                    "        USING (\n"
-                    "            (\n"
-                    "                tenant_id = NULLIF(current_setting('app.current_tenant', true), '')\n"
-                    "                AND tenant_id IS NOT NULL\n"
-                    "            )\n"
-                    "            OR " + _admin_role_sql + "\n"
-                    "        )\n"
-                    "        WITH CHECK (\n"
-                    "            (\n"
-                    "                tenant_id = NULLIF(current_setting('app.current_tenant', true), '')\n"
-                    "                AND tenant_id IS NOT NULL\n"
-                    "            )\n"
-                    "            OR " + _admin_role_sql + "\n"
-                    "        );\n"
-                    "    END IF;\n"
-                    "END $$;\n"
-                )
-                cur.execute(_rls_sql)
-
-                # Verify the current DB session's role membership. Error out with
-                # a mapped 403 TenantIsolationError if the engine is running as a
-                # role that is NOT a member of the configured admin role, so a
-                # misconfigured runtime DSN cannot silently gain unscoped access.
-                _verify_role_sql = (
-                    "DO $$\n"
-                    "BEGIN\n"
-                    "    IF NOT pg_has_role(current_user, '" + self.admin_role.replace("'", "''") + "', 'MEMBER') THEN\n"
-                    "        RAISE EXCEPTION 'security: current_user % is not a member of admin role %', current_user, '" + self.admin_role.replace("'", "''") + "' USING\n"
-                    "            ERRCODE = 'P0001', -- internal_error (mapped to TenantIsolationError)\n"
-                    "            MESSAGE = 'Forbidden: unscoped admin access requires membership in admin role';\n"
-                    "    END IF;\n"
-                    "END $$;\n"
-                )
-                cur.execute(_verify_role_sql)
-
-                if not self.apply_schema:
-                    cur.execute(
-                        "DO $$\n"
-                        "BEGIN\n"
-                        f"    IF current_user = '{self.admin_role}' THEN\n"
-                        "        RAISE EXCEPTION 'security: runtime connections must not use admin role %', current_user USING ERRCODE = 'P0001';\n"
-                        "    END IF;\n"
-                        "END $$;"
-                    )
+                self._apply_rls_policy(cur)
                 conn.commit()
         except Exception as e:
             conn.rollback()
@@ -892,10 +889,11 @@ class PGVectorMemoryStore:
         conn = self._get_connection()
         try:
             with conn.cursor() as cur:
-                self._set_tenant_context(cur, tenant_id)
                 if tenant_id:
+                    self._set_tenant_context(cur, tenant_id)
                     cur.execute("SELECT count(*) FROM memories WHERE tenant_id = %s;", (tenant_id,))
                 else:
+                    cur.execute("SET LOCAL app.admin_bypass_rls = 'on';")
                     cur.execute("SELECT count(*) FROM memories;")
                 return int(cur.fetchone()[0])
         except Exception as e:
@@ -912,10 +910,11 @@ class PGVectorMemoryStore:
         conn = self._get_connection()
         try:
             with conn.cursor(cursor_factory=RealDictCursor) as cur:
-                self._set_tenant_context(cur, tenant_id)
                 if tenant_id:
+                    self._set_tenant_context(cur, tenant_id)
                     cur.execute("SELECT * FROM memories WHERE tenant_id = %s ORDER BY created_at DESC;", (tenant_id,))
                 else:
+                    cur.execute("SET LOCAL app.admin_bypass_rls = 'on';")
                     cur.execute("SELECT * FROM memories ORDER BY created_at DESC;")
                 rows = cur.fetchall()
                 return [self._decrypt_row(dict(r)) for r in rows]
@@ -988,10 +987,11 @@ class PGVectorMemoryStore:
         conn = self._get_connection()
         try:
             with conn.cursor() as cur:
-                self._set_tenant_context(cur, tenant_id)
                 if tenant_id:
+                    self._set_tenant_context(cur, tenant_id)
                     cur.execute("DELETE FROM memories WHERE id = %s AND tenant_id = %s;", (memory_id, tenant_id))
                 else:
+                    cur.execute("SET LOCAL app.admin_bypass_rls = 'on';")
                     cur.execute("DELETE FROM memories WHERE id = %s;", (memory_id,))
                 conn.commit()
         except Exception as e:
@@ -1016,10 +1016,11 @@ class PGVectorMemoryStore:
         conn = self._get_connection()
         try:
             with conn.cursor() as cur:
-                self._set_tenant_context(cur, tenant_id)
                 if tenant_id:
+                    self._set_tenant_context(cur, tenant_id)
                     cur.execute("DELETE FROM memories WHERE tenant_id = %s;", (tenant_id,))
                 else:
+                    cur.execute("SET LOCAL app.admin_bypass_rls = 'on';")
                     cur.execute("DELETE FROM memories;")
                 deleted_count = cur.rowcount
                 conn.commit()
@@ -1055,6 +1056,7 @@ class PGVectorMemoryStore:
             setup_cur = conn.cursor()
             try:
                 self._set_tenant_context(setup_cur, None)
+                setup_cur.execute("SET LOCAL app.admin_bypass_rls = 'on';")
             finally:
                 try:
                     setup_cur.close()
