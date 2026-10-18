@@ -122,8 +122,20 @@ class TestSynapseCore(unittest.TestCase):
         id2, action2, _ = self.manager.ingest_with_deduplication(similar_content, "infrastructure")
 
         self.assertEqual(action2, "MERGED")
-        self.assertEqual(id1, id2)  # IDs must align exactly due to merge mapping
-        self.assertEqual(self.store.count_memories(), 1)
+        # P1.3: MERGE preserves content as a successor row linked by
+        # supersedes/superseded_by instead of mutating the old row in place.
+        self.assertNotEqual(id1, id2)
+        old_row = self.store.get_memory_by_id(id1)
+        new_row = self.store.get_memory_by_id(id2)
+        self.assertIsNotNone(old_row)
+        self.assertIsNotNone(new_row)
+        self.assertEqual(old_row.get("superseded_by"), id2)
+        self.assertEqual(new_row.get("supersedes"), id1)
+        # Lineage keeps both rows...
+        self.assertEqual(self.store.count_memories(), 2)
+        # ...but retrieval only serves the active successor.
+        self.assertEqual(len(self.store.get_all_memories()), 1)
+        self.assertEqual(self.store.get_all_memories()[0]["id"], id2)
 
     def test_auto_pruning_limit(self):
         """Tests active eviction once limit borders are breached using distinct semantic sentences."""

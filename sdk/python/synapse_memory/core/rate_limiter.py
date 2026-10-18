@@ -85,6 +85,25 @@ class InProcessRateLimiter:
             bucket.append(now)
             return True
 
+    def prune_idle(self, max_idle_seconds: float = 300.0) -> int:
+        """Remove buckets whose newest timestamp is older than max_idle_seconds.
+
+        Bounds memory growth under a high-cardinality key space (e.g. spoofed
+        API keys). Call periodically from a background thread or request path.
+        Returns the number of buckets removed.
+        """
+        cutoff = time.time() - max_idle_seconds
+        removed = 0
+        with self._lock:
+            stale = [
+                key for key, bucket in self._buckets.items()
+                if not bucket or bucket[-1] < cutoff
+            ]
+            for key in stale:
+                self._buckets.pop(key, None)
+                removed += 1
+        return removed
+
     def reset(self) -> None:
         """Clear all windows (used by tests and on config reload)."""
         with self._lock:

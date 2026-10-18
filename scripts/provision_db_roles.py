@@ -57,6 +57,13 @@ RUNTIME_TABLE_PRIVILEGES = ("SELECT", "INSERT", "UPDATE", "DELETE")
 # Privileges the runtime role must NOT hold (they escape tenant row policies).
 FORBIDDEN_TABLE_PRIVILEGES = ("TRUNCATE", "REFERENCES", "TRIGGER")
 
+# Auth tables owned by the admin migration role; runtime needs only
+# key lookup (SELECT), last-used update (UPDATE), and audit insert (INSERT).
+RUNTIME_AUTH_TABLE_PRIVILEGES = ("SELECT", "INSERT", "UPDATE")
+FORBIDDEN_AUTH_TABLE_PRIVILEGES = ("DELETE", "TRUNCATE", "REFERENCES", "TRIGGER")
+
+AUTH_TABLES = ("api_keys", "auth_audit_logs")
+
 VERIFY_ROLE_ATTRS_SQL = (
     "SELECT rolsuper, rolbypassrls, rolcreaterole, rolcreatedb, rolcanlogin "
     "FROM pg_roles WHERE rolname = %s"
@@ -154,6 +161,19 @@ def privilege_statements(runtime_role, admin_role, has_memories_table):
             ("runtime: revoke TRUNCATE",
              "REVOKE TRUNCATE ON TABLE public.memories FROM " + rt, ()),
         ]
+    # Auth tables: runtime needs SELECT (key lookup), UPDATE (last_used_at),
+    # INSERT (audit log). No DELETE/TRUNCATE/REFERENCES/TRIGGER.
+    for table in AUTH_TABLES:
+        stmts += [
+            (f"runtime: strip every existing privilege on {table}",
+             f"REVOKE ALL PRIVILEGES ON TABLE public.{table} FROM " + rt, ()),
+            (f"runtime: grant scoped DML on {table}",
+             "GRANT " + ", ".join(RUNTIME_AUTH_TABLE_PRIVILEGES)
+             + f" ON TABLE public.{table} TO " + rt, ()),
+            (f"runtime: revoke forbidden privileges on {table}",
+             "REVOKE " + ", ".join(FORBIDDEN_AUTH_TABLE_PRIVILEGES)
+             + f" ON TABLE public.{table} FROM " + rt, ()),
+        ]
     stmts.append(
         ("future tables created by the migration role: DML only",
          "ALTER DEFAULT PRIVILEGES FOR ROLE " + adm + " IN SCHEMA public "
@@ -200,11 +220,14 @@ def evaluate_role_row(role, row):
 
 
 def evaluate_privileges(runtime_role, table_privs, can_create_schema,
-                        runtime_in_admin, owner, admin_role):
+                        runtime_in_admin, owner, admin_role,
+                        auth_table_privs=None):
     """Return ``(failures, advisories)`` for the runtime role's privileges.
 
     ``table_privs`` is the 7-tuple from VERIFY_TABLE_PRIVS_SQL, or None when the
-    table does not exist yet. Advisories are reported but do not fail the run.
+    table does not exist yet. ``auth_table_privs`` is a per-table dict of
+    (priv -> bool) for auth tables, or None. Advisories are reported but do
+    not fail the run.
     """
     failures = []
     advisories = []
@@ -232,6 +255,18 @@ def evaluate_privileges(runtime_role, table_privs, can_create_schema,
             if granted.get(priv):
                 failures.append(runtime_role + ": must NOT hold " + priv
                                 + " on public.memories")
+    # Verify auth table privileges (runtime needs SELECT/INSERT/UPDATE only).
+    if auth_table_privs is not None:
+        for table in AUTH_TABLES:
+            perms = auth_table_privs.get(table, {})
+            for priv in RUNTIME_AUTH_TABLE_PRIVILEGES:
+                if not perms.get(priv):
+                    failures.append(runtime_role + ": missing required " + priv
+                                    + " on public." + table)
+            for priv in FORBIDDEN_AUTH_TABLE_PRIVILEGES:
+                if perms.get(priv):
+                    failures.append(runtime_role + ": must NOT hold " + priv
+                                    + " on public." + table)
     return failures, advisories
 
 
@@ -320,8 +355,22 @@ def provision(dsn, runtime_role, admin_role, runtime_password, admin_password,
                 cur, VERIFY_SCHEMA_PRIVS_SQL, (runtime_role,))[0])
             in_admin = bool(_fetchone(
                 cur, VERIFY_MEMBERSHIP_SQL, (runtime_role, admin_role))[0])
+            # Verify auth table privileges for the runtime role.
+            auth_table_privs = {}
+            for table in AUTH_TABLES:
+                # has_table_privilege(role, table, priv) returns boolean for each priv.
+                auth_privs = {}
+                for priv in RUNTIME_AUTH_TABLE_PRIVILEGES + FORBIDDEN_AUTH_TABLE_PRIVILEGES:
+                    row = _fetchone(
+                        cur,
+                        "SELECT has_table_privilege(%s, %s, %s)",
+                        (runtime_role, f"public.{table}", priv),
+                    )
+                    auth_privs[priv] = bool(row[0]) if row else False
+                auth_table_privs[table] = auth_privs
             priv_failures, priv_advisories = evaluate_privileges(
-                runtime_role, privs, can_create, in_admin, current_owner, admin_role)
+                runtime_role, privs, can_create, in_admin, current_owner, admin_role,
+                auth_table_privs=auth_table_privs)
             failures += priv_failures
             advisories += priv_advisories
     finally:

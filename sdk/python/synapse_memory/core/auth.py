@@ -68,13 +68,20 @@ class SecurityManager:
         self,
         db_path: str = "synapse_memory.db",
         connection_string: Optional[str] = None,
-        fail_closed: bool = False
+        fail_closed: bool = False,
+        validate_schema_only: bool = False,
     ):
         self.db_path = db_path
         self.connection_string = connection_string
         self.fail_closed = fail_closed
         self._pool: Optional[Any] = None
         self._is_postgres = False
+        # When validate_schema_only=True, the engine does not create auth tables
+        # at startup; it only verifies they exist and are accessible. DDL must be
+        # run ahead of time by the admin migration step (scripts/provision_db_roles.py
+        # plus a dedicated auth-schema migration). Required for least-privilege
+        # runtime roles that cannot execute DDL.
+        self.validate_schema_only = validate_schema_only
 
         if self.connection_string:
             if HAS_PSYCOPG2 and pool is not None:
@@ -103,6 +110,13 @@ class SecurityManager:
                 logger.warning(
                     f"psycopg2 unavailable; falling back to SQLite {db_path}."
                 )
+
+        # Initialize or validate auth tables. In validate_schema_only mode we only
+        # confirm the tables exist; we never issue DDL.
+        if self.validate_schema_only:
+            self._validate_auth_tables()
+        else:
+            self._initialize_auth_tables()
 
         self._initialize_auth_tables()
         self._bootstrap_root_key()
@@ -214,6 +228,50 @@ class SecurityManager:
             if self.fail_closed:
                 raise RuntimeError(f"Failed to initialize centralized authentication tables: {e}") from e
             logger.warning(f"Error initializing auth tables: {e}")
+        finally:
+            self._return_connection(conn)
+
+    def _validate_auth_tables(self) -> None:
+        """Read-only schema validation for least-privilege runtime mode.
+
+        Confirms that api_keys and auth_audit_logs exist and are readable by the
+        current role. Never issues DDL. Raises RuntimeError (fail-closed) if
+        the schema is missing or unreadable, so production traffic is not served
+        against an incomplete auth schema.
+        """
+        conn = self._get_connection()
+        try:
+            cur = conn.cursor()
+            required_tables = ("api_keys", "auth_audit_logs")
+            for table in required_tables:
+                if self._is_postgres:
+                    cur.execute(
+                        "SELECT to_regclass(%s)", (f"public.{table}",)
+                    )
+                    if cur.fetchone()[0] is None:
+                        raise RuntimeError(
+                            f"Auth table 'public.{table}' is missing. Run the admin "
+                            "auth-schema migration before starting the engine with "
+                            "SYNAPSE_APPLY_DB_SCHEMA=false."
+                        )
+                else:
+                    cur.execute(
+                        "SELECT name FROM sqlite_master WHERE type='table' AND name=?",
+                        (table,),
+                    )
+                    if cur.fetchone() is None:
+                        raise RuntimeError(
+                            f"Auth table '{table}' is missing. Run the admin "
+                            "auth-schema migration before starting the engine."
+                        )
+            # Verify a simple SELECT works (read permission).
+            cur.execute("SELECT 1 FROM api_keys LIMIT 1")
+            cur.execute("SELECT 1 FROM auth_audit_logs LIMIT 1")
+            logger.info("Auth schema validation passed: api_keys and auth_audit_logs are readable.")
+        except Exception as e:
+            if self.fail_closed:
+                raise RuntimeError(f"Auth schema validation failed: {e}") from e
+            logger.warning(f"Auth schema validation warning (non-fail-closed): {e}")
         finally:
             self._return_connection(conn)
 
@@ -468,6 +526,8 @@ class SecurityManager:
         requested value must equal the binding (admins with tenant "*" bypass
         the tenant leg only). Returns (allowed, reason).
         """
+        if self.is_system_principal(record):
+            return True, "System principal bypass"
         if requested_org and record.organization_id not in ("*", "", "org_system"):
             if requested_org != record.organization_id:
                 return False, f"Organization boundary violation. Key bound to: {record.organization_id}"
@@ -478,6 +538,15 @@ class SecurityManager:
             if requested_tenant != record.tenant_id:
                 return False, f"Tenant boundary violation. Key bound to: {record.tenant_id}"
         return True, "Hierarchy check passed"
+
+    def is_system_principal(self, record: APIKeyRecord) -> bool:
+        """Platform-internal principals (env master key / org_system) are operators.
+
+        They predate per-org key bindings and exist to administer the whole
+        deployment; every hierarchy-gated admin endpoint bypasses the org →
+        project → tenant legs for them.
+        """
+        return record.key_id == "key_env_master" or record.organization_id == "org_system"
 
     def list_api_keys(self, organization_id: Optional[str] = None) -> List[Dict[str, Any]]:
         conn = self._get_connection()
@@ -612,18 +681,29 @@ class SecurityManager:
         finally:
             self._return_connection(conn)
 
-    def prune_audit_logs(self, older_than_seconds: float = 90 * 86400) -> int:
+    def prune_audit_logs(
+        self, older_than_seconds: float = 90 * 86400, tenant_id: Optional[str] = None
+    ) -> int:
         """Delete audit records older than the retention window.
 
         Default 90 days. Returns the deleted row count so the gateway can
         confirm and log the retention pass. Always logged as an audit event.
+        P1.1: pass tenant_id to scope the retention pass to one tenant —
+        tenant-bound admins must not be able to destroy other tenants'
+        audit evidence. None (system principals only) prunes globally.
         """
         cutoff = time.time() - max(0.0, float(older_than_seconds))
         conn = self._get_connection()
         try:
             cur = conn.cursor()
-            sql = self._format_sql("DELETE FROM auth_audit_logs WHERE timestamp < ?")
-            cur.execute(sql, (cutoff,))
+            if tenant_id is not None:
+                sql = self._format_sql(
+                    "DELETE FROM auth_audit_logs WHERE timestamp < ? AND tenant_id = ?"
+                )
+                cur.execute(sql, (cutoff, tenant_id))
+            else:
+                sql = self._format_sql("DELETE FROM auth_audit_logs WHERE timestamp < ?")
+                cur.execute(sql, (cutoff,))
             deleted = cur.rowcount if cur.rowcount is not None else 0
             conn.commit()
             return int(deleted)

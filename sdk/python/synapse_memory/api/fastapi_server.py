@@ -2,6 +2,7 @@ import sys
 import os
 import time
 import datetime
+import hashlib
 import logging
 import threading
 from typing import List, Dict, Any, Optional
@@ -49,10 +50,14 @@ ENABLE_DEMO_ROUTES = os.environ.get("ENABLE_DEMO_ROUTES", "false" if IS_PRODUCTI
 APPLY_DB_SCHEMA = os.environ.get("SYNAPSE_APPLY_DB_SCHEMA", "true").lower() == "true"
 
 # Security & Distributed Identity Engine
+# When SYNAPSE_APPLY_DB_SCHEMA=false (least-privilege production topology), the
+# engine must not issue DDL; it only validates that auth tables exist and are
+# readable by the runtime role.
 security_manager = SecurityManager(
     db_path=SQLITE_DB_PATH,
     connection_string=DATABASE_URL if (DATABASE_URL and STORAGE_BACKEND in ["pgvector", "auto"]) else None,
-    fail_closed=FAIL_CLOSED_DB or (IS_PRODUCTION and bool(DATABASE_URL))
+    fail_closed=FAIL_CLOSED_DB or (IS_PRODUCTION and bool(DATABASE_URL)),
+    validate_schema_only=not APPLY_DB_SCHEMA,
 )
 
 # Instantiate active embedder to establish canonical vector dimension
@@ -119,6 +124,7 @@ _request_counts: Dict[tuple, int] = {}
 _latency_samples: Dict[str, list] = {}
 _auth_failures = 0
 _rate_limit_rejections = 0
+_rate_limit_checks = 0
 _ingest_success = 0
 _ingest_errors = 0
 _retrieval_success = 0
@@ -138,12 +144,41 @@ def _record_request(path: str, status: int, latency_s: float) -> None:
 
 
 def _check_rate_limit(key: str) -> None:
-    global _rate_limit_rejections
+    global _rate_limit_rejections, _rate_limit_checks
+    with _metrics_lock:
+        _rate_limit_checks += 1
+        should_prune = _rate_limit_checks % 256 == 0
+    # Opportunistically bound bucket growth: a spoofed/rotating key space must
+    # not accumulate buckets forever. No-op on the Redis limiter (keys PEXPIRE).
+    if should_prune:
+        prune = getattr(rate_limiter, "prune_idle", None)
+        if callable(prune):
+            try:
+                prune()
+            except Exception:
+                pass
     if rate_limiter.check(key, RATE_LIMIT_PER_MIN, RATE_LIMIT_WINDOW_SECONDS):
         return
     with _metrics_lock:
         _rate_limit_rejections += 1
     raise HTTPException(status_code=429, detail="Rate limit exceeded. Retry after 60s.")
+
+
+def _rate_limit_principal(request: Request) -> str:
+    """Stable, non-reversible bucket identity for a request.
+
+    Buckets key on a truncated SHA-256 of the presented API key — never the raw
+    secret — so every request from the same credential shares one bucket and the
+    secret is never stored in limiter state. The client IP is folded in so a
+    caller rotating spoofed API-key values cannot mint unlimited buckets from a
+    single source address. Anonymous traffic falls back to the client IP alone.
+    """
+    api_key = request.headers.get("X-Synapse-API-Key") or ""
+    client_ip = request.client.host if request.client else "anon"
+    if api_key:
+        digest = hashlib.sha256(api_key.encode("utf-8")).hexdigest()[:16]
+        return f"{client_ip}:{digest}"
+    return f"ip:{client_ip}"
 
 
 # Initialize FastAPI application (MUST precede any @app.middleware / route registration)
@@ -162,9 +197,8 @@ async def add_request_id_and_rate_limit(request: Request, call_next):  # type: i
     start = time.time()
     # Rate-limit only mutating + heavy retrieval endpoints
     if request.url.path.startswith(("/ingest", "/api/memories", "/query", "/api/retrieval")):
-        client_key = request.headers.get("X-Synapse-API-Key") or (request.client.host if request.client else "anon")
         try:
-            _check_rate_limit(f"{client_key}:{request.url.path}")
+            _check_rate_limit(f"{_rate_limit_principal(request)}:{request.url.path}")
         except HTTPException as e:
             from fastapi.responses import JSONResponse
 
@@ -437,7 +471,17 @@ def list_memories(
     offset = max(0, offset)
     if category:
         mems = store.get_memories_by_category(category, tenant_id=effective_tenant)
+        # Full category-filtered set: length is the accurate total.
+        total = len(mems)
     else:
+        # Pagination total must be the REAL corpus size (via COUNT), not the
+        # length of the fetched page window.
+        if hasattr(store, "count_active_memories"):
+            total = store.count_active_memories(tenant_id=effective_tenant)  # type: ignore
+        elif hasattr(store, "count_memories"):
+            total = store.count_memories(tenant_id=effective_tenant)  # type: ignore
+        else:
+            total = None  # type: ignore
         # Prefer bounded candidate query when available to avoid full-table loads
         if hasattr(store, "query_candidates"):
             try:
@@ -446,8 +490,9 @@ def list_memories(
                 mems = store.get_all_memories(tenant_id=effective_tenant)
         else:
             mems = store.get_all_memories(tenant_id=effective_tenant)
+        if total is None:
+            total = len(mems)
 
-    total = len(mems)
     page = mems[offset : offset + limit]
 
     return envelope(
@@ -739,6 +784,16 @@ def create_api_key(
     principal: APIKeyRecord = Depends(require_scope("admin"))
 ):
     """Generates a new cryptographic API Key with RBAC scopes."""
+    # P1.1: an admin may only mint keys inside its own org/project/tenant
+    # boundary (system principals bypass via check_hierarchy).
+    ok, reason = security_manager.check_hierarchy(
+        principal,
+        requested_org=payload.organization_id,
+        requested_project=payload.project_id,
+        requested_tenant=payload.tenant_id,
+    )
+    if not ok:
+        raise HTTPException(status_code=403, detail=reason)
     token, record = security_manager.generate_api_key(
         name=payload.name,
         organization_id=payload.organization_id,
@@ -769,8 +824,13 @@ def list_api_keys(
     principal: APIKeyRecord = Depends(require_scope("admin"))
 ):
     """Lists registered API keys without exposing secrets."""
+    scoped_org = (
+        principal.organization_id
+        if principal.organization_id not in ("org_root", "org_system")
+        else None
+    )
     return envelope(
-        {"keys": security_manager.list_api_keys(organization_id=principal.organization_id if principal.organization_id != "org_root" else None)},
+        {"keys": security_manager.list_api_keys(organization_id=scoped_org)},
         request,
     )
 
@@ -781,7 +841,32 @@ def revoke_api_key(
     payload: RevokeKeyRequest,
     principal: APIKeyRecord = Depends(require_scope("admin"))
 ):
-    """Revokes an API key immediately."""
+    """Revokes an API key immediately.
+
+    P1.1: an admin can only revoke keys it could have listed — i.e. keys inside
+    its own org boundary (system principals see and manage everything).
+    """
+    scoped_org = (
+        principal.organization_id
+        if principal.organization_id not in ("org_root", "org_system")
+        else None
+    )
+    target = next(
+        (k for k in security_manager.list_api_keys(organization_id=scoped_org)
+         if k.get("key_id") == payload.key_id),
+        None,
+    )
+    if target is None:
+        # Never leak whether a key exists outside the caller's boundary.
+        return envelope({"status": "NOT_FOUND", "key_id": payload.key_id}, request)
+    ok, reason = security_manager.check_hierarchy(
+        principal,
+        requested_org=target.get("organization_id") or None,
+        requested_project=target.get("project_id") or None,
+        requested_tenant=target.get("tenant_id") or None,
+    )
+    if not ok:
+        raise HTTPException(status_code=403, detail=reason)
     success = security_manager.revoke_api_key(payload.key_id)
     return envelope({"status": "REVOKED" if success else "NOT_FOUND", "key_id": payload.key_id}, request)
 
@@ -834,7 +919,16 @@ def prune_audit_trail(
             days = float(payload["older_than_days"])
         except (TypeError, ValueError):
             raise HTTPException(status_code=400, detail="older_than_days must be a number.")
-    deleted = security_manager.prune_audit_logs(older_than_seconds=max(0.0, days) * 86400)
+    # P1.1: tenant-bound admins prune ONLY their own audit trail; only system
+    # principals (env master / org_system) run a global retention pass.
+    scoped_tenant = (
+        None
+        if security_manager.is_system_principal(principal) or principal.tenant_id in ("*", "")
+        else principal.tenant_id
+    )
+    deleted = security_manager.prune_audit_logs(
+        older_than_seconds=max(0.0, days) * 86400, tenant_id=scoped_tenant
+    )
     security_manager.log_audit_action(
         actor_key_id=principal.key_id,
         tenant_id=principal.tenant_id,
@@ -856,11 +950,30 @@ def rotate_api_key(
     payload: RotateKeyRequest,
     principal: APIKeyRecord = Depends(require_scope("admin"))
 ):
-    """Rotates an API key: revokes old, issues new with same metadata. Zero-downtime rotation."""
-    keys = security_manager.list_api_keys()
+    """Rotates an API key: revokes old, issues new with same metadata. Zero-downtime rotation.
+
+    P1.1: the target must live inside the caller's org boundary (system
+    principals manage everything) and inherit only hierarchy-compatible
+    metadata.
+    """
+    scoped_org = (
+        principal.organization_id
+        if principal.organization_id not in ("org_root", "org_system")
+        else None
+    )
+    keys = security_manager.list_api_keys(organization_id=scoped_org)
     old = next((k for k in keys if k.get("key_id") == payload.key_id), None)
     if not old:
+        # 404 both for missing keys and keys outside the caller's boundary.
         raise HTTPException(status_code=404, detail="Key not found.")
+    ok, reason = security_manager.check_hierarchy(
+        principal,
+        requested_org=old.get("organization_id") or None,
+        requested_project=old.get("project_id") or None,
+        requested_tenant=old.get("tenant_id") or None,
+    )
+    if not ok:
+        raise HTTPException(status_code=403, detail=reason)
     token, record = security_manager.generate_api_key(
         name=old.get("name", "rotated"),
         organization_id=old.get("organization_id", principal.organization_id),

@@ -17,7 +17,7 @@ class SynapseEmbedder:
 
     def __init__(self, provider: Optional[str] = None, allow_fallback: Optional[bool] = None):
         env_provider = os.getenv("SYNAPSE_EMBEDDING_PROVIDER")
-        self.provider_name = (provider or env_provider or "local").lower()
+        self.provider_name = (provider or env_provider or "deterministic").lower()
         self.model_name = os.getenv("SYNAPSE_EMBEDDING_MODEL", "all-MiniLM-L6-v2")
         self.gemini_key = os.getenv("GEMINI_API_KEY", "")
         self.openai_key = os.getenv("OPENAI_API_KEY", "")
@@ -49,17 +49,53 @@ class SynapseEmbedder:
         return self.manager.provider.is_semantic
 
     def _get_provider(self, allow_fallback: bool = False):
-        if self.provider_name in ("deterministic", "hash"):
+        if self.provider_name in ("deterministic", "hash", "local"):
+            # Deterministic hash provider: always available, no external deps,
+            # safe default for production when no semantic provider is configured.
             dim = int(os.getenv("SYNAPSE_EMBEDDING_DIMENSION", "128"))
             return LocalEmbeddingProvider(dim=dim)
-        elif self.provider_name == "gemini" and self.gemini_key:
+        elif self.provider_name == "gemini":
+            if not self.gemini_key:
+                if allow_fallback:
+                    logger.warning(
+                        "GEMINI_API_KEY not set; falling back to deterministic hash provider."
+                    )
+                    dim = int(os.getenv("SYNAPSE_EMBEDDING_DIMENSION", "128"))
+                    return LocalEmbeddingProvider(dim=dim)
+                raise RuntimeError(
+                    "SYNAPSE_EMBEDDING_PROVIDER=gemini but GEMINI_API_KEY is not set. "
+                    "Set GEMINI_API_KEY or switch to provider=deterministic."
+                )
             return GeminiEmbeddingProvider(self.gemini_key)
-        elif self.provider_name == "openai" and self.openai_key:
+        elif self.provider_name == "openai":
+            if not self.openai_key:
+                if allow_fallback:
+                    logger.warning(
+                        "OPENAI_API_KEY not set; falling back to deterministic hash provider."
+                    )
+                    dim = int(os.getenv("SYNAPSE_EMBEDDING_DIMENSION", "128"))
+                    return LocalEmbeddingProvider(dim=dim)
+                raise RuntimeError(
+                    "SYNAPSE_EMBEDDING_PROVIDER=openai but OPENAI_API_KEY is not set. "
+                    "Set OPENAI_API_KEY or switch to provider=deterministic."
+                )
             return OpenAIEmbeddingProvider(self.openai_key)
-        # Default to production-grade semantic local embedding
-        return SentenceTransformerEmbeddingProvider(
-            model_name=self.model_name,
-            allow_fallback=allow_fallback
+        elif self.provider_name == "sentence-transformers":
+            # Explicit opt-in: requires [local-models] extra and model availability.
+            return SentenceTransformerEmbeddingProvider(
+                model_name=self.model_name,
+                allow_fallback=allow_fallback
+            )
+        # Unknown provider: fail closed in production, fall back in dev.
+        if allow_fallback:
+            logger.warning(
+                f"Unknown embedding provider '{self.provider_name}'; falling back to deterministic hash provider."
+            )
+            dim = int(os.getenv("SYNAPSE_EMBEDDING_DIMENSION", "128"))
+            return LocalEmbeddingProvider(dim=dim)
+        raise RuntimeError(
+            f"Unknown embedding provider '{self.provider_name}'. "
+            "Use one of: deterministic, gemini, openai, sentence-transformers."
         )
 
     def embed_query(self, text: str) -> List[float]:

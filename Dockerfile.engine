@@ -21,9 +21,16 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 WORKDIR /app
 
 # Install the engine + production dependencies (pgvector driver).
-# Heavy neural-embedding extras are opt-in via [local-models] at build time.
+# The default embedding provider is deterministic hash (no external deps),
+# so the image starts without sentence-transformers.
+# To use local neural embeddings, build with:
+#   DOCKER_BUILDKIT=1 docker build --build-arg INSTALL_LOCAL_MODELS=true -f Dockerfile.engine .
+ARG INSTALL_LOCAL_MODELS=false
 COPY sdk/python ./sdk/python
-RUN pip install --no-cache-dir -e "sdk/python[pgvector]"
+RUN pip install --no-cache-dir -e "sdk/python[pgvector]" \
+    && if [ "$INSTALL_LOCAL_MODELS" = "true" ]; then \
+         pip install --no-cache-dir -e "sdk/python[local-models]"; \
+       fi
 
 # Non-root runtime.
 RUN groupadd --system synapse && useradd --system --gid synapse --home /app synapse \

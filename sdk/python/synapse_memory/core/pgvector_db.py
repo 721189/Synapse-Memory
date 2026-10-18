@@ -18,12 +18,6 @@ from synapse_memory.core.encryption import (
 logger = logging.getLogger("PGVectorMemoryStore")
 
 
-def secrets_token_hex(n: int = 6) -> str:
-    """Unique suffix for named/server-side cursors (avoids psycopg2 cursor name clashes)."""
-    import secrets
-    return secrets.token_hex(n)
-
-
 try:
     import psycopg2
     from psycopg2 import pool
@@ -275,6 +269,8 @@ class PGVectorMemoryStore:
                         access_count INTEGER NOT NULL DEFAULT 0,
                         token_cost INTEGER NOT NULL DEFAULT 0,
                         feedback_multiplier REAL NOT NULL DEFAULT 1.0,
+                        supersedes VARCHAR(128),
+                        superseded_by VARCHAR(128),
                         embedding vector({self.dimension})
                     );
                 """)
@@ -288,6 +284,25 @@ class PGVectorMemoryStore:
                             WHERE table_name='memories' AND column_name='tenant_id'
                         ) THEN
                             ALTER TABLE memories ADD COLUMN tenant_id VARCHAR(128) NOT NULL DEFAULT 'default';
+                        END IF;
+                    END $$;
+                """)
+
+                # 3a. Supersession chain columns (deduplication lineage)
+                cur.execute("""
+                    DO $$
+                    BEGIN
+                        IF NOT EXISTS (
+                            SELECT 1 FROM information_schema.columns
+                            WHERE table_name='memories' AND column_name='supersedes'
+                        ) THEN
+                            ALTER TABLE memories ADD COLUMN supersedes VARCHAR(128);
+                        END IF;
+                        IF NOT EXISTS (
+                            SELECT 1 FROM information_schema.columns
+                            WHERE table_name='memories' AND column_name='superseded_by'
+                        ) THEN
+                            ALTER TABLE memories ADD COLUMN superseded_by VARCHAR(128);
                         END IF;
                     END $$;
                 """)
@@ -388,6 +403,11 @@ class PGVectorMemoryStore:
                 owns_connection=False,
             )
         except Exception as mig_err:
+            if self.fail_closed:
+                # Fail-closed deployments must NEVER boot with a half-migrated
+                # schema: defer-and-warn turns a migration bug into silent
+                # data-shape corruption at query time.
+                raise RuntimeError(f"Schema migrations failed (fail_closed): {mig_err}") from mig_err
             logger.warning(f"Schema migrations deferred: {mig_err}")
 
     def _handle_db_error(self, operation: str, error: Exception) -> None:
@@ -497,8 +517,9 @@ class PGVectorMemoryStore:
                     INSERT INTO memories (
                         id, tenant_id, content, content_plain, category, confidence, created_at,
                         last_accessed_at, access_count, token_cost,
-                        feedback_multiplier, embedding, embedding_dimension, model_version
-                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                        feedback_multiplier, embedding, embedding_dimension, model_version,
+                        supersedes, superseded_by
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                     ON CONFLICT (id) DO UPDATE SET
                         tenant_id = EXCLUDED.tenant_id,
                         content = EXCLUDED.content,
@@ -511,7 +532,9 @@ class PGVectorMemoryStore:
                         feedback_multiplier = EXCLUDED.feedback_multiplier,
                         embedding = EXCLUDED.embedding,
                         embedding_dimension = EXCLUDED.embedding_dimension,
-                        model_version = EXCLUDED.model_version;
+                        model_version = EXCLUDED.model_version,
+                        supersedes = EXCLUDED.supersedes,
+                        superseded_by = EXCLUDED.superseded_by;
                 """, (
                     memory["id"],
                     tenant_id,
@@ -526,12 +549,42 @@ class PGVectorMemoryStore:
                     memory.get("feedback_multiplier", 1.0),
                     emb_str,
                     memory.get("embedding_dimension", len(emb or [])),
-                    memory.get("model_version", "unknown")
+                    memory.get("model_version", "unknown"),
+                    memory.get("supersedes"),
+                    memory.get("superseded_by")
                 ))
                 conn.commit()
         except Exception as e:
             conn.rollback()
             self._handle_db_error("insert_memory", e)
+        finally:
+            self._return_connection(conn)
+
+    def mark_superseded(self, memory_id: str, superseded_by: str, tenant_id: Optional[str] = None) -> None:
+        """Stamp `superseded_by` on an old memory that a dedup MERGE replaced.
+
+        Failure is non-fatal for ingestion (the caller guards with try/except),
+        but DB errors still flow through _handle_db_error for observability.
+        """
+        cached = self._fallback_cache.get(memory_id)
+        if cached is not None:
+            cached["superseded_by"] = superseded_by
+
+        if not self._connected or not HAS_PSYCOPG2:
+            return
+
+        conn = self._get_connection()
+        try:
+            with conn.cursor() as cur:
+                self._set_tenant_context(cur, tenant_id)
+                cur.execute(
+                    "UPDATE memories SET superseded_by = %s WHERE id = %s;",
+                    (superseded_by, memory_id),
+                )
+                conn.commit()
+        except Exception as e:
+            conn.rollback()
+            self._handle_db_error("mark_superseded", e)
         finally:
             self._return_connection(conn)
 
@@ -560,21 +613,33 @@ class PGVectorMemoryStore:
         finally:
             self._return_connection(conn)
 
-    def get_memories_by_category(self, category: str, tenant_id: Optional[str] = None) -> List[Dict[str, Any]]:
+    def get_memories_by_category(
+        self, category: str, tenant_id: Optional[str] = None, include_superseded: bool = False
+    ) -> List[Dict[str, Any]]:
+        """Active-only by default: superseded rows are lineage/audit records."""
         if not self._connected or not HAS_PSYCOPG2:
             return [
                 m for m in self._fallback_cache.values()
-                if m.get("category") == category and (tenant_id is None or m.get("tenant_id") == tenant_id)
+                if m.get("category") == category
+                and (tenant_id is None or m.get("tenant_id") == tenant_id)
+                and (include_superseded or not m.get("superseded_by"))
             ]
 
         conn = self._get_connection()
         try:
             with conn.cursor(cursor_factory=RealDictCursor) as cur:
                 self._set_tenant_context(cur, tenant_id)
+                supersession = "" if include_superseded else " AND superseded_by IS NULL"
                 if tenant_id:
-                    cur.execute("SELECT * FROM memories WHERE category = %s AND tenant_id = %s", (category, tenant_id))
+                    cur.execute(
+                        "SELECT * FROM memories WHERE category = %s AND tenant_id = %s" + supersession,
+                        (category, tenant_id),
+                    )
                 else:
-                    cur.execute("SELECT * FROM memories WHERE category = %s", (category,))
+                    cur.execute(
+                        "SELECT * FROM memories WHERE category = %s" + supersession,
+                        (category,),
+                    )
                 rows = cur.fetchall()
                 results = []
                 for r in rows:
@@ -682,6 +747,7 @@ class PGVectorMemoryStore:
 
                 conditions = []
                 params: List[Any] = [emb_str]
+                conditions.append("superseded_by IS NULL")
                 if tenant_id:
                     conditions.append("tenant_id = %s")
                     params.append(tenant_id)
@@ -730,6 +796,8 @@ class PGVectorMemoryStore:
             query_terms = set(query.lower().split())
             results = []
             for mem in self._fallback_cache.values():
+                if mem.get("superseded_by"):
+                    continue
                 if tenant_id and mem.get("tenant_id") != tenant_id:
                     continue
                 if category and mem.get("category") != category:
@@ -753,7 +821,7 @@ class PGVectorMemoryStore:
                 # 3. WHERE tenant_id                   -> tenant_id (if present)
                 # 4. WHERE category                    -> category (if present)
                 # 5. LIMIT                             -> top_k
-                conditions = ["search_vector @@ plainto_tsquery('english', %s)"]
+                conditions = ["search_vector @@ plainto_tsquery('english', %s)", "superseded_by IS NULL"]
                 params: List[Any] = [query, query]
                 if tenant_id:
                     conditions.append("tenant_id = %s")
@@ -836,6 +904,7 @@ class PGVectorMemoryStore:
                            ROW_NUMBER() OVER (ORDER BY embedding <=> %s::vector) AS rank
                     FROM memories
                     WHERE tenant_id = NULLIF(current_setting('app.current_tenant', true), '')
+                      AND superseded_by IS NULL
                       {cat_clause}
                     ORDER BY embedding <=> %s::vector
                     LIMIT %s
@@ -846,6 +915,7 @@ class PGVectorMemoryStore:
                     FROM memories
                     WHERE search_vector @@ plainto_tsquery('english', %s)
                       AND tenant_id = NULLIF(current_setting('app.current_tenant', true), '')
+                      AND superseded_by IS NULL
                       {cat_clause}
                     ORDER BY ts_rank(search_vector, plainto_tsquery('english', %s)) DESC
                     LIMIT %s
@@ -902,20 +972,55 @@ class PGVectorMemoryStore:
         finally:
             self._return_connection(conn)
 
-    def get_all_memories(self, tenant_id: Optional[str] = None) -> List[Dict[str, Any]]:
+    def count_active_memories(self, tenant_id: Optional[str] = None) -> int:
+        """Count of retrieval-visible (non-superseded) memories."""
         if not self._connected or not HAS_PSYCOPG2:
+            values = self._fallback_cache.values()
             if tenant_id:
-                return [m for m in self._fallback_cache.values() if m.get("tenant_id") == tenant_id]
-            return list(self._fallback_cache.values())
+                values = [m for m in values if m.get("tenant_id") == tenant_id]
+            return sum(1 for m in values if not m.get("superseded_by"))
+        conn = self._get_connection()
+        try:
+            with conn.cursor() as cur:
+                self._set_tenant_context(cur, tenant_id)
+                if tenant_id:
+                    cur.execute(
+                        "SELECT count(*) FROM memories WHERE tenant_id = %s AND superseded_by IS NULL;",
+                        (tenant_id,),
+                    )
+                else:
+                    cur.execute("SELECT count(*) FROM memories WHERE superseded_by IS NULL;")
+                return int(cur.fetchone()[0])
+        except Exception as e:
+            self._handle_db_error("count_active_memories", e)
+            return 0
+        finally:
+            self._return_connection(conn)
+
+    def get_all_memories(
+        self, tenant_id: Optional[str] = None, include_superseded: bool = False
+    ) -> List[Dict[str, Any]]:
+        """Active-only by default: superseded rows are lineage/audit records."""
+        if not self._connected or not HAS_PSYCOPG2:
+            values = self._fallback_cache.values()
+            if tenant_id:
+                values = [m for m in values if m.get("tenant_id") == tenant_id]
+            if not include_superseded:
+                values = [m for m in values if not m.get("superseded_by")]
+            return list(values)
         conn = self._get_connection()
         try:
             with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                supersession = "" if include_superseded else " AND superseded_by IS NULL"
                 if tenant_id:
                     self._set_tenant_context(cur, tenant_id)
-                    cur.execute("SELECT * FROM memories WHERE tenant_id = %s ORDER BY created_at DESC;", (tenant_id,))
+                    cur.execute(
+                        "SELECT * FROM memories WHERE tenant_id = %s" + supersession + " ORDER BY created_at DESC;",
+                        (tenant_id,),
+                    )
                 else:
                     cur.execute("SET LOCAL app.admin_bypass_rls = 'on';")
-                    cur.execute("SELECT * FROM memories ORDER BY created_at DESC;")
+                    cur.execute("SELECT * FROM memories WHERE TRUE" + supersession + " ORDER BY created_at DESC;")
                 rows = cur.fetchall()
                 return [self._decrypt_row(dict(r)) for r in rows]
         except Exception as e:
@@ -937,16 +1042,17 @@ class PGVectorMemoryStore:
         instead of loading the entire corpus into application memory.
         """
         if not self._connected or not HAS_PSYCOPG2:
+            values = self._fallback_cache.values()
             if tenant_id:
-                return [m for m in self._fallback_cache.values() if m.get("tenant_id") == tenant_id][:limit]
-            return list(self._fallback_cache.values())[:limit]
+                values = [m for m in values if m.get("tenant_id") == tenant_id]
+            return [m for m in values if not m.get("superseded_by")][:limit]
 
         conn = self._get_connection()
         try:
             with conn.cursor(cursor_factory=RealDictCursor) as cur:
                 self._set_tenant_context(cur, tenant_id)
 
-                conditions = ["confidence >= %s"]
+                conditions = ["confidence >= %s", "superseded_by IS NULL"]
                 params: List[Any] = [min_confidence]
                 if tenant_id:
                     conditions.append("tenant_id = %s")
@@ -1050,33 +1156,51 @@ class PGVectorMemoryStore:
         conn = self._get_connection()
         updated_count = 0
         try:
-            # Admin (unscoped) context so RLS does not hide rows from this
-            # maintenance scan. Uses a regular cursor first because SET LOCAL
-            # must run before the named cursor opens its transaction.
-            setup_cur = conn.cursor()
-            try:
-                self._set_tenant_context(setup_cur, None)
-                setup_cur.execute("SET LOCAL app.admin_bypass_rls = 'on';")
-            finally:
-                try:
-                    setup_cur.close()
-                except Exception:
-                    pass
-            # Named cursor streams results server-side instead of fetchall().
-            cursor_name = f"reembed_{secrets_token_hex(6)}"
-            read_cur = conn.cursor(name=cursor_name)
-            read_cur.itersize = batch_size
-            read_cur.execute("SELECT id, content FROM memories ORDER BY created_at;")
-
+            # Keyset pagination instead of a named cursor: committing per batch
+            # would invalidate a transaction-bound named cursor after batch #1
+            # (psycopg2 closes it on commit), silently re-embedding only the
+            # first batch while reporting full progress. Each batch is its own
+            # transaction, so the admin (unscoped) context and the explicit
+            # RLS bypass GUC are re-applied there (SET LOCAL is transaction-
+            # scoped) — without them the RLS policy hides cross-tenant rows
+            # from this maintenance scan.
             write_cur = conn.cursor()
+            last_created: Any = None
+            last_id = ""
             batch = 0
             while True:
-                rows = read_cur.fetchmany(batch_size)
+                read_cur = conn.cursor()
+                try:
+                    # Admin (unscoped) context + bypass GUC so the RLS policy
+                    # does not hide cross-tenant rows from this maintenance
+                    # scan (both are SET LOCAL, hence re-applied per batch).
+                    self._set_tenant_context(read_cur, None)
+                    read_cur.execute("SET LOCAL app.admin_bypass_rls = 'on';")
+                    if last_created is None:
+                        read_cur.execute(
+                            "SELECT id, content, created_at FROM memories "
+                            "ORDER BY created_at, id LIMIT %s;",
+                            (batch_size,),
+                        )
+                    else:
+                        read_cur.execute(
+                            "SELECT id, content, created_at FROM memories "
+                            "WHERE (created_at, id) > (%s, %s) "
+                            "ORDER BY created_at, id LIMIT %s;",
+                            (last_created, last_id, batch_size),
+                        )
+                    rows = read_cur.fetchall()
+                finally:
+                    try:
+                        read_cur.close()
+                    except Exception:
+                        pass
                 if not rows:
                     break
                 for row in rows:
                     mem_id = row[0] if isinstance(row, (tuple, list)) else row["id"]
                     raw_content = row[1] if isinstance(row, (tuple, list)) else row["content"]
+                    row_created = row[2] if isinstance(row, (tuple, list)) else row["created_at"]
                     try:
                         content = self._decrypt_field(raw_content)
                     except Exception:
@@ -1088,11 +1212,14 @@ class PGVectorMemoryStore:
                         (vec_str, len(new_vector), model_version, content, mem_id),
                     )
                     updated_count += 1
+                    last_created = row_created
+                    last_id = mem_id
                 conn.commit()
                 batch += 1
                 logger.info("Re-embed batch %d complete (running total: %d rows).", batch, updated_count)
+                if len(rows) < batch_size:
+                    break
 
-            read_cur.close()
             logger.info(f"Re-embedded {updated_count} memories to dimension {target_dim} (model={model_version}).")
         except Exception as e:
             conn.rollback()

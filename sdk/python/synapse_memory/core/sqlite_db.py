@@ -156,7 +156,9 @@ class SQLiteMemoryStore:
                     access_count INTEGER NOT NULL,
                     token_cost INTEGER NOT NULL,
                     embedding TEXT,
-                    feedback_multiplier REAL NOT NULL
+                    feedback_multiplier REAL NOT NULL,
+                    supersedes VARCHAR(128),
+                    superseded_by VARCHAR(128)
                 )
             """)
 
@@ -225,8 +227,9 @@ class SQLiteMemoryStore:
                 INSERT OR REPLACE INTO memories (
                     id, tenant_id, content, category, confidence, created_at,
                     last_accessed_at, access_count, token_cost,
-                    embedding, feedback_multiplier, embedding_dimension, model_version
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    embedding, feedback_multiplier, embedding_dimension, model_version,
+                    supersedes, superseded_by
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (
                 memory["id"],
                 tenant_id,
@@ -241,17 +244,43 @@ class SQLiteMemoryStore:
                 memory.get("feedback_multiplier", 1.0),
                 memory.get("embedding_dimension", len(memory.get("embedding", []))),
                 memory.get("model_version", "unknown"),
+                memory.get("supersedes"),
+                memory.get("superseded_by"),
             ))
             conn.commit()
 
-    def get_all_memories(self, tenant_id: Optional[str] = None) -> List[Dict[str, Any]]:
-        """Retrieves memories with deserialized embeddings, optionally scoped to tenant_id."""
+    def mark_superseded(self, memory_id: str, superseded_by: str, tenant_id: Optional[str] = None) -> None:
+        """Stamp `superseded_by` on an old memory that a dedup MERGE replaced."""
         with self._get_connection() as conn:
             cursor = conn.cursor()
-            if tenant_id is not None:
-                cursor.execute("SELECT * FROM memories WHERE tenant_id = ?", (tenant_id,))
-            else:
-                cursor.execute("SELECT * FROM memories")
+            cursor.execute(
+                "UPDATE memories SET superseded_by = ? WHERE id = ?",
+                (superseded_by, memory_id),
+            )
+            conn.commit()
+
+    def get_all_memories(
+        self, tenant_id: Optional[str] = None, include_superseded: bool = False
+    ) -> List[Dict[str, Any]]:
+        """Retrieves memories with deserialized embeddings, optionally scoped to tenant_id.
+
+        Superseded rows (dedup MERGE lineage) are hidden by default: they remain
+        for audit/lineage only and must never be served to retrieval. Capacity
+        pruning passes include_superseded=True so stale rows stay evictable.
+        """
+        query = "SELECT * FROM memories"
+        clauses: List[str] = []
+        params: List[Any] = []
+        if tenant_id is not None:
+            clauses.append("tenant_id = ?")
+            params.append(tenant_id)
+        if not include_superseded:
+            clauses.append("superseded_by IS NULL")
+        if clauses:
+            query += " WHERE " + " AND ".join(clauses)
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(query, tuple(params))
             rows = cursor.fetchall()
 
             memories = []
@@ -350,20 +379,22 @@ class SQLiteMemoryStore:
             return deleted_count
 
     def get_memories_by_category(
-        self, category: str, tenant_id: Optional[str] = None
+        self, category: str, tenant_id: Optional[str] = None, include_superseded: bool = False
     ) -> List[Dict[str, Any]]:
-        """Retrieves memories filtered by category, utilizing the category index."""
+        """Retrieves memories filtered by category, utilizing the category index.
+
+        Superseded rows are hidden by default (see get_all_memories).
+        """
+        query = "SELECT * FROM memories WHERE category = ?"
+        params: List[Any] = [category]
+        if tenant_id is not None:
+            query += " AND tenant_id = ?"
+            params.append(tenant_id)
+        if not include_superseded:
+            query += " AND superseded_by IS NULL"
         with self._get_connection() as conn:
             cursor = conn.cursor()
-            if tenant_id is not None:
-                cursor.execute(
-                    "SELECT * FROM memories WHERE category = ? AND tenant_id = ?",
-                    (category, tenant_id)
-                )
-            else:
-                cursor.execute(
-                    "SELECT * FROM memories WHERE category = ?", (category,)
-                )
+            cursor.execute(query, tuple(params))
             rows = cursor.fetchall()
 
             memories = []
@@ -463,6 +494,18 @@ class SQLiteMemoryStore:
                 cursor.execute("SELECT count(*) FROM memories")
             return int(cursor.fetchone()[0])
 
+    def count_active_memories(self, tenant_id: Optional[str] = None) -> int:
+        """Count of retrieval-visible (non-superseded) memories."""
+        query = "SELECT count(*) FROM memories WHERE superseded_by IS NULL"
+        params: List[Any] = []
+        if tenant_id is not None:
+            query += " AND tenant_id = ?"
+            params.append(tenant_id)
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(query, tuple(params))
+            return int(cursor.fetchone()[0])
+
     def query_candidates(
         self,
         category: Optional[str] = None,
@@ -475,7 +518,7 @@ class SQLiteMemoryStore:
         Retrieves a bounded candidate set directly using SQL indexes
         instead of loading the entire corpus into application memory.
         """
-        query = "SELECT * FROM memories WHERE confidence >= ?"
+        query = "SELECT * FROM memories WHERE confidence >= ? AND superseded_by IS NULL"
         params: List[Any] = [min_confidence]
         if tenant_id is not None:
             query += " AND tenant_id = ?"

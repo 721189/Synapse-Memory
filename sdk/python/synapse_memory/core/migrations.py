@@ -22,7 +22,7 @@ logger = logging.getLogger("SynapseMigrations")
 
 # Ledger + metadata columns tracked on the memories table so embedding-model
 # upgrades (e.g. 128-d hash -> 384-d MiniLM) are explicit, not silent.
-CURRENT_SCHEMA_VERSION = 4
+CURRENT_SCHEMA_VERSION = 5
 
 
 @dataclass
@@ -96,11 +96,22 @@ def _m4_content_plain_search_projection(cur: Any) -> None:
     )
 
 
+def _m5_supersession_chain(cur: Any) -> None:
+    """v5: Deduplication supersession lineage (MERGE keeps both rows).
+
+    `supersedes` points from the successor (new) row to the row it replaced;
+    `superseded_by` points from the replaced (old) row to its successor.
+    """
+    _add_column_if_missing(cur, "memories", "supersedes", "VARCHAR(128)")
+    _add_column_if_missing(cur, "memories", "superseded_by", "VARCHAR(128)")
+
+
 MIGRATIONS: List[Migration] = [
     Migration(1, "embedding_metadata", _m1_embedding_metadata, _m1_embedding_metadata),
     Migration(2, "migration_ledger", _m2_migration_ledger, _m2_migration_ledger),
     Migration(3, "backfill_dimension", _m3_backfill_dimension, _m3_backfill_dimension),
     Migration(4, "content_plain_search_projection", _m4_content_plain_search_projection, _m4_content_plain_search_projection),
+    Migration(5, "supersession_chain", _m5_supersession_chain, _m5_supersession_chain),
 ]
 
 

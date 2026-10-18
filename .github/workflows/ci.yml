@@ -209,6 +209,35 @@ jobs:
           SYNAPSE_ENCRYPTION_KEY: "2N53Wk7u2V5bK1wU_1F5Y9mZ7zN53Wk7u2V5bK1wU_0="
         run: pytest sdk/python/tests/test_pgvector_integration.py -v
 
+      - name: Production topology /readiness smoke (migrate-then-run, DML-only runtime role)
+        env:
+          PYTHONPATH: sdk/python
+          # Runtime role DSN: schema was migrated by synapse_admin above; the
+          # engine must boot with DDL disabled and prove /readiness READY.
+          DATABASE_URL: postgresql://synapse_app:synapse_app_ci@localhost:5432/synapse_test
+          SYNAPSE_APPLY_DB_SCHEMA: "false"
+          SYNAPSE_ALLOW_DB_FALLBACK: "false"
+          SYNAPSE_ENCRYPTION_KEY: "2N53Wk7u2V5bK1wU_1F5Y9mZ7zN53Wk7u2V5bK1wU_0="
+          SYNAPSE_API_KEY: "syn_live_ci_test_key"
+        run: |
+          python -m uvicorn synapse_memory.api.fastapi_server:app --host 127.0.0.1 --port 8009 &
+          ENGINE_PID=$!
+          ok=0
+          for i in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:8009/readiness; then
+              echo
+              echo "/readiness READY under production topology"
+              ok=1
+              break
+            fi
+            sleep 2
+          done
+          kill "$ENGINE_PID" 2>/dev/null || true
+          if [ "$ok" != "1" ]; then
+            echo "/readiness never became READY under the production (migrate-then-run) topology"
+            exit 1
+          fi
+
   split-image-build:
     name: Split Docker Images + Compose Smoke
     runs-on: ubuntu-latest
@@ -234,14 +263,14 @@ jobs:
         with:
           image-ref: synapse-engine:ci
           severity: 'CRITICAL,HIGH'
-          exit-code: '0'
+          exit-code: '1'
 
       - name: Scan gateway image
         uses: aquasecurity/trivy-action@6abccf398f78b4c337599c0656f933d91efb91a0
         with:
           image-ref: synapse-gateway:ci
           severity: 'CRITICAL,HIGH'
-          exit-code: '0'
+          exit-code: '1'
 
   helm-validate:
     name: Helm Template Validation

@@ -82,6 +82,18 @@ class MemoryManager:
         """
         Ingests a new memory node.
         Runs semantic similarity comparison against existing indexed nodes within the same tenant.
+
+        When a near-duplicate is found (Action.MERGE), the incoming content is preserved:
+        a new memory row is created and linked to the old one via a supersession chain
+        (``superseded_by``). The old row is marked superseded but retained for provenance.
+        Confidence is merged conservatively: the higher of the two confidences is kept,
+        and a small reinforcement is applied only when the new content is at least as
+        confident as the existing one. This ensures updated/corrected facts are never
+        silently discarded.
+
+        When Action.REJECT is returned (direct contradiction), the incoming memory is
+        still recorded as a separate row so no information is lost; the caller can
+        decide how to resolve the conflict.
         """
         # 1. Generate dense vector representation
         new_vector = self.embedder.embed_query(content)
@@ -92,33 +104,78 @@ class MemoryManager:
             "content": content,
             "category": category,
             "tenant_id": tenant_id,
-            "embedding": new_vector
+            "embedding": new_vector,
+            "confidence": confidence,
         }
-
         result = self.deduplicator.check_duplicate(new_node_base, existing_memories)
 
         # 3. Handle Deduplication Result
         if result.action == Action.MERGE and result.target_id:
             match_id = result.target_id
-            log_event("memory_deduplication", "MERGED", {"target_id": match_id, "tenant_id": tenant_id, "reason": result.reason})
+            match_mem = next((m for m in existing_memories if m["id"] == match_id), None)
+            old_confidence = float(match_mem.get("confidence", 0.5)) if match_mem else 0.5
 
-            # Reinforce: Boost confidence, update timestamp, increment access count
-            self.store.update_access_count(match_id, 1, tenant_id=tenant_id)
-            self.store.update_confidence(match_id, min(1.0, confidence + 0.05), tenant_id=tenant_id)
+            merged_confidence = max(old_confidence, confidence)
+            if confidence >= old_confidence:
+                merged_confidence = min(1.0, merged_confidence + 0.02)
 
-            # Re-fetch for token cost
-            match_mem = next(m for m in existing_memories if m["id"] == match_id)
-            return match_id, "MERGED", match_mem.get("token_cost", 20)
+            new_memory_id = f"mem_{uuid.uuid4().hex[:16]}"
+            token_cost = estimate_token_cost(content)
+            new_node = {
+                "id": new_memory_id,
+                "tenant_id": tenant_id,
+                "content": content,
+                "category": category,
+                "confidence": merged_confidence,
+                "created_at": time.time(),
+                "access_count": 0,
+                "token_cost": token_cost,
+                "embedding": new_vector,
+                "embedding_dimension": len(new_vector),
+                "model_version": getattr(self.embedder, "model_name", "unknown"),
+                "supersedes": match_id,
+                "superseded_by": None,
+            }
+            self.store.insert_memory(new_node)
+
+            try:
+                self.store.mark_superseded(match_id, new_memory_id, tenant_id=tenant_id)
+            except Exception:
+                log_event("memory_deduplication", "MERGE_MARK_FAILED", {"target_id": match_id, "tenant_id": tenant_id})
+
+            log_event("memory_deduplication", "MERGED_PRESERVED", {
+                "old_id": match_id, "new_id": new_memory_id, "tenant_id": tenant_id,
+                "old_confidence": old_confidence, "new_confidence": merged_confidence,
+            })
+            return new_memory_id, "MERGED", token_cost
 
         elif result.action == Action.REJECT:
-            log_event("memory_deduplication", "REJECTED", {"tenant_id": tenant_id, "reason": result.reason})
-            return "REJECTED", "REJECTED", 0
+            log_event("memory_deduplication", "REJECTED_RECORDED", {"tenant_id": tenant_id, "reason": result.reason})
+            new_memory_id = f"mem_{uuid.uuid4().hex[:16]}"
+            token_cost = estimate_token_cost(content)
+            new_node = {
+                "id": new_memory_id,
+                "tenant_id": tenant_id,
+                "content": content,
+                "category": category,
+                "confidence": confidence,
+                "created_at": time.time(),
+                "access_count": 0,
+                "token_cost": token_cost,
+                "embedding": new_vector,
+                "embedding_dimension": len(new_vector),
+                "model_version": getattr(self.embedder, "model_name", "unknown"),
+                "supersedes": None,
+                "superseded_by": None,
+            }
+            self.store.insert_memory(new_node)
+            self.auto_prune_store(tenant_id=tenant_id)
+            return new_memory_id, "REJECTED", token_cost
 
         # 4. Otherwise, save as a clean memory
         log_event("memory_deduplication", "CREATED", {"tenant_id": tenant_id})
         memory_id = f"mem_{uuid.uuid4().hex[:16]}"
         token_cost = estimate_token_cost(content)
-
         new_node = {
             "id": memory_id,
             "tenant_id": tenant_id,
@@ -134,8 +191,9 @@ class MemoryManager:
             # embedding-model upgrade (and trigger a re-embed pass).
             "embedding_dimension": len(new_vector),
             "model_version": getattr(self.embedder, "model_name", "unknown"),
+            "supersedes": None,
+            "superseded_by": None,
         }
-
         self.store.insert_memory(new_node)
 
         # 5. Execute Auto-Pruning if limit is breached
@@ -153,7 +211,7 @@ class MemoryManager:
         Returns:
             The number of successfully evicted memory nodes.
         """
-        memories = self.store.get_all_memories(tenant_id=tenant_id)
+        memories = self.store.get_all_memories(tenant_id=tenant_id, include_superseded=True)
         targets = self.pruner.run_pruning(memories)
 
         evicted = 0
@@ -166,3 +224,4 @@ class MemoryManager:
 
     async def prune_async(self, tenant_id: Optional[str] = None) -> int:
         return await asyncio.to_thread(self.auto_prune_store, tenant_id=tenant_id)
+
