@@ -83,11 +83,12 @@ To help us triage and resolve the issue quickly, please include:
 3. **Data Protection Model (combined protection)**:
    | Layer | `content` column | `content_plain` | tsvector / embeddings | Volume/Database |
    |---|---|---|---|---|
-   | Storage | Fernet field-encrypted (AES-128-CBC + HMAC-SHA256) | Not stored (derivable) | Readable search derivative | Full disk / managed-DB encryption |
-   | Access | Requires key (KMS/Vault / local key file) | Always readable | Always readable | Operator-enforced |
+   | Storage | Fernet field-encrypted (AES-128-CBC + HMAC-SHA256) | Stored plaintext search projection (written alongside `content` at ingest; readable by design for lexical/FTS search) | Readable search derivative (tsvector built from `content_plain`; embedding vectors) | Full disk / managed-DB encryption |
+   | Access | Requires key (KMS/Vault / local key file) | Always readable (search projection) | Always readable | Operator-enforced |
    | Use case | Regulated data at rest | Full-text & vector search only | Obfuscated retrieval | At-rest coverage |
-   | Notes | `content_plain` is a search projection only — do not store regulated data expecting it to be ciphertext | | | |
+   | Notes | `content_plain` is stored plaintext — database dumps and backups expose it; protect with DB access controls + volume encryption, not field encryption | | | |
    - Volume/database encryption must be enabled by the operator for at-rest coverage.
+   - **Database dump exposure:** `pg_dump` / logical backups expose `content_plain`, `search_vector`, and `embedding` in readable form; only `content` is Fernet ciphertext. Treat dumps as regulated-data artifacts: encrypt at rest, restrict restore access, and never ship dumps to untrusted environments. Encryption keys must be backed up separately from data (key loss = unrecoverable ciphertext; see `docs/backup-recovery.md`).
 4. **Model & Ingestion Sanitization**:
    - Run untrusted third-party prompts through the built-in PII and prompt injection quarantine scrubber (`/api/security/scrub`) before indexing into cognitive graphs.
 5. **Operational Security**:

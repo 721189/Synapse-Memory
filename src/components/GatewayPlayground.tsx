@@ -323,7 +323,7 @@ export const GatewayPlayground: React.FC<GatewayPlaygroundProps> = ({ onRefreshS
                   </div>
                   <div className="flex justify-between">
                     <span>Vector Embedding:</span>
-                    <strong className="font-mono text-indigo-600">text-embedding-004</strong>
+                    <strong className="font-mono text-indigo-600">gemini-embedding-001</strong>
                   </div>
                 </div>
               </div>
@@ -358,7 +358,7 @@ export const GatewayPlayground: React.FC<GatewayPlaygroundProps> = ({ onRefreshS
               <div className="space-y-4 text-xs">
                 <div className="flex items-center justify-between p-3 bg-slate-50 rounded-xl border border-slate-100">
                   <span className="text-slate-600">Vector Search</span>
-                  <span className="font-mono text-indigo-600 font-semibold">text-embedding-004</span>
+                  <span className="font-mono text-indigo-600 font-semibold">gemini-embedding-001</span>
                 </div>
                 <div className="flex items-center justify-between p-3 bg-slate-50 rounded-xl border border-slate-100">
                   <span className="text-slate-600">Lexical Index</span>

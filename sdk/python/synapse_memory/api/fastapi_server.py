@@ -16,7 +16,7 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(
 from synapse_memory.core.sqlite_db import SQLiteMemoryStore
 from synapse_memory.core.pgvector_db import PGVectorMemoryStore
 from synapse_memory.core.embedder import SynapseEmbedder
-from synapse_memory.core.memory_manager import MemoryManager
+from synapse_memory.core.memory_manager import DEFAULT_MAX_RECORD_LIMIT, MemoryManager
 from synapse_memory.core.knapsack_packer import KnapsackPacker
 from synapse_memory.core.decay_engine import DecayEngine
 from synapse_memory.core.hybrid_search import HybridSearch
@@ -94,7 +94,11 @@ else:
     store = SQLiteMemoryStore(SQLITE_DB_PATH)
     ACTIVE_BACKEND = "sqlite"
 
-manager = MemoryManager(store=store, embedder=embedder)
+manager = MemoryManager(store=store, embedder=embedder, max_record_limit=DEFAULT_MAX_RECORD_LIMIT)
+logger.info(
+    f"MemoryManager capacity limit: {manager.max_record_limit} records "
+    f"(override with SYNAPSE_MAX_RECORD_LIMIT; historical default is 50)"
+)
 packer = KnapsackPacker(token_budget=min(int(os.environ.get("TOKEN_BUDGET_MAX", "4000")), KnapsackPacker.MAX_BUDGET))
 decay = DecayEngine(category_configs={})
 searcher = HybridSearch()

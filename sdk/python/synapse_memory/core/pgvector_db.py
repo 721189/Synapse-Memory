@@ -350,7 +350,7 @@ class PGVectorMemoryStore:
                     "DO $$\n"
                     "BEGIN\n"
                     "    IF NOT pg_has_role(current_user, '" + self.admin_role.replace("'", "''") + "', 'MEMBER') THEN\n"
-                    "        RAISE EXCEPTION 'security: current_user % is not a member of admin role %' USING\n"
+                    "        RAISE EXCEPTION 'security: current_user % is not a member of admin role %', current_user, '" + self.admin_role.replace("'", "''") + "' USING\n"
                     "            ERRCODE = 'P0001', -- internal_error (mapped to TenantIsolationError)\n"
                     "            MESSAGE = 'Forbidden: unscoped admin access requires membership in admin role';\n"
                     "    END IF;\n"

@@ -1,3 +1,4 @@
+import os
 import time
 import logging
 import asyncio
@@ -12,6 +13,19 @@ from synapse_memory.core.decay_engine import DecayEngine
 from synapse_memory.core.observability import log_event, instrument_operation
 
 logger = logging.getLogger("SynapseMemoryManager")
+
+# Explicit, operator-visible capacity ceiling for the in-memory store.
+# Override with SYNAPSE_MAX_RECORD_LIMIT (must be a positive integer).
+# The historical default was 50 records; change this only with capacity planning.
+try:
+    DEFAULT_MAX_RECORD_LIMIT = int(os.environ.get("SYNAPSE_MAX_RECORD_LIMIT", "50"))
+    if DEFAULT_MAX_RECORD_LIMIT <= 0:
+        raise ValueError
+except (TypeError, ValueError):
+    DEFAULT_MAX_RECORD_LIMIT = 50
+    logger.warning(
+        "Invalid SYNAPSE_MAX_RECORD_LIMIT; using default max_record_limit=50"
+    )
 
 
 def estimate_token_cost(content: str) -> int:
@@ -33,6 +47,14 @@ class MemoryManager:
     Manages high-level memory operations: Semantic Deduplication,
     Multi-tenant Ingestion, Auto-Eviction, and Cognitive Memory Pruning.
     Compatible with both SQLiteMemoryStore and PGVectorMemoryStore backends.
+
+    Capacity: ``max_record_limit`` bounds how many memories a tenant may hold.
+    After every ingest, :meth:`auto_prune_store` evicts the lowest-relevance
+    memories until the count is within the limit. The default comes from the
+    ``SYNAPSE_MAX_RECORD_LIMIT`` environment variable and falls back to 50
+    records (the historical default). Expose this setting explicitly -- never
+    rely on the silent default in production, or older memories are pruned
+    without the operator realizing a cap is active.
     """
 
     def __init__(
@@ -40,12 +62,12 @@ class MemoryManager:
         store: Union[SQLiteMemoryStore, PGVectorMemoryStore, Any],
         embedder: SynapseEmbedder,
         category_thresholds: Optional[Dict[str, float]] = None,
-        max_record_limit: int = 50
+        max_record_limit: int = DEFAULT_MAX_RECORD_LIMIT
     ):
         self.store = store
         self.embedder = embedder
         self.deduplicator = Deduplicator(category_thresholds or {})
-        self.max_record_limit = max_record_limit
+        self.max_record_limit = int(max_record_limit)
         self.decay_engine = DecayEngine({})
         self.pruner = PruningEngine([CapacityPruningPolicy(max_record_limit, self.decay_engine)])
 

@@ -1,9 +1,5 @@
-import base64
-import hashlib
-import hmac
 import logging
 import os
-import secrets
 from typing import Any, Optional
 
 logger = logging.getLogger("SynapseEncryption")
@@ -161,60 +157,33 @@ class FernetEncryptionProvider:
     def generate_key() -> bytes:
         if HAS_CRYPTOGRAPHY and Fernet is not None:
             return Fernet.generate_key()
-        return base64.urlsafe_b64encode(secrets.token_bytes(32))
+        raise RuntimeError(
+            "Key generation requires the `cryptography` package (Fernet). "
+            "Install it with: pip install cryptography"
+        )
 
     def encrypt(self, data: str) -> str:
         """Encrypts a string and returns a base64 encoded string."""
-        if self._cipher is not None:
-            return self._cipher.encrypt(data.encode("utf-8")).decode("utf-8")
-
-        raw_bytes = data.encode("utf-8")
-        iv = secrets.token_bytes(16)
-        stream_key = hashlib.sha256(self.key + b":enc:" + iv).digest()
-        keystream = (
-            stream_key * ((len(raw_bytes) // len(stream_key)) + 1)
-        )[:len(raw_bytes)]
-        ciphertext = bytes(b ^ k for b, k in zip(raw_bytes, keystream))
-        mac = hmac.new(self.key, iv + ciphertext, hashlib.sha256).digest()
-        payload = b"FALLBACKv1:" + iv + mac + ciphertext
-        return base64.urlsafe_b64encode(payload).decode("utf-8")
+        if self._cipher is None:
+            raise RuntimeError(
+                "Encryption requires the `cryptography` package (Fernet). "
+                "Install it with: pip install cryptography"
+            )
+        return self._cipher.encrypt(data.encode("utf-8")).decode("utf-8")
 
     def decrypt(self, encrypted_data: str) -> str:
         """Decrypts a base64 encoded string and returns the original string."""
-        if self._cipher is not None:
-            try:
-                return self._cipher.decrypt(
-                    encrypted_data.encode("utf-8")
-                ).decode("utf-8")
-            except Exception:
-                pass
-
+        if self._cipher is None:
+            raise RuntimeError(
+                "Decryption requires the `cryptography` package (Fernet). "
+                "Install it with: pip install cryptography"
+            )
         try:
-            payload = base64.urlsafe_b64decode(encrypted_data.encode("utf-8"))
-            if payload.startswith(b"FALLBACKv1:"):
-                body = payload[len(b"FALLBACKv1:"):]
-                iv = body[:16]
-                mac = body[16:48]
-                ciphertext = body[48:]
-                expected_mac = hmac.new(
-                    self.key, iv + ciphertext, hashlib.sha256
-                ).digest()
-                if not hmac.compare_digest(mac, expected_mac):
-                    raise ValueError("Authentication tag mismatch")
-                stream_key = hashlib.sha256(self.key + b":enc:" + iv).digest()
-                keystream = (
-                    stream_key * ((len(ciphertext) // len(stream_key)) + 1)
-                )[:len(ciphertext)]
-                plain = bytes(b ^ k for b, k in zip(ciphertext, keystream))
-                return plain.decode("utf-8")
-        except Exception:
-            pass
-
-        if self._cipher is not None:
             return self._cipher.decrypt(
                 encrypted_data.encode("utf-8")
             ).decode("utf-8")
-        raise ValueError("Decryption failed: invalid key or payload")
+        except Exception as e:
+            raise ValueError("Decryption failed: invalid key or payload") from e
 
 
 # Aliases for backwards compatibility

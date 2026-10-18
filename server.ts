@@ -132,11 +132,14 @@ function getJaccardSimilarity(textA: string, textB: string): number {
 async function getEmbedding(ai: any, text: string): Promise<number[] | null> {
   try {
     const result = await ai.models.embedContent({
-      model: 'text-embedding-004',
+      model: 'gemini-embedding-001',
       contents: text
     });
-    if (result && result.embedding && result.embedding.values) {
-      return result.embedding.values;
+    // gemini-embedding-001 may return embeddings as `result.embeddings[0].values`
+    // while earlier models returned `result.embedding.values`; accept both.
+    const embeddings = result?.embeddings ?? (result?.embedding ? [result.embedding] : []);
+    if (embeddings?.[0]?.values) {
+      return embeddings[0].values;
     }
   } catch (err) {
     console.warn("Failed to generate embedding from Gemini API:", err);

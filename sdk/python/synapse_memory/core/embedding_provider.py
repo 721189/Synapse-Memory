@@ -1,3 +1,4 @@
+import hashlib
 import json
 import logging
 import math
@@ -58,9 +59,14 @@ class DeterministicHashEmbeddingProvider(EmbeddingProvider):
 
         vector = [0.0] * self._dim
         for i, word in enumerate(words):
-            h = hash(word)
+            # SHA-256 digest instead of the built-in hash(): Python string hashing
+            # is salted per interpreter (PYTHONHASHSEED), so hash(word) is stable
+            # only within a single process and changes across invocations -- it must
+            # never back a stored index or a repeatable offline test.
+            digest = hashlib.sha256(word.encode("utf-8")).digest()
+            h = int.from_bytes(digest[:8], "big", signed=True)
             idx = abs(h) % self._dim
-            sign = 1.0 if (h > 0) else -1.0
+            sign = 1.0 if h >= 0 else -1.0
             vector[idx] += sign * (1.0 / (1.0 + 0.05 * i))
 
         # L2 normalization for accurate cosine similarities
@@ -133,7 +139,20 @@ class SentenceTransformerEmbeddingProvider(EmbeddingProvider):
 
 
 class GeminiEmbeddingProvider(EmbeddingProvider):
-    def __init__(self, api_key: str, dim: int = 768):
+    """
+    Google Gemini text embedding provider.
+
+    NOTE: text-embedding-004 was shut down on 2026-01-14 and is retired.
+    This provider now targets gemini-embedding-001 (3072 dimensions by default),
+    the supported text-only replacement. Embeddings from the two model families
+    are incompatible -- existing text-embedding-004 vectors must be re-embedded
+    with `reembed_all_memories()` (or the equivalent migration job) before
+    querying, since changing the column definition alone does not recalculate
+    stored vectors. See `docs/production-hardening-baseline.md` and
+    `docs/backup-recovery.md` for the batched re-embed/key-rotation sweep
+    pattern.
+    """
+    def __init__(self, api_key: str, dim: int = 3072):
         self.api_key = api_key
         self._dim = dim
 
@@ -149,7 +168,7 @@ class GeminiEmbeddingProvider(EmbeddingProvider):
     def embed(self, text: str) -> List[float]:
         url = (
             "https://generativelanguage.googleapis.com/v1beta/models/"
-            f"text-embedding-004:embedContent?key={self.api_key}"
+            f"gemini-embedding-001:embedContent?key={self.api_key}"
         )
         headers = {"Content-Type": "application/json"}
         payload = {"content": {"parts": [{"text": text}]}}
