@@ -309,14 +309,14 @@ class PGVectorMemoryStore:
                     "                tenant_id = NULLIF(current_setting('app.current_tenant', true), '')\n"
                     "                AND tenant_id IS NOT NULL\n"
                     "            )\n"
-                    "            OR " + _admin_role_sql + "\n"
+                    "            OR (" + _admin_role_sql + " AND current_setting('app.current_tenant', true) <> '')\n"
                     "        )\n"
                     "        WITH CHECK (\n"
                     "            (\n"
                     "                tenant_id = NULLIF(current_setting('app.current_tenant', true), '')\n"
                     "                AND tenant_id IS NOT NULL\n"
                     "            )\n"
-                    "            OR " + _admin_role_sql + "\n"
+                    "            OR (" + _admin_role_sql + " AND current_setting('app.current_tenant', true) <> '')\n"
                     "        );\n"
                     "    ELSE\n"
                     "        -- Migrate legacy policy (no admin bypass) to the current version.\n"
@@ -358,6 +358,15 @@ class PGVectorMemoryStore:
                 )
                 cur.execute(_verify_role_sql)
 
+                if not self.apply_schema:
+                    cur.execute(
+                        "DO $$\n"
+                        "BEGIN\n"
+                        f"    IF current_user = '{self.admin_role}' THEN\n"
+                        "        RAISE EXCEPTION 'security: runtime connections must not use admin role %', current_user USING ERRCODE = 'P0001';\n"
+                        "    END IF;\n"
+                        "END $$;"
+                    )
                 conn.commit()
         except Exception as e:
             conn.rollback()
