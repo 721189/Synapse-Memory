@@ -127,13 +127,21 @@ def role_statements(role, password, exists):
              (password,))]
 
 
-def privilege_statements(runtime_role, admin_role, has_memories_table):
+def privilege_statements(runtime_role, admin_role, has_memories_table,
+                         auth_tables=None):
     """Least-privilege grants for the runtime role.
 
     Runtime gets schema USAGE, DML on ``memories``, and nothing else: no schema
     CREATE, no table ownership, no membership in the admin role, and no
     destructive statement privileges.
+
+    ``auth_tables`` limits the per-table auth grants to relations that already
+    exist: GRANT/REVOKE on a missing relation is an error, and the
+    migrate-then-run topology provisions roles BEFORE the migration creates
+    ``api_keys``/``auth_audit_logs``. Default: all ``AUTH_TABLES``.
     """
+    if auth_tables is None:
+        auth_tables = AUTH_TABLES
     rt = quote_ident(runtime_role)
     adm = quote_ident(admin_role)
     stmts = [
@@ -162,8 +170,9 @@ def privilege_statements(runtime_role, admin_role, has_memories_table):
              "REVOKE TRUNCATE ON TABLE public.memories FROM " + rt, ()),
         ]
     # Auth tables: runtime needs SELECT (key lookup), UPDATE (last_used_at),
-    # INSERT (audit log). No DELETE/TRUNCATE/REFERENCES/TRIGGER.
-    for table in AUTH_TABLES:
+    # INSERT (audit log). No DELETE/TRUNCATE/REFERENCES/TRIGGER. Only tables
+    # that exist are touched (see ``auth_tables`` in the docstring).
+    for table in auth_tables:
         stmts += [
             (f"runtime: strip every existing privilege on {table}",
              f"REVOKE ALL PRIVILEGES ON TABLE public.{table} FROM " + rt, ()),
@@ -256,9 +265,10 @@ def evaluate_privileges(runtime_role, table_privs, can_create_schema,
                 failures.append(runtime_role + ": must NOT hold " + priv
                                 + " on public.memories")
     # Verify auth table privileges (runtime needs SELECT/INSERT/UPDATE only).
+    # Iterate the tables the caller actually verified: a pre-migration run has
+    # no auth tables, and absent ones must not be reported as missing.
     if auth_table_privs is not None:
-        for table in AUTH_TABLES:
-            perms = auth_table_privs.get(table, {})
+        for table, perms in auth_table_privs.items():
             for priv in RUNTIME_AUTH_TABLE_PRIVILEGES:
                 if not perms.get(priv):
                     failures.append(runtime_role + ": missing required " + priv
@@ -271,7 +281,8 @@ def evaluate_privileges(runtime_role, table_privs, can_create_schema,
 
 
 def build_plan(runtime_role, admin_role, runtime_password, admin_password,
-               runtime_exists, admin_exists, has_memories_table, current_owner=None):
+               runtime_exists, admin_exists, has_memories_table, current_owner=None,
+               auth_tables=None):
     """Ordered (label, sql, params) plan. No plaintext password ever enters SQL."""
     validate_identifier(runtime_role, "runtime role")
     validate_identifier(admin_role, "admin role")
@@ -279,7 +290,8 @@ def build_plan(runtime_role, admin_role, runtime_password, admin_password,
         raise IdentifierError("runtime role and admin role must differ")
     plan = role_statements(admin_role, admin_password, admin_exists)
     plan += role_statements(runtime_role, runtime_password, runtime_exists)
-    plan += privilege_statements(runtime_role, admin_role, has_memories_table)
+    plan += privilege_statements(runtime_role, admin_role, has_memories_table,
+                                 auth_tables=auth_tables)
     plan += ownership_statements(runtime_role, admin_role, current_owner)
     return plan
 
@@ -324,9 +336,19 @@ def provision(dsn, runtime_role, admin_role, runtime_password, admin_password,
         owner_row = _fetchone(cur, VERIFY_TABLE_OWNER_SQL, ())
         current_owner = owner_row[0] if owner_row else None
         has_table = current_owner is not None
+        # Auth-table grants/verification only apply to relations that exist:
+        # GRANT/REVOKE/has_table_privilege on a missing table is an error, and
+        # the first provisioning run happens BEFORE the migration creates them.
+        existing_auth_tables = tuple(
+            table for table in AUTH_TABLES
+            if _fetchone(
+                cur,
+                "SELECT 1 FROM pg_tables WHERE schemaname = 'public' AND tablename = %s;",
+                (table,)))
 
         plan = build_plan(runtime_role, admin_role, runtime_password, admin_password,
-                          runtime_exists, admin_exists, has_table, current_owner)
+                          runtime_exists, admin_exists, has_table, current_owner,
+                          auth_tables=existing_auth_tables)
 
         if not verify_only:
             for label, sql, params in plan:
@@ -355,9 +377,10 @@ def provision(dsn, runtime_role, admin_role, runtime_password, admin_password,
                 cur, VERIFY_SCHEMA_PRIVS_SQL, (runtime_role,))[0])
             in_admin = bool(_fetchone(
                 cur, VERIFY_MEMBERSHIP_SQL, (runtime_role, admin_role))[0])
-            # Verify auth table privileges for the runtime role.
+            # Verify auth table privileges for the runtime role, for the auth
+            # tables that exist (a pre-migration run has none to check).
             auth_table_privs = {}
-            for table in AUTH_TABLES:
+            for table in existing_auth_tables:
                 # has_table_privilege(role, table, priv) returns boolean for each priv.
                 auth_privs = {}
                 for priv in RUNTIME_AUTH_TABLE_PRIVILEGES + FORBIDDEN_AUTH_TABLE_PRIVILEGES:

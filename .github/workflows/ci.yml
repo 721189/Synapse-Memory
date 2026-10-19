@@ -256,6 +256,7 @@ jobs:
           SYNAPSE_API_KEY: ci-dummy-key
           SYNAPSE_ENCRYPTION_KEY: 2N53Wk7u2V5bK1wU_1F5Y9mZ7zN53Wk7u2V5bK1wU_0=
           POSTGRES_PASSWORD: ci-dummy-postgres
+          SYNAPSE_APP_DB_PASSWORD: ci-dummy-app-password
         run: docker compose -f deploy/docker-compose.yml config
 
       - name: Scan engine image

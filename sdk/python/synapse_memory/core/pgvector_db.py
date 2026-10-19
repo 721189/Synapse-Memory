@@ -975,7 +975,7 @@ class PGVectorMemoryStore:
     def count_active_memories(self, tenant_id: Optional[str] = None) -> int:
         """Count of retrieval-visible (non-superseded) memories."""
         if not self._connected or not HAS_PSYCOPG2:
-            values = self._fallback_cache.values()
+            values = list(self._fallback_cache.values())
             if tenant_id:
                 values = [m for m in values if m.get("tenant_id") == tenant_id]
             return sum(1 for m in values if not m.get("superseded_by"))
@@ -1002,7 +1002,7 @@ class PGVectorMemoryStore:
     ) -> List[Dict[str, Any]]:
         """Active-only by default: superseded rows are lineage/audit records."""
         if not self._connected or not HAS_PSYCOPG2:
-            values = self._fallback_cache.values()
+            values = list(self._fallback_cache.values())
             if tenant_id:
                 values = [m for m in values if m.get("tenant_id") == tenant_id]
             if not include_superseded:
@@ -1042,7 +1042,7 @@ class PGVectorMemoryStore:
         instead of loading the entire corpus into application memory.
         """
         if not self._connected or not HAS_PSYCOPG2:
-            values = self._fallback_cache.values()
+            values = list(self._fallback_cache.values())
             if tenant_id:
                 values = [m for m in values if m.get("tenant_id") == tenant_id]
             return [m for m in values if not m.get("superseded_by")][:limit]

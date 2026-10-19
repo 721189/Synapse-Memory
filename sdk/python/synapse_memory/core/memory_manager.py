@@ -224,4 +224,3 @@ class MemoryManager:
 
     async def prune_async(self, tenant_id: Optional[str] = None) -> int:
         return await asyncio.to_thread(self.auto_prune_store, tenant_id=tenant_id)
-

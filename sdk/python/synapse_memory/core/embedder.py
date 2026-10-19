@@ -1,3 +1,4 @@
+import logging
 import os
 from typing import List, Optional
 from synapse_memory.core.embedding_provider import (
@@ -7,6 +8,8 @@ from synapse_memory.core.embedding_provider import (
     OpenAIEmbeddingProvider,
     SentenceTransformerEmbeddingProvider
 )
+
+logger = logging.getLogger("SynapseEmbedder")
 
 
 class SynapseEmbedder:
