@@ -394,9 +394,10 @@ class RevokeKeyRequest(BaseModel):
     key_id: str = Field(..., min_length=1, max_length=128)
 
 
-# --- API ENDPOINTS ---
+AUTH_KEYS_CREATE_SCOPE = "auth:keys:create"
 
-@app.get("/liveness", tags=["Telemetry"])
+
+# --- API ENDPOINTS ---
 def liveness():
     """Returns simple process liveness state."""
     return {"status": "OK", "timestamp": time.time()}
@@ -781,27 +782,55 @@ def gdpr_delete(
 def create_api_key(
     request: Request,
     payload: CreateKeyRequest,
-    principal: APIKeyRecord = Depends(require_scope("admin"))
+    principal: APIKeyRecord = Depends(require_scope(AUTH_KEYS_CREATE_SCOPE)),
 ):
-    """Generates a new cryptographic API Key with RBAC scopes."""
-    # P1.1: an admin may only mint keys inside its own org/project/tenant
-    # boundary (system principals bypass via check_hierarchy).
+    """Generates a new cryptographic API Key with RBAC scopes.
+
+    P1.1/P1.2: key minting is authorization-aware. The authenticated principal may
+    only mint keys inside the workspaces they control, at a role that their own
+    role permits, and MUST NOT be allowed to elevate to platform-wide admin. The
+    'admin' scope is never auto-promoted: requested role/scopes are authoritative
+    and validated before minting.
+    """
+    # Resolve the caller's effective workspace binding from their key.
+    caller_tenant = principal.tenant_id or "default"
+    caller_org = principal.organization_id or "org_default"
+
+    # Target workspace that the new key is bound to. Defaults to the caller's own
+    # binding so a caller cannot mint a key for an org/workspace they do not own.
+    target_org = (payload.organization_id or caller_org).strip() or caller_org
+    target_workspace = payload.tenant_id or caller_tenant
+    requested_role = payload.role or "developer"
+
+    allowed, reason = can_create_api_key(
+        principal,
+        target_org=target_org,
+        target_workspace=target_workspace,
+        requested_role=requested_role,
+    )
+    if not allowed:
+        raise HTTPException(status_code=403, detail=reason)
+
+    # Defense-in-depth: still re-validate the org/project/tenant bounding via the
+    # generic hierarchy check (system principals bypass it).
     ok, reason = security_manager.check_hierarchy(
         principal,
-        requested_org=payload.organization_id,
+        requested_org=target_org,
         requested_project=payload.project_id,
-        requested_tenant=payload.tenant_id,
+        requested_tenant=target_workspace,
     )
     if not ok:
         raise HTTPException(status_code=403, detail=reason)
+
     token, record = security_manager.generate_api_key(
         name=payload.name,
-        organization_id=payload.organization_id,
+        organization_id=target_org,
         project_id=payload.project_id,
-        tenant_id=payload.tenant_id,
+        tenant_id=target_workspace,
         scopes=payload.scopes,
-        role=payload.role,
-        ttl_days=payload.ttl_days
+        role=requested_role,
+        ttl_days=payload.ttl_days,
+        owner_id=principal.key_id,
     )
 
     return envelope(

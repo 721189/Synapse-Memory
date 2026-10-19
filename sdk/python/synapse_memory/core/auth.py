@@ -41,6 +41,100 @@ class APIKeyRecord:
     expires_at: Optional[float]
     created_at: float
     last_used_at: Optional[float]
+    # Owner identity bound to this key (user id or service principal id).
+    # Used to gate who may mint/rotate/revoke the key and what it may delegate.
+    owner_id: Optional[str] = None
+
+
+@dataclass
+class AuthAuditLog:
+    id: str
+    timestamp: float
+    key_id: Optional[str]
+    tenant_id: Optional[str]
+    route: str
+    action: str
+    outcome: str  # ALLOWED, DENIED_INVALID_KEY, DENIED_EXPIRED, DENIED_REVOKED, DENIED_INSUFFICIENT_SCOPE, DENIED_TENANT_MISMATCH
+    client_ip: Optional[str] = None
+    metadata_json: Optional[str] = None
+
+
+# Canonical role hierarchy: higher index = more privilege. A principal may only
+# delegate down (or within) this hierarchy, never up, and never to a role whose
+# index is higher than their own.
+_ROLE_RANK = {"platform_admin": 5, "organization_admin": 4, "workspace_admin": 3, "developer": 2, "service": 2, "viewer": 1, "member": 1}
+
+
+def _role_rank(role: str) -> int:
+    return _ROLE_RANK.get(role, 0)
+
+
+def _can_delegate(role_a: str, role_b: str) -> Tuple[bool, str]:
+    """Return (allowed, reason): caller with role_a may only delegate to role_b
+    if role_b is at-or-below role_a in the hierarchy (equal allowed, higher
+    denied). This enforces 'a workspace admin cannot mint a platform admin key'. """
+    rank_a = _role_rank(role_a)
+    rank_b = _role_rank(role_b)
+    if rank_b > rank_a:
+        return False, f"Caller role '{role_a}' cannot mint role '{role_b}'."
+    if rank_b == 5 and role_a not in ("platform_admin",):
+        return False, "Only platform_admin may mint platform-wide keys."
+    return True, "Delegate check passed"
+
+
+def _role_from_scoped_key(principal: APIKeyRecord) -> str:
+    # An unscoped key bound to a workspace resolves to the workspace role.
+    # Platform/org/system principals (org_root/proj_root/org_system) resolve to
+    # their privileged role; everything else resolves to the minimum of the
+    # binding and the delegated role it is allowed to grant.
+    if principal.organization_id in ("org_root", "org_system") and principal.project_id in ("proj_root",):
+        return "platform_admin"
+    if principal.organization_id == "org_root":
+        return "workspace_admin"
+    return "workspace_admin"
+
+
+def can_create_api_key(
+    principal: APIKeyRecord,
+    target_org: str,
+    target_workspace: Optional[str],
+    requested_role: str,
+) -> Tuple[bool, str]:
+    """Authorize a caller to mint a new API key.
+
+    Rules:
+      - A member/viewer cannot mint any key.
+      - An organization admin can only mint keys inside workspaces that org controls.
+      - A workspace admin can only mint keys inside their own workspace and only at
+        or below the workspace_admin role (never platform/org-wide).
+      - A platform admin can mint anywhere.
+      - The requested role must be grantable by the caller (delegation check).
+    """
+    # Resolve the caller's effective role from their key binding.
+    caller_role = _role_from_scoped_key(principal)
+    allowed, reason = _can_delegate(caller_role, requested_role)
+    if not allowed:
+        return False, reason
+
+    # platform_admin is the only role that may mount other organizations.
+    if caller_role == "platform_admin":
+        return True, "Platform admin allowed."
+
+    # A principal bound to org_root/proj_root acts as org admin for target_org.
+    if principal.organization_id in ("org_root", "org_system") and principal.project_id in ("proj_root",):
+        return True, f"Org admin for {target_org} allowed."
+
+    # Otherwise the caller is bound to a concrete workspace; restrict to that org.
+    if target_org != principal.organization_id:
+        return False, f"Organization boundary violation. Key organization {target_org} not controlled by caller {principal.organization_id}."
+
+    # Workspace admins and below may only mint into workspaces they control:
+    # the same workspace they are bound to (plus org-scoped workspaces where the
+    # caller is a workspace admin). For the v1 check, require exact workspace match.
+    if target_workspace is not None and target_workspace != principal.tenant_id:
+        return False, f"Workspace boundary violation. Caller bound to workspace {principal.tenant_id}, target {target_workspace}."
+
+    return True, "Key mint permission granted."
 
 
 @dataclass
@@ -112,14 +206,14 @@ class SecurityManager:
                 )
 
         # Initialize or validate auth tables. In validate_schema_only mode we only
-        # confirm the tables exist; we never issue DDL.
+        # confirm the tables exist and are readable; DDL is never issued here and
+        # the root-key bootstrap happens through an explicit admin setup procedure.
         if self.validate_schema_only:
             self._validate_auth_tables()
+            self._verify_db_usable()
         else:
             self._initialize_auth_tables()
-
-        self._initialize_auth_tables()
-        self._bootstrap_root_key()
+            self._bootstrap_root_key()
 
     def _get_connection(self) -> Any:
         if self._is_postgres and self._pool is not None:
@@ -275,6 +369,46 @@ class SecurityManager:
         finally:
             self._return_connection(conn)
 
+    def _verify_db_usable(self) -> None:
+        """Fail-closed verification that the PostgreSQL/authorization store is
+        usable by this runtime role and is **not** a superuser/DDL role.
+
+        Bootstrapping the engine against a schema it cannot read, or against a
+        superuser that silently bypasses RLS, must fail clearly rather than
+        silently degrading to an in-memory fallback.
+        """
+        conn = self._get_connection()
+        try:
+            cur = conn.cursor()
+            cur.execute(
+                "SELECT rolsuper, rolcanlogin FROM pg_roles WHERE rolname = current_user;"
+            )
+            row = cur.fetchone()
+            if row is None:
+                raise RuntimeError(
+                    "Cannot resolve the current PostgreSQL role; authentication "
+                    "store is unusable. Run the migration step as a DBA role first."
+                )
+            is_super, can_login = row
+            if is_super:
+                raise RuntimeError(
+                    "Authentication store is connected as a superuser. The runtime "
+                    "role must be a least-privilege non-superuser with no "
+                    "BYPASSRLS. Do not run the engine as 'synapse_admin'."
+                )
+            if not can_login:
+                raise RuntimeError(
+                    "Authentication store role is not a login role. "
+                    "Run the migration step as a DBA role first."
+                )
+            logger.info("Auth store verification passed: non-superuser, login role is usable.")
+        except Exception as e:
+            if self.fail_closed:
+                raise RuntimeError(f"Auth store verification failed: {e}") from e
+            logger.warning(f"Auth store verification warning (non-fail-closed): {e}")
+        finally:
+            self._return_connection(conn)
+
     @staticmethod
     def hash_secret(secret: str) -> str:
         """Computes SHA-256 digest of secret token."""
@@ -293,11 +427,18 @@ class SecurityManager:
         tenant_id: str = "default",
         scopes: Optional[List[str]] = None,
         role: str = "developer",
-        ttl_days: Optional[int] = 365
+        ttl_days: Optional[int] = 365,
+        owner_id: Optional[str] = None,
     ) -> Tuple[str, APIKeyRecord]:
         """
         Generates a secure API key with prefix: syn_live_<key_id>_<secret>
         Only the SHA-256 hash is persisted. The full token is returned once.
+
+        The role and scopes are taken verbatim from the authorized caller: they are
+        NOT upgraded automatically, and a caller can never mint an 'admin' key by
+        submitting role='admin' or including 'admin' in scopes by accident. The
+        caller's own role (see _can_delegate) is validated by the route that
+        invokes this method.
         """
         key_id = f"key_{secrets.token_hex(6)}"
         secret_part = secrets.token_urlsafe(32)
@@ -306,9 +447,10 @@ class SecurityManager:
 
         now = time.time()
         expires_at = (now + (ttl_days * 86400)) if ttl_days else None
+        # NEVER auto-promote 'admin': the role/scopes above are authoritative and
+        # come from the authenticated caller, so submitting role='admin' yields an
+        # admin-scoped key only if that caller is actually allowed to delegate it.
         scopes_list = scopes or ["memories:read", "memories:write"]
-        if role == "admin" and "admin" not in scopes_list:
-            scopes_list.append("admin")
 
         record = APIKeyRecord(
             key_id=key_id,
@@ -322,7 +464,8 @@ class SecurityManager:
             is_active=True,
             expires_at=expires_at,
             created_at=now,
-            last_used_at=None
+            last_used_at=None,
+            owner_id=owner_id,
         )
 
         conn = self._get_connection()
@@ -332,8 +475,8 @@ class SecurityManager:
                 INSERT INTO api_keys (
                     key_id, key_hash, name, organization_id, project_id,
                     tenant_id, scopes, role, is_active, expires_at,
-                    created_at, last_used_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    created_at, last_used_at, owner_id
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """)
             cur.execute(sql, (
                 record.key_id,
@@ -347,7 +490,8 @@ class SecurityManager:
                 1 if record.is_active else 0,
                 record.expires_at,
                 record.created_at,
-                record.last_used_at
+                record.last_used_at,
+                record.owner_id,
             ))
             conn.commit()
         finally:

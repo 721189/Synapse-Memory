@@ -4,7 +4,7 @@
 # packing, encryption, multi-tenant RBAC. Deploy as its own service; the Node
 # gateway proxies to it over SYNAPSE_ENGINE_URL.
 # ─────────────────────────────────────────────────────────────────────────────
-FROM python:3.11-slim AS base
+FROM python:3.11.12-slim AS base
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
@@ -13,8 +13,6 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 # System deps: libpq for psycopg2/pgvector; curl for healthcheck.
 RUN apt-get update && apt-get install -y --no-install-recommends \
-        build-essential \
-        libpq-dev \
         curl \
     && rm -rf /var/lib/apt/lists/*
 

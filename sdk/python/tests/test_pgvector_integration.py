@@ -232,7 +232,8 @@ class TestPGVectorIntegration(unittest.TestCase):
             "tenant_id": "default"
         }
         self.store.insert_memory(valid_mem)
-        self.assertIsNotNone(self.store.get_memory_by_id("dim_valid"))
+        self.assertIsNotNone(self.store.get_memory_by_id("dim_valid", tenant_id="default"))
+
 
         # 383 vector -> rejected due to dimension mismatch exception or DB error
         invalid_mem = {

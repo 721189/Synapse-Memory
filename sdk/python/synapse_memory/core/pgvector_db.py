@@ -510,6 +510,11 @@ class PGVectorMemoryStore:
             with conn.cursor() as cur:
                 self._set_tenant_context(cur, tenant_id)
                 emb = memory.get("embedding", [])
+                if len(emb) != self.dimension:
+                    raise RuntimeError(
+                        f"Embedding dimension mismatch: storage is configured for "
+                        f"{self.dimension}-d vectors, received {len(emb)}-d."
+                    )
                 emb_str = f"[{','.join(str(float(x)) for x in emb)}]" if emb else None
                 plaintext = str(memory["content"])
                 ciphertext = self._encrypt_field(plaintext)
