@@ -3,7 +3,7 @@
 # Serves the React dashboard and proxies /query, /feedback, /ingest, etc.
 # to the separate Python engine service. Lightweight: Node only, no Python/ML.
 # ─────────────────────────────────────────────────────────────────────────────
-FROM node:20-slim AS base
+FROM node:22-slim AS base
 
 # tini for proper PID 1 signal handling + graceful shutdown in k8s/compose.
 RUN apt-get update && apt-get install -y --no-install-recommends tini curl \
