@@ -189,19 +189,6 @@ def can_create_api_key(
     return True, "Key mint permission granted."
 
 
-@dataclass
-class AuthAuditLog:
-    id: str
-    timestamp: float
-    key_id: Optional[str]
-    tenant_id: Optional[str]
-    route: str
-    action: str
-    outcome: str  # ALLOWED, DENIED_INVALID_KEY, DENIED_EXPIRED, DENIED_REVOKED, DENIED_INSUFFICIENT_SCOPE, DENIED_TENANT_MISMATCH
-    client_ip: Optional[str] = None
-    metadata_json: Optional[str] = None
-
-
 class SecurityManager:
     """
     Enterprise identity and cryptographic authorization engine.

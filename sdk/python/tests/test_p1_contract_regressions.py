@@ -124,5 +124,72 @@ class TestLiveMetrics(unittest.TestCase):
         self.assertNotEqual(before, after)
 
 
+    def test_metrics_series_are_ttl_tracked_and_paths_bucketed(self):
+        """Metric labels must stay bounded and expire (F-08).
+
+        Regression: _METRICS_TTL was declared but never written, and the prune
+        compared a timestamp against the dict itself (a latent TypeError), so
+        'keys are pruned after TTL' was not actually true.
+        """
+        from synapse_memory.api import fastapi_server as srv
+
+        srv._REQUEST_COUNTS.clear()
+        srv._LATENCY_SAMPLES.clear()
+        srv._METRICS_TTL.clear()
+
+        # A dynamic path must not become its own label.
+        srv._record_request("/api/memories/abc123", 200, 0.01)
+        self.assertIn(("other", "200"), srv._REQUEST_COUNTS)
+        self.assertIn(("other", "200"), srv._METRICS_TTL)
+
+        # A known route template is preserved and tracked.
+        srv._record_request("/api/memories/{memory_id}", 200, 0.02)
+        self.assertIn(("/api/memories/{memory_id}", "200"), srv._METRICS_TTL)
+
+        # An aged series is pruned on the next recorded request.
+        key = ("other", "200")
+        ts, count = srv._METRICS_TTL[key]
+        srv._METRICS_TTL[key] = (ts - srv._METRICS_TTL_SECONDS - 1, count)
+        srv._record_request("/api/memories/list", 200, 0.03)
+        self.assertNotIn(key, srv._REQUEST_COUNTS)
+        self.assertNotIn(key, srv._METRICS_TTL)
+
+
+class TestApiKeyMinting(unittest.TestCase):
+    """POST /api/auth/keys/create must actually execute.
+
+    Regression: the handler called can_create_api_key() without importing it,
+    so key minting raised NameError while the route stayed registered.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        cls.client = TestClient(app)
+        token, _ = security_manager.generate_api_key(
+            name="Minting Root",
+            organization_id="org_root",
+            project_id="proj_root",
+            tenant_id="tenant_root",
+            scopes=["auth:keys:create", "admin", "memories:read", "memories:write"],
+            role="admin",
+        )
+        cls.headers = {"X-Synapse-API-Key": token, "X-Tenant-ID": "tenant_root"}
+
+    def test_create_key_endpoint_mints_a_key(self):
+        resp = self.client.post(
+            "/api/auth/keys/create",
+            json={
+                "name": "minted-child-key",
+                "organization_id": "org_root",
+                "project_id": "proj_root",
+                "tenant_id": "tenant_root",
+                "role": "developer",
+            },
+            headers=self.headers,
+        )
+        self.assertNotEqual(resp.status_code, 500, resp.text)
+        self.assertIn(resp.status_code, (200, 201), resp.text)
+
+
 if __name__ == "__main__":
     unittest.main()

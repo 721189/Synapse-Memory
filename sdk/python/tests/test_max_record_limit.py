@@ -111,5 +111,32 @@ class TestMaxRecordLimitEnforcement(unittest.TestCase):
             importlib.reload(mm)
 
 
+    def test_repeated_merges_do_not_bypass_the_cap(self):
+        """Dedup MERGE inserts a supersession row; it must respect the ceiling too.
+
+        Regression: the MERGE branch returned before auto_prune_store(), so
+        re-ingesting one evolving fact grew the table without bound even though
+        CREATE/REJECT pruning kept the cap.
+        """
+        manager, store = _make_manager(self.db_path, limit=5)
+        try:
+            actions = []
+            for i in range(12):
+                _, action, _ = manager.ingest_with_deduplication(
+                    content=f"the deployment region is eu-west-1 for cluster alpha revision {i}",
+                    category="fact",
+                    confidence=0.99,
+                )
+                actions.append(action)
+            # The near-identical content folds into the same node each time, so
+            # the merge path is genuinely exercised, not just CREATE.
+            self.assertIn("MERGED", actions)
+            self.assertLessEqual(store.count_memories(tenant_id="default"), 5)
+            # Retrieval still sees a single live fact, not the lineage rows.
+            self.assertEqual(len(store.get_all_memories(tenant_id="default")), 1)
+        finally:
+            store.close()
+
+
 if __name__ == "__main__":
     unittest.main()

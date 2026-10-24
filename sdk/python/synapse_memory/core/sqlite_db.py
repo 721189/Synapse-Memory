@@ -250,13 +250,25 @@ class SQLiteMemoryStore:
             conn.commit()
 
     def mark_superseded(self, memory_id: str, superseded_by: str, tenant_id: Optional[str] = None) -> None:
-        """Stamp `superseded_by` on an old memory that a dedup MERGE replaced."""
+        """Stamp `superseded_by` on an old memory that a dedup MERGE replaced.
+
+        Scoped to ``tenant_id`` when supplied: unlike PostgreSQL (where RLS
+        enforces the boundary), SQLite has no row-level security, so the tenant
+        predicate must be part of the statement itself. Without it a supersede
+        issued in one tenant could rewrite another tenant's row.
+        """
         with self._get_connection() as conn:
             cursor = conn.cursor()
-            cursor.execute(
-                "UPDATE memories SET superseded_by = ? WHERE id = ?",
-                (superseded_by, memory_id),
-            )
+            if tenant_id is not None:
+                cursor.execute(
+                    "UPDATE memories SET superseded_by = ? WHERE id = ? AND tenant_id = ?",
+                    (superseded_by, memory_id, tenant_id),
+                )
+            else:
+                cursor.execute(
+                    "UPDATE memories SET superseded_by = ? WHERE id = ?",
+                    (superseded_by, memory_id),
+                )
             conn.commit()
 
     def get_all_memories(

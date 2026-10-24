@@ -143,6 +143,13 @@ class MemoryManager:
             except Exception:
                 log_event("memory_deduplication", "MERGE_MARK_FAILED", {"target_id": match_id, "tenant_id": tenant_id})
 
+            # The supersession row above is a real row: it counts toward
+            # max_record_limit like any other write, so enforce the capacity
+            # ceiling on this path too. Without this, repeated merges of the same
+            # fact grow the table without bound (the superseded lineage rows are
+            # never evicted) even though CREATE/REJECT do prune.
+            self.auto_prune_store(tenant_id=tenant_id)
+
             log_event("memory_deduplication", "MERGED_PRESERVED", {
                 "old_id": match_id, "new_id": new_memory_id, "tenant_id": tenant_id,
                 "old_confidence": old_confidence, "new_confidence": merged_confidence,

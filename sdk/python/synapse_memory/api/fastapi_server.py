@@ -5,7 +5,7 @@ import datetime
 import hashlib
 import logging
 import threading
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Tuple
 from pydantic import BaseModel, Field
 import uvicorn
 from fastapi import FastAPI, HTTPException, status, Header, Request, Depends
@@ -21,7 +21,7 @@ from synapse_memory.core.memory_manager import DEFAULT_MAX_RECORD_LIMIT, MemoryM
 from synapse_memory.core.knapsack_packer import KnapsackPacker
 from synapse_memory.core.decay_engine import DecayEngine
 from synapse_memory.core.hybrid_search import HybridSearch
-from synapse_memory.core.auth import SecurityManager, APIKeyRecord
+from synapse_memory.core.auth import SecurityManager, APIKeyRecord, can_create_api_key
 
 logger = logging.getLogger("SynapseGateway")
 logging.basicConfig(level=logging.INFO)
@@ -127,8 +127,9 @@ _REQUEST_COUNTS: Dict[Tuple[str, str], int] = {}
 # Latency samples keyed by route template (bounded by _REQUEST_COUNTS).
 _LATENCY_SAMPLES: Dict[str, List[float]] = {}
 # Key expiration for metrics: (timestamp, count) tuples; entries older than
-# 1 hour are pruned on each scrape.
-_METRICS_TTL: Dict[str, Tuple[float, int]] = {}
+# _METRICS_TTL_SECONDS are pruned on each scrape.
+_METRICS_TTL: Dict[Tuple[str, str], Tuple[float, int]] = {}
+_METRICS_TTL_SECONDS = 3600.0
 # Max distinct route templates; excess paths get bucketed as "other".
 _MAX_ROUTE_TEMPLATES = 10000
 # Canonical route templates for dynamic paths (F-08)
@@ -144,12 +145,15 @@ _ingest_success = 0
 _ingest_errors = 0
 _retrieval_success = 0
 _retrieval_errors = 0
+# Auth/authorization failures. Exported as synapse_auth_failures_total in
+# /metrics; incremented on the fail-closed path in _build_auth_dependency.
+_auth_failures = 0
 _last_candidate_count = 0
 _last_packed_tokens = 0
 
 
 def _record_request(path: str, status: int, latency_s: float) -> None:
-    \"\"\"Record request metrics with bounded cardinality (F-08).
+    """Record request metrics with bounded cardinality (F-08).
 
     Route templates are used as labels (e.g. /api/memories/{memory_id});
     dynamic paths are bucketed as 'other'. Keys are pruned after TTL.
@@ -157,7 +161,9 @@ def _record_request(path: str, status: int, latency_s: float) -> None:
     with _metrics_lock:
         # Prune expired keys
         now = time.time()
-        expired_keys = [k for k, (t, _) in _METRICS_TTL.items() if now - t > _METRICS_TTL]
+        expired_keys = [
+            k for k, (t, _) in _METRICS_TTL.items() if now - t > _METRICS_TTL_SECONDS
+        ]
         for key in expired_keys:
             _REQUEST_COUNTS.pop(key, None)
             _METRICS_TTL.pop(key, None)
@@ -166,7 +172,13 @@ def _record_request(path: str, status: int, latency_s: float) -> None:
         route_template = _ROUTE_TEMPLATE_MAP.get(path, "other")
 
         key = (route_template, str(status))
+        if key not in _REQUEST_COUNTS and len(_REQUEST_COUNTS) >= _MAX_ROUTE_TEMPLATES:
+            # Hard ceiling on distinct series: over-cap paths fold into 'other'
+            # instead of growing the counter dict without bound.
+            key = ("other", str(status))
         _REQUEST_COUNTS[key] = _REQUEST_COUNTS.get(key, 0) + 1
+        # Record freshness so the prune above can actually expire this series.
+        _METRICS_TTL[key] = (now, _REQUEST_COUNTS[key])
         samples = _LATENCY_SAMPLES.setdefault(route_template, [])
         samples.append(latency_s)
         if len(samples) > 500:
@@ -1189,7 +1201,7 @@ def prometheus_metrics():
     ]
     lat_lines = ["# HELP synapse_request_latency_seconds Request latency by endpoint", "# TYPE synapse_request_latency_seconds summary"]
     with _metrics_lock:
-        for path, samples in sorted(_latency_samples.items()):
+        for path, samples in sorted(_LATENCY_SAMPLES.items()):
             if not samples:
                 continue
             ordered = sorted(samples)

@@ -87,6 +87,50 @@ class TestAuthAndMultiTenancy(unittest.TestCase):
         gamma_mems = self.store.get_all_memories(tenant_id="tenant_gamma")
         self.assertEqual(len(gamma_mems), 0)
 
+    def test_mark_superseded_is_tenant_scoped(self):
+        """A supersede issued for one tenant must not rewrite another's row.
+
+        SQLite has no RLS, so the tenant predicate has to live in the UPDATE.
+        Regression: mark_superseded() accepted tenant_id but ignored it.
+        """
+        mem_a = {
+            "id": "mem_tenant_a_1",
+            "tenant_id": "tenant_alpha",
+            "content": "Alpha fact",
+            "category": "fact",
+            "confidence": 0.95,
+            "created_at": 1000.0,
+            "access_count": 1,
+            "token_cost": 25,
+            "embedding": [0.1] * 128,
+        }
+        mem_b = {
+            "id": "mem_tenant_b_1",
+            "tenant_id": "tenant_beta",
+            "content": "Beta fact",
+            "category": "fact",
+            "confidence": 0.90,
+            "created_at": 1005.0,
+            "access_count": 1,
+            "token_cost": 30,
+            "embedding": [0.2] * 128,
+        }
+        self.store.insert_memory(mem_a)
+        self.store.insert_memory(mem_b)
+
+        # Alpha tries to supersede Beta's memory id.
+        self.store.mark_superseded("mem_tenant_b_1", "mem_hijack", tenant_id="tenant_alpha")
+
+        beta_row = self.store.get_memory_by_id("mem_tenant_b_1")
+        self.assertIsNone(beta_row["superseded_by"])
+        self.assertEqual(len(self.store.get_all_memories(tenant_id="tenant_beta")), 1)
+
+        # A legitimate in-tenant supersede still works, and hides the row.
+        self.store.mark_superseded("mem_tenant_a_1", "mem_a_2", tenant_id="tenant_alpha")
+        alpha_row = self.store.get_memory_by_id("mem_tenant_a_1")
+        self.assertEqual(alpha_row["superseded_by"], "mem_a_2")
+        self.assertEqual(len(self.store.get_all_memories(tenant_id="tenant_alpha")), 0)
+
     def test_key_rotation_revokes_old_and_issues_same_scope(self):
         """Zero-downtime rotation: new key works, old key is revoked."""
         old_token, old_rec = self.auth.generate_api_key(
