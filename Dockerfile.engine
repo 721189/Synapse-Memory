@@ -27,6 +27,10 @@ WORKDIR /app
 #   DOCKER_BUILDKIT=1 docker build --build-arg INSTALL_LOCAL_MODELS=true -f Dockerfile.engine .
 ARG INSTALL_LOCAL_MODELS=false
 COPY sdk/python ./sdk/python
+# Refresh build-time packaging tools. The base image ships setuptools 65.5.1 /
+# wheel 0.45.1, which the image scan flags (CVE-2024-6345, CVE-2025-47273,
+# CVE-2026-24049); they are build-time only but still live in the layer.
+RUN pip install --no-cache-dir --upgrade pip setuptools wheel
 # Provisioning/migration entrypoint used by the compose `db-provision` one-shot
 # service and by operators running against a managed database (F-04).
 COPY scripts ./scripts
