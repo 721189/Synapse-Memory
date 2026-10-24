@@ -63,7 +63,8 @@ def run(cmd, check=True, env=None):
     if env:
         merged.update(env)
     log(" ".join(cmd[:4]) + (" ..." if len(cmd) > 4 else ""))
-    # Fixed argv, no shell, no user input: this is the deployment harness itself.\n    return subprocess.run(cmd, cwd=ROOT, env=merged, check=check)  # nosec B603,B607
+    # Fixed argv, no shell, no user input: this is the deployment harness itself.
+    return subprocess.run(cmd, cwd=ROOT, env=merged, check=check)  # nosec B603 B607
 
 
 def http(method, path, payload=None, headers=None, timeout=10):
