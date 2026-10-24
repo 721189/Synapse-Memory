@@ -6,9 +6,12 @@
 FROM node:22-slim AS base
 
 # tini for proper PID 1 signal handling + graceful shutdown in k8s/compose.
-# No curl: the healthcheck uses Node's built-in fetch, and avoiding the extra
-# package removes a libcurl CVE from the scanned image surface.
-RUN apt-get update && apt-get install -y --no-install-recommends tini \
+# No curl: the healthcheck uses Node's built-in fetch. Upgrade the Debian base
+# packages so security fixes published after the base image was built actually
+# land — Trivy gates on fixable CVEs.
+RUN apt-get update \
+    && apt-get -y upgrade \
+    && apt-get install -y --no-install-recommends tini \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app

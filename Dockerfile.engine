@@ -11,8 +11,13 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONPATH=/app/sdk/python \
     PIP_NO_CACHE_DIR=1
 
-# No curl: the healthcheck below uses Python's stdlib, and avoiding the extra
-# package keeps a libcurl CVE out of the scanned image surface (F-04 follow-up).
+# No curl: the healthcheck below uses Python's stdlib. Upgrade the Debian base
+# packages so security fixes published after the base image was built (e.g.
+# gpgv, libcap2, libgnutls30) actually land — Trivy gates on fixable CVEs.
+RUN apt-get update \
+    && apt-get -y upgrade \
+    && rm -rf /var/lib/apt/lists/*
+
 WORKDIR /app
 
 # Install the engine + production dependencies (pgvector driver).
