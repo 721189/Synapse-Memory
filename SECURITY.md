@@ -96,3 +96,17 @@ To help us triage and resolve the issue quickly, please include:
    - Rate limiting is in-process by default; set `REDIS_URL` for cluster-wide enforcement across replicas.
    - Rotate API keys via create → migrate → revoke; revoke takes effect immediately.
 
+
+## Operational limits you must plan for
+
+These are deliberate, documented trade-offs � not bugs. Size your deployment
+against them.
+
+| Limit | Behaviour | How to tighten |
+|---|---|---|
+| **Revocation across replicas** | `revoke_api_key()` evicts the local cache immediately. Other replicas re-read the database at most `SYNAPSE_AUTH_REVALIDATE_SECONDS` (default **5s**) later, because cached keys are periodically revalidated. | Set `SYNAPSE_AUTH_REVALIDATE_SECONDS` to 0.5 for near-immediate propagation (costs one key lookup per request per replica). |
+| **Audit durability** | Audit rows are buffered in memory and flushed on batch/interval, and on graceful shutdown (`SecurityManager.close()`). An ungraceful kill (SIGKILL, node crash, power loss) can lose the pending batch. | Treat the audit log as best-effort on the same host; ship it to a durable sink (stdout ? log pipeline, or a queue) if it is compliance-relevant. A synchronous write mode is not implemented. |
+| **Per-IP state** | Failure windows and audit caps are bounded (`_MAX_TRACKED_IPS`, 8192 sources) and expire with the rate-limit window. | Lower the cap if you front the engine with a known number of proxies; ensure `X-Forwarded-For` is set by a trusted proxy, otherwise all traffic shares one bucket. |
+| **Searchable plaintext** | `content_plain` (and the tsvector built from it) is plaintext so lexical search works. A database dump exposes memory text. | `SYNAPSE_STORE_SEARCHABLE_PLAINTEXT=false` stores no plaintext and disables lexical/FTS matching. |
+| **Deterministic embeddings** | The hash provider is not semantic; production refuses to start with it unless `SYNAPSE_ALLOW_DETERMINISTIC_EMBEDDING=true`. | Use `gemini`, `openai` or `sentence-transformers`; `/readiness` reports `embedding_is_semantic`. |
+| **Per-tenant corpus size** | Ingest and pruning are O(n) in the tenant/category set; the default cap is 50 records. | See `docs/capacity.md`. Large tenants need SQL-side candidate selection, which is not implemented yet. |

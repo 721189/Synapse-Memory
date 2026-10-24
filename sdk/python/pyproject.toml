@@ -75,3 +75,7 @@ synapse-cli = "synapse_memory.cli.synapse_cli:main"
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["synapse_memory*"]
+
+[tool.setuptools.package-data]
+# Ship the PEP 561 marker so downstream type checkers use our annotations.
+synapse_memory = ["py.typed"]

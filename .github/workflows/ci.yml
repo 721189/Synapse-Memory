@@ -271,11 +271,15 @@ jobs:
           severity: 'CRITICAL,HIGH'
           exit-code: '1'
           # Gate on vulnerabilities that have a FIX available. Debian bookworm
-          # base packages (e.g. util-linux / bsdutils) are regularly published
-          # as "affected" with no fixed version; failing on those blocks the
-          # build with nothing the project can do. Unfixed findings stay visible
-          # in the scan output and are tracked for base-image refreshes.
+          # base packages are regularly published as "affected" with no fixed
+          # version; failing on those blocks the build with nothing the project
+          # can do. Unfixed findings stay in the scan output.
           ignore-unfixed: 'true'
+          # pip's VENDORED dependencies are build tooling, not application
+          # code: they are pinned by the pip wheel itself (urllib3 2.7.0 inside
+          # pip/_vendor) and cannot be moved by any constraint in pyproject.toml.
+          # The application's own urllib3 floor is enforced in sdk/python.
+          skip-dirs: 'usr/local/lib/python3.11/site-packages/pip/_vendor'
 
       - name: Scan gateway image
         uses: aquasecurity/trivy-action@6abccf398f78b4c337599c0656f933d91efb91a0

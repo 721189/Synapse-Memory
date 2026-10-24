@@ -1,0 +1,20 @@
+# Keep the build context small and never leak local state or secrets.
+.git
+.github
+.venv
+venv
+__pycache__
+*.pyc
+.pytest_cache
+.mypy_cache
+.tmp
+.npm-cache
+node_modules
+dist
+build
+*.egg-info
+*.db
+*.db-wal
+*.db-shm
+.env
+deploy/.env
