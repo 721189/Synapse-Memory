@@ -35,6 +35,8 @@ services:
     volumes:
       - synapse-engine-data:/data
     depends_on:
+      db-provision:
+        condition: service_completed_successfully
       postgres-pgvector:
         condition: service_healthy
       redis-state:
@@ -45,6 +47,32 @@ services:
       timeout: 5s
       retries: 5
       start_period: 30s
+    networks:
+      - synapse-internal
+
+  # ── One-shot: provision the runtime role + apply schema migrations (F-04) ──
+  # A clean database (empty volume) only has the admin user: no runtime role and
+  # no schema. The engine itself connects as the DML-only runtime role and runs
+  # with SYNAPSE_APPLY_DB_SCHEMA=false, so it CANNOT bootstrap either. This
+  # service makes `docker compose up` reliable from an empty volume by
+  # provisioning + migrating + verifying the least-privilege invariant first;
+  # the engine waits for it to exit 0.
+  db-provision:
+    build:
+      context: ..
+      dockerfile: Dockerfile.engine
+    image: synapse-memory/engine:${GATEWAY_VERSION:-v1.2.0}
+    container_name: synapse-db-provision
+    restart: "no"
+    environment:
+      - SYNAPSE_ADMIN_DATABASE_URL=postgresql://${POSTGRES_USER:-synapse_admin}:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}@postgres-pgvector:5432/${POSTGRES_DB:-synapse_cognitive}
+      - SYNAPSE_DB_RUNTIME_ROLE=${SYNAPSE_DB_RUNTIME_ROLE:-synapse_app}
+      - SYNAPSE_DB_ADMIN_ROLE=${POSTGRES_USER:-synapse_admin}
+      - SYNAPSE_APP_DB_PASSWORD=${SYNAPSE_APP_DB_PASSWORD:?SYNAPSE_APP_DB_PASSWORD is required}
+    command: ["python", "scripts/provision_db_roles.py", "--apply-migrations"]
+    depends_on:
+      postgres-pgvector:
+        condition: service_healthy
     networks:
       - synapse-internal
 

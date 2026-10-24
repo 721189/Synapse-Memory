@@ -90,7 +90,9 @@ config:
   hybridDecayRate: "0.08"
   dbHost: "synapse-postgresql.default.svc.cluster.local"
   dbPort: "5432"
-  dbUser: "synapse_admin"
+  # DML-only runtime role, NOT the schema owner (F-04). Provisioned by
+  # scripts/provision_db_roles.py; the schema must be migrated ahead of start-up.
+  dbUser: "synapse_app"
   dbName: "synapse_cognitive"
   redisHost: "synapse-redis-master.default.svc.cluster.local"
   redisPort: "6379"
@@ -106,12 +108,14 @@ config:
   allowedOrigins: "http://localhost:3000"
   sqliteDbPath: "/data/synapse_memory.db"
   # Schema ownership topology (see SECURITY.md "migrate-then-run"):
-  #   "true"  (default) the engine creates/upgrades its own schema (dev/single-role)
-  #   "false" production least-privilege: migrations are applied ahead of start-up
-  #           by the migration role, then run the engine with config.dbUser set to
-  #           the DML-only runtime role (e.g. synapse_app) created by
-  #           scripts/provision_db_roles.py — the runtime role cannot execute DDL.
-  applyDbSchema: "true"
+  #   "false" (DEFAULT, least privilege) migrate-then-run: the migration role
+  #           applies the schema ahead of start-up and the engine runs with
+  #           config.dbUser set to the DML-only runtime role (synapse_app) from
+  #           scripts/provision_db_roles.py — that role cannot execute DDL, so
+  #           leaving this "true" would make the engine fail closed at startup.
+  #   "true"  single-role dev only: the engine creates/upgrades its own schema,
+  #           which requires DATABASE_URL's role to own the schema.
+  applyDbSchema: "false"
 
 # --- PostgreSQL: EXTERNAL dependency (deliberately NOT a chart subchart) ---
 # This chart does NOT deploy a database and has no `Chart.yaml` dependencies

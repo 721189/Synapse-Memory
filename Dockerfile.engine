@@ -25,6 +25,9 @@ WORKDIR /app
 #   DOCKER_BUILDKIT=1 docker build --build-arg INSTALL_LOCAL_MODELS=true -f Dockerfile.engine .
 ARG INSTALL_LOCAL_MODELS=false
 COPY sdk/python ./sdk/python
+# Provisioning/migration entrypoint used by the compose `db-provision` one-shot
+# service and by operators running against a managed database (F-04).
+COPY scripts ./scripts
 RUN pip install --no-cache-dir -e "sdk/python[pgvector]" \
     && if [ "$INSTALL_LOCAL_MODELS" = "true" ]; then \
          pip install --no-cache-dir -e "sdk/python[local-models]"; \

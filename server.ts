@@ -12,6 +12,29 @@ const proxy = httpProxy.createProxyServer();
 
 app.use(express.json());
 
+// ── F-09: Express 4 does not catch rejected promises from async handlers ─────
+// A transport failure inside callPythonBackend() therefore surfaced as an
+// unhandled rejection (or a hung request) instead of a consistent 503. Every
+// handler registered from here on is wrapped so rejections reach the terminal
+// error middleware; 4-arity handlers are left untouched so error middleware
+// keeps its signature.
+const wrapAsyncHandler = (handler: any) => {
+  if (typeof handler !== "function" || handler.length >= 4) return handler;
+  return (req: express.Request, res: express.Response, next: express.NextFunction) => {
+    try {
+      Promise.resolve(handler(req, res, next)).catch(next);
+    } catch (err) {
+      next(err);
+    }
+  };
+};
+
+for (const method of ["get", "post", "put", "patch", "delete", "all", "use"] as const) {
+  const original = (app as any)[method].bind(app);
+  (app as any)[method] = (routePath: any, ...handlers: any[]) =>
+    original(routePath, ...handlers.map(wrapAsyncHandler));
+}
+
 const PYTHON_PORT = parseInt(process.env.PYTHON_PORT || "8008", 10);
 const PYTHON_URL = process.env.PYTHON_ENGINE_URL || `http://127.0.0.1:${PYTHON_PORT}`;
 
@@ -244,6 +267,15 @@ let telemetryLogs: Array<{
 ];
 
 // Unified Python FastAPI Backend Integration Helper
+class EngineUnavailableError extends Error {
+  status = 503;
+  code = "ENGINE_UNAVAILABLE";
+  constructor(message: string) {
+    super(message);
+    this.name = "EngineUnavailableError";
+  }
+}
+
 async function callPythonBackend(
   req: express.Request,
   endpoint: string,
@@ -257,7 +289,9 @@ async function callPythonBackend(
     req.header("X-Tenant-ID");
 
   if (process.env.NODE_ENV === "production" && !apiKey) {
-    throw new Error("Missing caller authentication");
+    const authErr: any = new Error("Missing caller authentication");
+    authErr.status = 401;
+    throw authErr;
   }
 
   const url = `${PYTHON_URL}${endpoint}`;
@@ -268,11 +302,10 @@ async function callPythonBackend(
     ...((options.headers as Record<string, string>) || {})
   };
 
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 5000);
   try {
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 5000);
     const res = await fetch(url, { ...options, headers, signal: controller.signal });
-    clearTimeout(timeoutId);
     if (!res.ok) {
       const errText = await res.text();
       try {
@@ -297,9 +330,14 @@ async function callPythonBackend(
       console.warn("Python backend connection notice:", err?.message || err);
     }
     if (process.env.NODE_ENV === "production" && !process.env.ALLOW_LOCAL_FALLBACK) {
-      throw err;
+      // Typed so the terminal error middleware can answer 503 consistently
+      // instead of letting an unhandled rejection escape (F-09).
+      throw new EngineUnavailableError(err?.message || "Python engine unreachable");
     }
     return null;
+  } finally {
+    // Always released, including when a body read or parsing throws.
+    clearTimeout(timeoutId);
   }
 }
 
@@ -1538,6 +1576,27 @@ async function startServer() {
       res.sendFile(path.join(distPath, 'index.html'));
     });
   }
+
+  // ── F-09: terminal error middleware ────────────────────────────────────────
+  // Registered after every route so all wrapped-handler rejections land here.
+  // An unavailable engine becomes a consistent 503 (never local/fabricated
+  // data); anything else is a 500 with a generic body, no stack traces.
+  app.use((err: any, req: express.Request, res: express.Response, _next: express.NextFunction) => {
+    if (res.headersSent) return;
+    const unavailable = err?.code === "ENGINE_UNAVAILABLE" || err?.status === 503;
+    const status = unavailable ? 503 : (typeof err?.status === "number" ? err.status : 500);
+    console.error(
+      `[gateway] ${req.method} ${req.originalUrl} -> ${status}`,
+      unavailable ? "engine unavailable" : (err?.message || err)
+    );
+    res.status(status).json({
+      success: false,
+      error: unavailable ? "engine_unavailable" : "internal_error",
+      detail: unavailable
+        ? "The cognitive engine is unavailable; no local or fabricated data was returned."
+        : "Internal gateway error.",
+    });
+  });
 
   app.listen(PORT, "0.0.0.0", () => {
     console.log(`SynapseMemory Server running on http://localhost:${PORT}`);

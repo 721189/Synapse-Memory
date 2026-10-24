@@ -171,7 +171,7 @@ class TestApiKeyMinting(unittest.TestCase):
             project_id="proj_root",
             tenant_id="tenant_root",
             scopes=["auth:keys:create", "admin", "memories:read", "memories:write"],
-            role="admin",
+            role="platform_admin",
         )
         cls.headers = {"X-Synapse-API-Key": token, "X-Tenant-ID": "tenant_root"}
 

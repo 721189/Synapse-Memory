@@ -21,7 +21,13 @@ from synapse_memory.core.memory_manager import DEFAULT_MAX_RECORD_LIMIT, MemoryM
 from synapse_memory.core.knapsack_packer import KnapsackPacker
 from synapse_memory.core.decay_engine import DecayEngine
 from synapse_memory.core.hybrid_search import HybridSearch
-from synapse_memory.core.auth import SecurityManager, APIKeyRecord, can_create_api_key
+from synapse_memory.core.auth import (
+    SecurityManager,
+    APIKeyRecord,
+    can_create_api_key,
+    is_platform_admin,
+    tenant_selection_allowed,
+)
 
 logger = logging.getLogger("SynapseGateway")
 logging.basicConfig(level=logging.INFO)
@@ -317,7 +323,10 @@ def require_scope(scope: str):
                     project_id="proj_dev",
                     tenant_id=tenant_header or "default",
                     scopes=["admin", "memories:read", "memories:write", "memories:delete"],
-                    role="admin",
+                    # Explicit platform_admin: this bypass exists only when NO
+                    # auth is configured at all (local dev). It was previously
+                    # role="admin", which now normalizes to workspace_admin.
+                    role="platform_admin",
                     is_active=True,
                     expires_at=None,
                     created_at=time.time(),
@@ -351,7 +360,13 @@ def resolve_tenant(
     principal: APIKeyRecord,
     requested_tenant: Optional[str]
 ) -> str:
-    if principal.role == "admin" or "admin" in principal.scopes:
+    """Resolve the effective tenant for this request.
+
+    Cross-tenant selection is a platform_admin capability only (F-01). Neither
+    the raw stored role nor the legacy "admin" scope widens the boundary, so a
+    delegated workspace key can never operate on another tenant by asking.
+    """
+    if is_platform_admin(principal):
         if requested_tenant:
             return requested_tenant
         if principal.tenant_id not in ("*", ""):
@@ -361,13 +376,13 @@ def resolve_tenant(
             detail="Explicit tenant_id is required for admin cross-tenant operations."
         )
 
-    if requested_tenant and requested_tenant != principal.tenant_id and principal.tenant_id != "*":
+    if not tenant_selection_allowed(principal, requested_tenant):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Tenant mismatch."
         )
 
-    return principal.tenant_id
+    return principal.tenant_id or "default"
 
 
 def envelope(data: Any, request: Optional[Request] = None) -> Dict[str, Any]:
@@ -428,7 +443,14 @@ class CreateKeyRequest(BaseModel):
     project_id: str = Field("proj_default", min_length=1, max_length=128, pattern=r"^[A-Za-z0-9_\-\.]+$")
     tenant_id: str = Field("default", min_length=1, max_length=128, pattern=r"^([A-Za-z0-9_\-\.]+|\*)$")
     scopes: List[str] = Field(["memories:read", "memories:write"], min_length=1, max_length=16)
-    role: str = Field("developer", pattern=r"^(admin|developer|service|viewer)$")
+    # Accepts the canonical roles plus the legacy "admin" string. The legacy
+    # string stays schema-valid so can_create_api_key() can reject it with a
+    # clear 403 ("not assignable") instead of a generic 422, and so the role
+    # hierarchy is actually reachable through the API (F-01).
+    role: str = Field(
+        "developer",
+        pattern=r"^(admin|platform_admin|organization_admin|workspace_admin|developer|service|viewer)$",
+    )
     ttl_days: Optional[int] = Field(365, ge=1, le=3650)
 
 
@@ -870,6 +892,10 @@ def create_api_key(
         target_org=target_org,
         target_workspace=target_workspace,
         requested_role=requested_role,
+        # F-01: the requested scopes MUST reach the delegation check, otherwise
+        # a workspace admin can mint scopes=["admin"]/"security:audit" that the
+        # guard was written to block.
+        requested_scopes=payload.scopes,
     )
     if not allowed:
         raise HTTPException(status_code=403, detail=reason)

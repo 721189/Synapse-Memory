@@ -57,7 +57,10 @@ dev = [
     "mypy>=1.13.0",
     "bandit>=1.8.0",
     "pytest>=8.0.0",
-    "types-cryptography>=42.0.0",
+    # NOTE: types-cryptography is intentionally absent. Its last release is
+    # 3.3.23.x, so any `types-cryptography>=42` pin is unsatisfiable; cryptography
+    # itself ships inline types (py.typed) since 3.4, and this project requires
+    # >=42, so mypy reads the real annotations from the package.
     "types-requests>=2.32.0"
 ]
 

@@ -1,6 +1,41 @@
 # Changelog
 
 ## Unreleased
+- **Security audit F-01…F-09 remediation.**
+  - **F-01 (P0, privilege escalation):** all authorization now runs through one
+    canonical effective-role path (`normalize_role` → `effective_role`). A stored
+    `admin` role or the `admin` scope no longer implies cross-tenant access:
+    `tenant_selection_allowed()` requires `platform_admin`, and `scope_satisfied()`
+    treats `admin` as a memory-domain superuser only (never `auth:keys:*` or
+    `security:audit`). The key-creation route now passes `requested_scopes` to
+    `can_create_api_key()`, roles/scopes are closed allow-lists at mint time, and
+    `generate_api_key()` refuses to persist non-canonical roles or unknown scopes.
+    The create-key schema can express the canonical roles. Regression suite:
+    `tests/test_f01_auth_escalation.py` (route-level, cache-miss + cache-hit).
+  - **F-02:** `/liveness` is registered and DB-independent; probe contract tests in
+    `tests/test_f02_f07_probes.py`.
+  - **F-03:** dropped the unsatisfiable `types-cryptography>=42` dev pin
+    (`cryptography` ships inline types); CI dependency install no longer fails.
+  - **F-04:** clean-start is reproducible: new `db-provision` compose service
+    provisions the runtime role, applies migrations as the admin role
+    (`provision_db_roles.py --apply-migrations`) and verifies the invariant before
+    the engine starts; Helm defaults are now the least-privilege arrangement
+    (`dbUser: synapse_app`, `applyDbSchema: "false"`); quick start documents the
+    four required secrets and the provisioning step.
+  - **F-05:** `content_plain` is documented as a plaintext search projection
+    (README no longer claims full encryption at rest); new
+    `SYNAPSE_STORE_SEARCHABLE_PLAINTEXT=false` stores no plaintext at all, and
+    `tests/test_f05_f06_data_at_rest.py` pins both behaviours.
+  - **F-06:** the non-semantic deterministic provider is labelled as such
+    (`embedding_is_semantic` on `/readiness`) and refused in production unless
+    `SYNAPSE_ALLOW_DETERMINISTIC_EMBEDDING=true`.
+  - **F-07:** `/readiness` performs a bounded live storage check, so a database
+    lost after startup returns 503 instead of READY.
+  - **F-08:** metric labels use route templates, unknown paths bucket to `other`,
+    and series are TTL-pruned with a hard cardinality ceiling.
+  - **F-09:** every gateway route handler is wrapped so async rejections reach a
+    terminal error middleware; an unreachable engine becomes a consistent 503
+    (never fabricated data) and the fetch timeout is cleared in `finally`.
 - **License:** relicensed from MIT to proprietary ("All Rights Reserved",
   Copyright (c) 2026 Shivam Singh). Previously distributed MIT copies retain
   their MIT rights; new versions require permission (see `LICENSE`).

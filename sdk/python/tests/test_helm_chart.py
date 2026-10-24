@@ -86,8 +86,19 @@ class TestExternalPostgresDependency(unittest.TestCase):
 
     def test_apply_db_schema_switch_is_values_controlled(self):
         values = read(VALUES)
-        self.assertRegex(values, r'(?m)^\s+applyDbSchema:\s+"true"')
+        # F-04: the shipped default must be the least-privilege, migrate-then-run
+        # arrangement. The runtime role (dbUser) is a NON-owner and cannot run
+        # DDL, so a "true" default would make a stock install fail closed.
+        self.assertRegex(values, r'(?m)^\s+applyDbSchema:\s*"false"')
         self.assertIn("SYNAPSE_APPLY_DB_SCHEMA", read(DEPLOYMENT))
+
+    def test_default_db_user_is_the_non_owner_runtime_role(self):
+        """F-04: dbUser must not default to the schema-owning admin role."""
+        values = read(VALUES)
+        match = re.search(r'(?m)^\s+dbUser:\s*"(.*)"', values)
+        self.assertIsNotNone(match)
+        self.assertEqual(match.group(1), "synapse_app")
+        self.assertIn("provision_db_roles.py", values)
 
 
 class TestEngineUrlDerivation(unittest.TestCase):

@@ -404,6 +404,49 @@ def provision(dsn, runtime_role, admin_role, runtime_password, admin_password,
     return failures, advisories
 
 
+def _apply_migrations(dsn, runtime_role):
+    """Apply the forward-only schema migrations as the admin/bootstrap role.
+
+    Run AFTER the runtime role exists: the runtime role is deliberately a
+    NON-owner with DML-only rights, so it can never create the schema itself.
+    Without this step a clean database has roles but no tables and the engine
+    (with SYNAPSE_APPLY_DB_SCHEMA=false) refuses to start.
+    """
+    try:
+        import psycopg2
+    except ImportError:
+        print("FAIL psycopg2 is not installed; cannot apply migrations.")
+        return 2
+
+    try:
+        from synapse_memory.core.migrations import run_migrations
+    except ImportError:
+        # Allow running straight from a checkout without PYTHONPATH set.
+        _sdk = os.path.join(
+            os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+            "sdk", "python")
+        if _sdk not in sys.path:
+            sys.path.insert(0, _sdk)
+        try:
+            from synapse_memory.core.migrations import run_migrations
+        except ImportError as exc:
+            print("FAIL cannot import synapse_memory migrations: " + str(exc))
+            return 2
+
+    def _connect():
+        return psycopg2.connect(dsn)
+
+    try:
+        applied = run_migrations(_connect, is_postgres=True, fail_closed=True)
+    except Exception as exc:
+        print("FAIL schema migration failed: " + str(exc))
+        return 1
+
+    print("Applied " + str(applied) + " schema migration(s) as the admin role; "
+          "runtime role '" + runtime_role + "' remains a NON-owner.")
+    return 0
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(
         description="Provision least-privilege SynapseMemory PostgreSQL roles (P0-5)")
@@ -425,6 +468,11 @@ def main(argv=None):
                         help="change nothing; only check the invariant")
     parser.add_argument("--skip-verify", action="store_true",
                         help="apply the plan but skip the post-provision check")
+    parser.add_argument("--apply-migrations", action="store_true",
+                        help="after provisioning, apply the forward-only schema "
+                             "migrations using the admin/bootstrap DSN. Required for "
+                             "a clean database, because the DML-only runtime role cannot "
+                             "create the schema itself (F-04).")
     args = parser.parse_args(argv)
 
     try:
@@ -478,8 +526,12 @@ def main(argv=None):
     else:
         print("Provisioned and verified: " + args.runtime_role + " is a NON-owner, "
               "NOBYPASSRLS, NOSUPERUSER, DML-only role.")
-        print("Next: run migrations as the admin role, then start the engine with "
-              "SYNAPSE_APPLY_DB_SCHEMA=false and the runtime-role DATABASE_URL.")
+        if args.apply_migrations:
+            rc = _apply_migrations(args.database_url, args.runtime_role)
+            if rc != 0:
+                return rc
+        print("Next: start the engine with SYNAPSE_APPLY_DB_SCHEMA=false and the "
+              "runtime-role DATABASE_URL.")
     return 0
 
 

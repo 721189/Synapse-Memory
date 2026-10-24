@@ -6,7 +6,7 @@
 
 **Enterprise-grade, multi-tenant cognitive memory substrate for LLM applications.**
 
-Encrypted at rest · Hybrid retrieval (BM25 + pgvector HNSW + RRF) · Optimal token packing (0/1 Knapsack DP)
+Field-level encryption on `content` at rest (the `content_plain` search projection is plaintext — see [SECURITY.md](SECURITY.md)) · Hybrid retrieval (BM25 + pgvector HNSW + RRF) · Optimal token packing (0/1 Knapsack DP)
 Database-level tenant isolation (PostgreSQL RLS) · Fail-closed by design · Production-hardened (P0–P2)
 
 [![CI/CD Pipeline](https://github.com/721189/Synapse-Memory/actions/workflows/ci.yml/badge.svg)](https://github.com/721189/Synapse-Memory/actions/workflows/ci.yml)
@@ -83,7 +83,7 @@ and applications that bolt on naive "chat history" hit five hard failure modes:
 | 2 | **Fit context into a finite window** | Naive truncation drops the most valuable facts for the current prompt | 0/1 Knapsack DP packs memories by `value = relevance × 1000`, `weight = token_cost` — O(n·budget) |
 | 3 | **Manage memory lifecycle** | Stale facts never die; duplicates accumulate; confidence never evolves | Ebbinghaus decay `S = R × D` composition, RLAIF feedback multipliers, dual-stage dedup (Jaccard + cosine ≥ 0.85) |
 | 4 | **Isolate tenants** | API-level `WHERE tenant_id = ?` is one bug away from a cross-tenant data leak | PostgreSQL `FORCE ROW LEVEL SECURITY` keyed on `app.current_tenant` **plus** explicit SQL predicates — proven by live least-privilege role tests |
-| 5 | **Encrypt at rest** | TLS protects transit only; a DB dump or leaked backup exposes everything | Fernet (AES-128-CBC + HMAC-SHA256) field-level encryption on `content`, fail-safe on key loss, keys from env/file/KMS |
+| 5 | **Protect data at rest** | TLS protects transit only; a DB dump or leaked backup exposes everything | Fernet (AES-128-CBC + HMAC-SHA256) field-level encryption on `content`, fail-safe on key loss, keys from env/file/KMS. **Scope:** the `content_plain` search projection (and the tsvector/embedding derivatives built from it) is stored in plaintext so lexical/FTS search works — a DB dump or backup therefore still exposes memory text. Rely on DB access controls + volume/backup encryption for that surface, or disable the projection (`SYNAPSE_STORE_SEARCHABLE_PLAINTEXT=false`, lexical search unavailable). Details and residual-risk treatment: [SECURITY.md](SECURITY.md). |
 
 ---
 
@@ -326,20 +326,46 @@ cp deploy/.env.example deploy/.env
 # Required secrets — generate them:
 python -c "import secrets; print('syn_live_' + secrets.token_hex(24))"           # SYNAPSE_API_KEY
 python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key())"  # SYNAPSE_ENCRYPTION_KEY
-# Edit deploy/.env: set SYNAPSE_API_KEY, SYNAPSE_ENCRYPTION_KEY, POSTGRES_PASSWORD
+python -c "import secrets; print(secrets.token_urlsafe(32))"                     # POSTGRES_PASSWORD
+python -c "import secrets; print(secrets.token_urlsafe(32))"                     # SYNAPSE_APP_DB_PASSWORD
+
+# Edit deploy/.env and set ALL FOUR before starting:
+#   SYNAPSE_API_KEY           engine authentication
+#   SYNAPSE_ENCRYPTION_KEY    field encryption key
+#   POSTGRES_PASSWORD         admin/owner role (schema owner, migrations)
+#   SYNAPSE_APP_DB_PASSWORD   DML-only runtime role the engine connects as
+# Compose fails during variable interpolation if any of them is missing.
 
 docker compose -f deploy/docker-compose.yml up -d
 ```
 
+**Clean-install path (empty volume).** The engine connects as `synapse_app`, a
+least-privilege DML-only runtime role that deliberately **cannot** create the
+schema. `docker compose up` therefore runs a one-shot `db-provision` service
+first: it creates/repairs the runtime role, applies the schema migrations as the
+admin role, and verifies the NON-owner / `NOBYPASSRLS` invariant — then exits 0,
+at which point the engine starts. No manual SQL step is needed for Compose.
+
+The equivalent manual step for a managed database (or before a Helm install):
+
+```bash
+DATABASE_URL="postgresql://synapse_admin:$POSTGRES_PASSWORD@host:5432/synapse_cognitive" \
+  python scripts/provision_db_roles.py \
+    --runtime-role synapse_app --admin-role synapse_admin \
+    --runtime-password "$SYNAPSE_APP_DB_PASSWORD" --apply-migrations
+```
+
 | Service | Port | Health probe |
 |---|---|---|
+| `db-provision` (one-shot roles + migrations) | — | exits 0 |
 | `synapse-memory-engine` (FastAPI) | internal `:8008` | `GET /readiness` |
 | `synapse-memory-gateway` (dashboard + proxy) | `:3000` | `GET /api/ready` |
 | `postgres-pgvector` (pg16) | internal `:5432` | `pg_isready` |
 | `redis-state` (Redis 7) | internal `:6379` | `redis-cli ping` |
 
-All health checks are **gated**: the gateway waits for the engine, the engine waits for PostgreSQL
-and Redis. No service starts against an unhealthy dependency.
+All health checks are **gated**: the gateway waits for the engine, the engine
+waits for `db-provision` to complete successfully, PostgreSQL and Redis. No
+service starts against an unhealthy or unmigrated dependency.
 
 ### 6.2 Python SDK (5-minute path)
 

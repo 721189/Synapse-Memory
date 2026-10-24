@@ -75,6 +75,31 @@ _KEY_MINT_ROLES = frozenset({"platform_admin", "organization_admin", "workspace_
 # except by a platform_admin holding it.
 _ADMIN_ONLY_SCOPES = frozenset({"admin", "security:audit"})
 
+# Canonical, closed allow-lists (F-01). Authorization is deny-by-default: a
+# role or scope that is not listed here is never granted, never delegated and
+# never minted. The legacy stored role "admin" is tolerated on READ (it
+# normalizes to workspace_admin) but can no longer be assigned.
+_ASSIGNABLE_ROLES = frozenset({
+    "platform_admin",
+    "organization_admin",
+    "workspace_admin",
+    "developer",
+    "service",
+    "viewer",
+})
+
+_KNOWN_SCOPES = frozenset({
+    "admin",
+    "security:audit",
+    "auth:keys:create",
+    "auth:keys:rotate",
+    "auth:keys:revoke",
+    "memories:read",
+    "memories:write",
+    "memories:delete",
+    "memories:list",
+})
+
 
 # --- Auth hot-path hardening (P2) ---
 # Brief TTL for in-memory API-key lookups (seconds). A revoked/expired key can
@@ -134,6 +159,75 @@ def _role_from_scoped_key(principal: APIKeyRecord) -> str:
     return normalize_role(principal)
 
 
+# --- Canonical authorization primitives (F-01) -------------------------------
+# Every authorization decision must go through these helpers. They read the
+# NORMALIZED role, never the raw stored string, so a record whose role column
+# says "admin" is evaluated as workspace_admin unless its binding is a system
+# binding. This is the single place where "what may this key do" is decided.
+
+
+def effective_role(principal: APIKeyRecord) -> str:
+    """The one canonical role for a principal (see normalize_role)."""
+    return normalize_role(principal)
+
+
+def is_platform_admin(principal: APIKeyRecord) -> bool:
+    """Only the canonical platform_admin may act across tenants."""
+    return effective_role(principal) == "platform_admin"
+
+
+def tenant_selection_allowed(principal: APIKeyRecord, requested_tenant: Optional[str]) -> bool:
+    """Whether ``principal`` may act on ``requested_tenant``.
+
+    Cross-tenant selection requires the canonical platform_admin role. Holders
+    of the legacy ``admin`` *scope* do not gain tenant breadth, and the raw
+    stored role is never consulted — otherwise a delegated workspace key minted
+    with role ``admin`` (or scopes ``["admin"]``) becomes a global key.
+    """
+    if not requested_tenant:
+        return True
+    if is_platform_admin(principal):
+        return True
+    bound = (principal.tenant_id or "").strip()
+    return bound == "*" or requested_tenant == bound
+
+
+def scope_satisfied(principal: APIKeyRecord, required_scope: Optional[str]) -> bool:
+    """Whether the key's scopes satisfy ``required_scope``.
+
+    The legacy ``admin`` scope is a *memory-domain* superuser only: it implies
+    the ``memories:*`` scopes, never key-management (``auth:keys:*``) or audit
+    (``security:audit``) scopes. Those require an explicit grant from a
+    platform_admin, so an admin-scoped workspace key cannot mint or revoke keys.
+    """
+    if not required_scope:
+        return True
+    scopes = set(principal.scopes or ())
+    if required_scope in scopes:
+        return True
+    return "admin" in scopes and required_scope.startswith("memories:")
+
+
+def canonicalize_role(role: Optional[str]) -> str:
+    """Validate a role for *minting*; raises ValueError outside the allow-list."""
+    candidate = (role or "").strip()
+    if candidate not in _ASSIGNABLE_ROLES:
+        raise ValueError(
+            f"Role {role!r} is not assignable; allowed roles: {sorted(_ASSIGNABLE_ROLES)}"
+        )
+    return candidate
+
+
+def canonicalize_scopes(scopes: Optional[List[str]]) -> List[str]:
+    """Validate scopes for *minting*; raises ValueError outside the allow-list."""
+    if scopes is None:
+        return ["memories:read", "memories:write"]
+    unknown = sorted({s for s in scopes if s not in _KNOWN_SCOPES})
+    if unknown:
+        raise ValueError(f"Unknown scope(s) {unknown}; allowed: {sorted(_KNOWN_SCOPES)}")
+    return list(scopes)
+
+
 def can_create_api_key(
     principal: APIKeyRecord,
     target_org: str,
@@ -157,14 +251,28 @@ def can_create_api_key(
     caller_role = _role_from_scoped_key(principal)
     if caller_role not in _KEY_MINT_ROLES:
         return False, f"Role '{caller_role}' is not permitted to create API keys."
-    allowed, reason = _can_delegate(caller_role, requested_role)
+
+    # Deny-by-default on the requested role (F-01). The legacy "admin" string is
+    # NOT assignable: a workspace admin that submits role="admin" is rejected
+    # instead of minting a key that a later authorization step might read as
+    # platform-wide. _role_rank() returns 0 for unknown strings, so this check
+    # must come before the delegation ranking.
+    target_role = (requested_role or "").strip()
+    if target_role not in _ASSIGNABLE_ROLES:
+        return False, f"Role '{target_role}' is not assignable; privilege elevation denied."
+
+    allowed, reason = _can_delegate(caller_role, target_role)
     if not allowed:
         return False, reason
 
-    # The admin/security:audit scopes are never delegable by non-platform
-    # callers, even if _can_delegate passed on role rank alone.
+    # Scopes must be known, and the admin/security:audit scopes may only be
+    # delegated by a platform_admin. The route previously omitted
+    # requested_scopes entirely, so this guard never ran.
     if requested_scopes:
-        leaked = [s for s in requested_scopes if s in _ADMIN_ONLY_SCOPES]
+        unknown = sorted({s for s in requested_scopes if s not in _KNOWN_SCOPES})
+        if unknown:
+            return False, f"Unknown scope(s) {unknown}; privilege elevation denied."
+        leaked = sorted({s for s in requested_scopes if s in _ADMIN_ONLY_SCOPES})
         if leaked and caller_role != "platform_admin":
             return False, f"Scope(s) {leaked} require platform_admin; caller is '{caller_role}'."
 
@@ -518,7 +626,12 @@ class SecurityManager:
         # NEVER auto-promote 'admin': the role/scopes above are authoritative and
         # come from the authenticated caller, so submitting role='admin' yields an
         # admin-scoped key only if that caller is actually allowed to delegate it.
-        scopes_list = scopes or ["memories:read", "memories:write"]
+        # Deny-by-default at the storage boundary as well (F-01): only canonical
+        # roles and known scopes are ever persisted, so no downstream reader can
+        # meet an ambiguous "admin" role or an unknown scope. Raise before any
+        # DB write happens.
+        scopes_list = canonicalize_scopes(scopes)
+        canonical_role = canonicalize_role(role)
 
         record = APIKeyRecord(
             key_id=key_id,
@@ -528,7 +641,7 @@ class SecurityManager:
             project_id=project_id,
             tenant_id=tenant_id,
             scopes=scopes_list,
-            role=role,
+            role=canonical_role,
             is_active=True,
             expires_at=expires_at,
             created_at=now,
@@ -706,19 +819,18 @@ class SecurityManager:
                 self._log_audit(record.key_id, requested_tenant_id, route, action, "DENIED_EXPIRED", client_ip)
                 return False, record, "API token has expired"
             if required_scope:
-                if "admin" not in record.scopes and required_scope not in record.scopes:
+                if not scope_satisfied(record, required_scope):
                     self._log_audit(
                         record.key_id, requested_tenant_id, route, action,
                         f"DENIED_INSUFFICIENT_SCOPE:{required_scope}", client_ip
                     )
                     return False, record, f"Insufficient scopes. Required: {required_scope}"
-            if requested_tenant_id and record.role != "admin" and "admin" not in record.scopes:
-                if record.tenant_id != requested_tenant_id and record.tenant_id != "*":
-                    self._log_audit(
-                        record.key_id, requested_tenant_id, route, action,
-                        "DENIED_TENANT_MISMATCH", client_ip
-                    )
-                    return False, record, f"Tenant authorization boundary violation. Key bound to: {record.tenant_id}"
+            if requested_tenant_id and not tenant_selection_allowed(record, requested_tenant_id):
+                self._log_audit(
+                    record.key_id, requested_tenant_id, route, action,
+                    "DENIED_TENANT_MISMATCH", client_ip
+                )
+                return False, record, f"Tenant authorization boundary violation. Key bound to: {record.tenant_id}"
             self._log_audit(record.key_id, requested_tenant_id or record.tenant_id, route, action, "ALLOWED", client_ip)
             return True, record, "Authenticated"
 
@@ -772,21 +884,22 @@ class SecurityManager:
 
             # Check RBAC scopes
             if required_scope:
-                if "admin" not in record.scopes and required_scope not in record.scopes:
+                if not scope_satisfied(record, required_scope):
                     self._log_audit(
                         record.key_id, requested_tenant_id, route, action,
                         f"DENIED_INSUFFICIENT_SCOPE:{required_scope}", client_ip
                     )
                     return False, record, f"Insufficient scopes. Required: {required_scope}"
 
-            # Check Tenant Isolation (admins can access all tenants)
-            if requested_tenant_id and record.role != "admin" and "admin" not in record.scopes:
-                if record.tenant_id != requested_tenant_id and record.tenant_id != "*":
-                    self._log_audit(
-                        record.key_id, requested_tenant_id, route, action,
-                        "DENIED_TENANT_MISMATCH", client_ip
-                    )
-                    return False, record, f"Tenant authorization boundary violation. Key bound to: {record.tenant_id}"
+            # Tenant isolation (F-01): only the canonical platform_admin role may
+            # act across tenants; an "admin" role/scope on a workspace-bound key
+            # no longer widens the boundary.
+            if requested_tenant_id and not tenant_selection_allowed(record, requested_tenant_id):
+                self._log_audit(
+                    record.key_id, requested_tenant_id, route, action,
+                    "DENIED_TENANT_MISMATCH", client_ip
+                )
+                return False, record, f"Tenant authorization boundary violation. Key bound to: {record.tenant_id}"
 
             # Cache the validated record briefly; persist last_used_at once on
             # this (cache-miss) load. Cache hits skip both the DB and this write.

@@ -36,6 +36,25 @@ except ImportError:
         RealDictCursor = None  # type: ignore
 
 
+def searchable_projection(content: str) -> str:
+    """Value to store in ``content_plain`` — the lexical/FTS search projection.
+
+    ``content`` is Fernet-encrypted before storage, but lexical and full-text
+    search need an unencrypted, indexable copy, so ``content_plain`` (and the
+    tsvector built from it) is deliberately PLAINTEXT (F-05). That is a
+    searchability trade-off, not encryption: a database dump or backup can
+    recover memory text from this column.
+
+    Set ``SYNAPSE_STORE_SEARCHABLE_PLAINTEXT=false`` for data that must never be
+    persisted in the clear: the projection is then stored empty, ``content``
+    remains encrypted, and lexical/FTS search returns no matches (vector search
+    is unaffected).
+    """
+    if os.environ.get("SYNAPSE_STORE_SEARCHABLE_PLAINTEXT", "true").strip().lower() == "true":
+        return content
+    return ""
+
+
 class PGVectorMemoryStore:
     """
     Enterprise-grade Postgres + pgvector + HNSW storage engine.
@@ -518,6 +537,11 @@ class PGVectorMemoryStore:
                 emb_str = f"[{','.join(str(float(x)) for x in emb)}]" if emb else None
                 plaintext = str(memory["content"])
                 ciphertext = self._encrypt_field(plaintext)
+                # F-05: content_plain is a PLAINTEXT search projection, not
+                # encrypted data. Operators who cannot persist plaintext at rest
+                # can opt out; the column is then empty and lexical/FTS search
+                # finds nothing (vector search is unaffected).
+                projection = searchable_projection(plaintext)
                 cur.execute("""
                     INSERT INTO memories (
                         id, tenant_id, content, content_plain, category, confidence, created_at,
@@ -544,7 +568,7 @@ class PGVectorMemoryStore:
                     memory["id"],
                     tenant_id,
                     ciphertext,
-                    plaintext,
+                    projection,
                     memory["category"],
                     memory["confidence"],
                     memory["created_at"],
@@ -1214,7 +1238,7 @@ class PGVectorMemoryStore:
                     vec_str = f"[{','.join(str(x) for x in new_vector)}]"
                     write_cur.execute(
                         "UPDATE memories SET embedding = %s, embedding_dimension = %s, model_version = %s, content_plain = %s WHERE id = %s;",
-                        (vec_str, len(new_vector), model_version, content, mem_id),
+                        (vec_str, len(new_vector), model_version, searchable_projection(content), mem_id),
                     )
                     updated_count += 1
                     last_created = row_created

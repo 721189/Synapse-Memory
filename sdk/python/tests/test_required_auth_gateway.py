@@ -41,7 +41,7 @@ class TestRequiredAuthAndGateway(unittest.TestCase):
             project_id="proj_test",
             tenant_id="tenant_alpha",
             scopes=["admin", "memories:read", "memories:write", "memories:delete"],
-            role="admin"
+            role="workspace_admin"
         )
 
         # Create read-only key
