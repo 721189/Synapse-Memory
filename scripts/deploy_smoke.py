@@ -53,7 +53,7 @@ def run(cmd, check=True, env=None):
     if env:
         merged.update(env)
     log(" ".join(cmd[:4]) + (" ..." if len(cmd) > 4 else ""))
-    return subprocess.run(cmd, cwd=ROOT, env=merged, check=check)
+    # Fixed argv, no shell, no user input: this is the deployment harness itself.\n    return subprocess.run(cmd, cwd=ROOT, env=merged, check=check)  # nosec B603 B607
 
 
 def http(method, path, payload=None, headers=None, timeout=10):
@@ -62,7 +62,7 @@ def http(method, path, payload=None, headers=None, timeout=10):
     request.add_header("Content-Type", "application/json")
     for key, value in (headers or {}).items():
         request.add_header(key, value)
-    with urllib.request.urlopen(request, timeout=timeout) as response:
+    with urllib.request.urlopen(request, timeout=timeout) as response:  # nosec B310 - fixed http(s) base URL
         return response.status, json.loads(response.read() or b"{}")
 
 
