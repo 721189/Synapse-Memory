@@ -17,9 +17,12 @@ Usage:
     python scripts/deploy_smoke.py
 Exit code 0 only if every step passed and teardown ran.
 """
+import base64
 import json
 import os
-import subprocess
+import secrets
+# subprocess is required to drive docker compose; argv is fixed, never a shell.
+import subprocess  # nosec B404
 import sys
 import time
 import urllib.error
@@ -29,13 +32,20 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 COMPOSE = ["docker", "compose", "-f", os.path.join(ROOT, "deploy", "docker-compose.yml")]
 GATEWAY = "http://127.0.0.1:3000"
 
+# No literal credentials: everything is generated per run unless the caller
+# supplies it, so no secret-looking constant ever lives in the repository.
+GENERATED = {
+    "api_key": "syn_live_" + secrets.token_hex(24),
+    "encryption_key": base64.urlsafe_b64encode(os.urandom(32)).decode(),
+    "pg_password": secrets.token_urlsafe(24),
+    "app_password": secrets.token_urlsafe(24),
+}
+
 ENV = {
-    "SYNAPSE_API_KEY": os.environ.get("SYNAPSE_API_KEY", "syn_live_smoke_root_key"),
-    "SYNAPSE_ENCRYPTION_KEY": os.environ.get(
-        "SYNAPSE_ENCRYPTION_KEY", "2N53Wk7u2V5bK1wU_1F5Y9mZ7zN53Wk7u2V5bK1wU_0="
-    ),
-    "POSTGRES_PASSWORD": os.environ.get("POSTGRES_PASSWORD", "smoke-pg-password"),
-    "SYNAPSE_APP_DB_PASSWORD": os.environ.get("SYNAPSE_APP_DB_PASSWORD", "smoke-app-password"),
+    "SYNAPSE_API_KEY": os.environ.get("SYNAPSE_API_KEY", GENERATED["api_key"]),
+    "SYNAPSE_ENCRYPTION_KEY": os.environ.get("SYNAPSE_ENCRYPTION_KEY", GENERATED["encryption_key"]),
+    "POSTGRES_PASSWORD": os.environ.get("POSTGRES_PASSWORD", GENERATED["pg_password"]),
+    "SYNAPSE_APP_DB_PASSWORD": os.environ.get("SYNAPSE_APP_DB_PASSWORD", GENERATED["app_password"]),
     # Wiring-only exception, see module docstring.
     "SYNAPSE_EMBEDDING_PROVIDER": "deterministic",
     "SYNAPSE_ALLOW_DETERMINISTIC_EMBEDDING": "true",
@@ -53,7 +63,7 @@ def run(cmd, check=True, env=None):
     if env:
         merged.update(env)
     log(" ".join(cmd[:4]) + (" ..." if len(cmd) > 4 else ""))
-    # Fixed argv, no shell, no user input: this is the deployment harness itself.\n    return subprocess.run(cmd, cwd=ROOT, env=merged, check=check)  # nosec B603 B607
+    # Fixed argv, no shell, no user input: this is the deployment harness itself.\n    return subprocess.run(cmd, cwd=ROOT, env=merged, check=check)  # nosec B603,B607
 
 
 def http(method, path, payload=None, headers=None, timeout=10):
@@ -62,7 +72,7 @@ def http(method, path, payload=None, headers=None, timeout=10):
     request.add_header("Content-Type", "application/json")
     for key, value in (headers or {}).items():
         request.add_header(key, value)
-    with urllib.request.urlopen(request, timeout=timeout) as response:  # nosec B310 - fixed http(s) base URL
+    with urllib.request.urlopen(request, timeout=timeout) as response:  # nosec B310
         return response.status, json.loads(response.read() or b"{}")
 
 
