@@ -18,7 +18,10 @@ dependencies = [
     "uvicorn>=0.34.0",
     "cryptography>=42.0.0",
     "requests>=2.31.0",
-    "numpy>=1.26.0"
+    "numpy>=1.26.0",
+    # Direct floor for the HTTP dependency graph: the resolver otherwise picks
+    # urllib3 2.7.x, which the image scan flags (CVE-2026-97687 / CVE-2026-97689).
+    "urllib3>=2.8.0"
 ]
 
 [project.urls]

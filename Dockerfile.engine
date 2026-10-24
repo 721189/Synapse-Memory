@@ -38,6 +38,11 @@ RUN pip install --no-cache-dir -e "sdk/python[pgvector]" \
     && if [ "$INSTALL_LOCAL_MODELS" = "true" ]; then \
          pip install --no-cache-dir -e "sdk/python[local-models]"; \
        fi
+# Re-assert patched build tooling AFTER the editable install: the install can
+# pull the base image's setuptools/wheel metadata back in, which the image scan
+# flags (CVE-2024-6345, CVE-2025-47273, CVE-2026-24049).
+RUN pip install --no-cache-dir --upgrade setuptools wheel \
+    && pip check
 
 # Non-root runtime.
 RUN groupadd --system synapse && useradd --system --gid synapse --home /app synapse \
