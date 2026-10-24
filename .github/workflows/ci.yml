@@ -270,6 +270,12 @@ jobs:
           image-ref: synapse-engine:ci
           severity: 'CRITICAL,HIGH'
           exit-code: '1'
+          # Gate on vulnerabilities that have a FIX available. Debian bookworm
+          # base packages (e.g. util-linux / bsdutils) are regularly published
+          # as "affected" with no fixed version; failing on those blocks the
+          # build with nothing the project can do. Unfixed findings stay visible
+          # in the scan output and are tracked for base-image refreshes.
+          ignore-unfixed: 'true'
 
       - name: Scan gateway image
         uses: aquasecurity/trivy-action@6abccf398f78b4c337599c0656f933d91efb91a0
@@ -277,6 +283,7 @@ jobs:
           image-ref: synapse-gateway:ci
           severity: 'CRITICAL,HIGH'
           exit-code: '1'
+          ignore-unfixed: 'true'
 
   helm-validate:
     name: Helm Template Validation

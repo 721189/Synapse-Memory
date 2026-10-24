@@ -53,6 +53,54 @@ class TestReadinessFailsClosed(unittest.TestCase):
     def setUp(self):
         self.client = TestClient(srv.app)
 
+    def test_readiness_probe_uses_a_cursor_not_connection_execute(self):
+        """psycopg2 connections have no execute(); the probe must use a cursor.
+
+        Regression: readiness called conn.execute("SELECT 1"), which only exists
+        on psycopg3 connections, so a healthy pgvector engine answered 503 to
+        every Kubernetes readiness probe and never entered rotation.
+        """
+
+        class FakeCursor:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *exc):
+                return False
+
+            def execute(self, sql):
+                self.sql = sql
+
+            def fetchone(self):
+                return (1,)
+
+        class FakeConn:
+            def cursor(self):
+                return FakeCursor()
+
+            def rollback(self):
+                pass
+
+            # Deliberately NO execute(): psycopg2 Connection has no such method.
+
+        class FakeStore:
+            def _get_connection(self):
+                return FakeConn()
+
+            def _return_connection(self, _conn):
+                pass
+
+        original_backend, original_store = srv.ACTIVE_BACKEND, srv.store
+        try:
+            srv.ACTIVE_BACKEND = "pgvector"
+            srv.store = FakeStore()
+            resp = self.client.get("/readiness")
+            self.assertEqual(resp.status_code, 200, resp.text)
+            self.assertEqual(resp.json()["status"], "READY")
+        finally:
+            srv.store = original_store
+            srv.ACTIVE_BACKEND = original_backend
+
     def test_readiness_reports_503_when_postgres_drops_after_startup(self):
         original_backend, original_store = srv.ACTIVE_BACKEND, srv.store
 

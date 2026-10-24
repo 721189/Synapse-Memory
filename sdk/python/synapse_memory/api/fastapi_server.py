@@ -486,11 +486,16 @@ def readiness():
     """
     if ACTIVE_BACKEND == "pgvector":
         # Bounded live check (F-07): trigger a real connection attempt with timeout.
+        # NOTE: psycopg2 connections have no execute() (that is a psycopg3 API), so
+        # the check must go through a cursor — otherwise readiness always 503s and
+        # the k8s probe keeps the engine out of rotation forever.
+        conn = None
         try:
             conn = store._get_connection()
-            with conn:
-                conn.execute("SELECT 1")
-            store._return_connection(conn)
+            with conn.cursor() as cur:
+                cur.execute("SELECT 1")
+                cur.fetchone()
+            conn.rollback()  # end the probe's transaction before returning it
         except Exception as e:
             logger.warning("Readiness check failed: " + str(e))
             raise HTTPException(
@@ -501,6 +506,9 @@ def readiness():
                     "reason": "PostgreSQL connection unavailable."
                 },
             )
+        finally:
+            if conn is not None:
+                store._return_connection(conn)
 
     return {
         "status": "READY",
