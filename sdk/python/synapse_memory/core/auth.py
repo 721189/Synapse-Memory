@@ -9,7 +9,9 @@ import logging
 import os
 import secrets
 import sqlite3
+import threading
 import time
+from collections import defaultdict
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -61,8 +63,32 @@ class AuthAuditLog:
 
 # Canonical role hierarchy: higher index = more privilege. A principal may only
 # delegate down (or within) this hierarchy, never up, and never to a role whose
-# index is higher than their own.
+# index is higher than their own. Legacy role "admin" (pre-multi-user data)
+# normalizes to workspace_admin unless bound to a system/org-root principal.
 _ROLE_RANK = {"platform_admin": 5, "organization_admin": 4, "workspace_admin": 3, "developer": 2, "service": 2, "viewer": 1, "member": 1}
+
+# Roles allowed to mint new API keys (v1 secure default). Members, viewers,
+# developers and service keys cannot mint; only workspace admins and above.
+_KEY_MINT_ROLES = frozenset({"platform_admin", "organization_admin", "workspace_admin"})
+
+# Scopes a non-platform caller may delegate. "admin" is never delegable
+# except by a platform_admin holding it.
+_ADMIN_ONLY_SCOPES = frozenset({"admin", "security:audit"})
+
+
+# --- Auth hot-path hardening (P2) ---
+# Brief TTL for in-memory API-key lookups (seconds). A revoked/expired key can
+# still validate until its cache entry expires or is evicted (revoke evicts).
+_AUTH_KEY_CACHE_TTL = 30.0
+# Flush buffered audit rows when the buffer reaches this size or this many
+# seconds have elapsed since the last flush, whichever comes first.
+_AUDIT_FLUSH_MAX = 50
+_AUDIT_FLUSH_INTERVAL = 2.0
+# IP-based rate limiting for unauthenticated attempts (per IP, sliding window).
+_IP_RATE_WINDOW = 60.0
+_IP_RATE_MAX_FAILURES = 15
+# Max failed-lookup audit rows written per IP per window (caps log flooding).
+_IP_MAX_FAILED_AUDITS = 5
 
 
 def _role_rank(role: str) -> int:
@@ -82,16 +108,30 @@ def _can_delegate(role_a: str, role_b: str) -> Tuple[bool, str]:
     return True, "Delegate check passed"
 
 
-def _role_from_scoped_key(principal: APIKeyRecord) -> str:
-    # An unscoped key bound to a workspace resolves to the workspace role.
-    # Platform/org/system principals (org_root/proj_root/org_system) resolve to
-    # their privileged role; everything else resolves to the minimum of the
-    # binding and the delegated role it is allowed to grant.
+def normalize_role(principal: APIKeyRecord) -> str:
+    """Resolve a key's stored role to its effective canonical role.
+
+    System/org-root bindings resolve to platform_admin; a legacy stored role
+    of "admin" outside a system binding normalizes to workspace_admin;
+    every other known role passes through unchanged. Unknown roles map to
+    "member" (least privilege) so a crafted role string can never escalate.
+    """
     if principal.organization_id in ("org_root", "org_system") and principal.project_id in ("proj_root",):
         return "platform_admin"
     if principal.organization_id == "org_root":
+        return "organization_admin"
+    stored = (principal.role or "").strip()
+    if stored == "admin":
         return "workspace_admin"
-    return "workspace_admin"
+    if stored in _ROLE_RANK:
+        return stored
+    return "member"
+
+
+def _role_from_scoped_key(principal: APIKeyRecord) -> str:
+    # Backward-compatible alias: effective role always derives from the
+    # stored role + binding, never defaults to workspace_admin.
+    return normalize_role(principal)
 
 
 def can_create_api_key(
@@ -99,24 +139,36 @@ def can_create_api_key(
     target_org: str,
     target_workspace: Optional[str],
     requested_role: str,
+    requested_scopes: Optional[List[str]] = None,
 ) -> Tuple[bool, str]:
     """Authorize a caller to mint a new API key.
 
     Rules:
-      - A member/viewer cannot mint any key.
-      - An organization admin can only mint keys inside workspaces that org controls.
-      - A workspace admin can only mint keys inside their own workspace and only at
-        or below the workspace_admin role (never platform/org-wide).
-      - A platform admin can mint anywhere.
+      - A member/viewer/developer/service key cannot mint any key.
+      - An organization admin can only mint keys inside its own organization,
+        at or below organization_admin.
+      - A workspace admin can only mint keys inside their own workspace and
+        only at or below workspace_admin (never platform/org-wide).
+      - A platform admin can mint anywhere, and is the ONLY role that may
+        grant platform_admin or the admin/security:audit scopes.
       - The requested role must be grantable by the caller (delegation check).
     """
-    # Resolve the caller's effective role from their key binding.
+    # Resolve the caller's effective role from their key binding + stored role.
     caller_role = _role_from_scoped_key(principal)
+    if caller_role not in _KEY_MINT_ROLES:
+        return False, f"Role '{caller_role}' is not permitted to create API keys."
     allowed, reason = _can_delegate(caller_role, requested_role)
     if not allowed:
         return False, reason
 
-    # platform_admin is the only role that may mount other organizations.
+    # The admin/security:audit scopes are never delegable by non-platform
+    # callers, even if _can_delegate passed on role rank alone.
+    if requested_scopes:
+        leaked = [s for s in requested_scopes if s in _ADMIN_ONLY_SCOPES]
+        if leaked and caller_role != "platform_admin":
+            return False, f"Scope(s) {leaked} require platform_admin; caller is '{caller_role}'."
+
+    # platform_admin is the only role that may mint across organizations.
     if caller_role == "platform_admin":
         return True, "Platform admin allowed."
 
@@ -177,6 +229,18 @@ class SecurityManager:
         # runtime roles that cannot execute DDL.
         self.validate_schema_only = validate_schema_only
 
+        # Auth hot-path / abuse-protection state (P2). The gateway runs a single
+        # shared SecurityManager instance, so this is shared across requests and
+        # guarded by self._auth_lock.
+        self._key_cache: Dict[str, Tuple[float, APIKeyRecord]] = {}
+        self._audit_buffer: List[
+            Tuple[str, float, Optional[str], Optional[str], str, str, str, Optional[str]]
+        ] = []
+        self._auth_lock = threading.Lock()
+        self._last_audit_flush = 0.0
+        self._ip_failures: Dict[str, List[float]] = defaultdict(list)
+        self._ip_audited_failures: Dict[str, int] = defaultdict(int)
+
         if self.connection_string:
             if HAS_PSYCOPG2 and pool is not None:
                 try:
@@ -224,7 +288,22 @@ class SecurityManager:
 
     def _return_connection(self, conn: Any) -> None:
         if self._is_postgres and self._pool is not None:
-            self._pool.putconn(conn)
+            try:
+                # Roll back any aborted or still-open transaction so the
+                # connection returned to the pool is clean for the next borrower.
+                # Without this, a failed query leaves the connection in a
+                # poisoned state (e.g. an aborted transaction) that breaks the
+                # next request that borrows it.
+                conn.rollback()
+            except Exception:
+                pass
+            try:
+                self._pool.putconn(conn)
+            except Exception:
+                try:
+                    conn.close()
+                except Exception:
+                    pass
         else:
             try:
                 conn.close()
@@ -260,7 +339,8 @@ class SecurityManager:
                         is_active INTEGER NOT NULL DEFAULT 1,
                         expires_at DOUBLE PRECISION,
                         created_at DOUBLE PRECISION NOT NULL,
-                        last_used_at DOUBLE PRECISION
+                        last_used_at DOUBLE PRECISION,
+                        owner_id TEXT
                     );
                 """)
                 cur.execute("""
@@ -294,7 +374,8 @@ class SecurityManager:
                         is_active INTEGER NOT NULL DEFAULT 1,
                         expires_at REAL,
                         created_at REAL NOT NULL,
-                        last_used_at REAL
+                        last_used_at REAL,
+                        owner_id TEXT
                     )
                 """)
                 cur.execute("""
@@ -536,6 +617,33 @@ class SecurityManager:
         finally:
             self._return_connection(conn)
 
+    def _env_master_revoked_or_expired(self, env_token: str) -> Optional[str]:
+        """Honor DB revocation/expiry for the env master key hash, if present.
+
+        Returns the DENIED_* outcome string when a matching api_keys row is
+        revoked or expired, else None (env master still valid).
+        """
+        try:
+            conn = self._get_connection()
+            try:
+                cur = conn.cursor()
+                sql = self._format_sql("SELECT is_active, expires_at FROM api_keys WHERE key_hash = ?")
+                cur.execute(sql, (self.hash_secret(env_token),))
+                row = cur.fetchone()
+                if not row:
+                    return None
+                data = dict(row) if not isinstance(row, (tuple, list)) else {"is_active": row[0], "expires_at": row[1]}
+                if not data.get("is_active"):
+                    return "DENIED_REVOKED"
+                if data.get("expires_at") and time.time() > float(data["expires_at"]):
+                    return "DENIED_EXPIRED"
+                return None
+            finally:
+                self._return_connection(conn)
+        except Exception as e:
+            logger.warning(f"Env-master revocation check failed (fail-open to DB auth): {e}")
+            return None
+
     def validate_api_key(
         self,
         token: str,
@@ -548,14 +656,37 @@ class SecurityManager:
         """
         Validates API token against cryptographic hash, checks expiration, revocation,
         scopes, and multi-tenant authorization boundaries.
+
+        Successful lookups are cached briefly (_AUTH_KEY_CACHE_TTL) so a hot key
+        does not hit the database, the last_used_at write, or the audit sink on
+        every request. Revoked keys are evicted from the cache by revoke_api_key.
         """
         if not token:
             self._log_audit(None, requested_tenant_id, route, action, "DENIED_MISSING_TOKEN", client_ip)
             return False, None, "Missing API token"
 
-        # Direct comparison with env key as fallback if not in DB
+        # Rate limit unauthenticated attempts by IP before any database/auth work.
+        # A flood of invalid keys is rejected here instead of reaching the keys
+        # table or writing an audit row per attempt.
+        if client_ip and self._is_ip_rate_limited(client_ip):
+            return False, None, "Too many failed attempts. Try again later."
+
+        # Environment master-key fallback. This is an explicit bootstrap
+        # credential, not a permanent bypass: it is only honored when the
+        # caller explicitly opts in via SYNAPSE_ALLOW_ENV_MASTER_KEY=true, it
+        # is rejected when a DB row with the same hash is revoked/expired,
+        # and every use is audit-logged. Prefer DB-backed keys with an owner,
+        # expiry and revocation state; disable the env master in production.
         expected_env_key = os.environ.get("SYNAPSE_API_KEY")
-        if expected_env_key and hmac.compare_digest(token, expected_env_key):
+        allow_env_master = os.environ.get("SYNAPSE_ALLOW_ENV_MASTER_KEY", "false").lower() == "true"
+        if expected_env_key and allow_env_master and hmac.compare_digest(token.encode("utf-8"), expected_env_key.encode("utf-8")):
+            revoked_or_expired = self._env_master_revoked_or_expired(expected_env_key)
+            if revoked_or_expired is not None:
+                self._log_audit("key_env_master", requested_tenant_id, route, action, revoked_or_expired, client_ip)
+                return False, None, "Environment master key is revoked or expired"
+            if required_scope and required_scope not in ("admin", "memories:read", "memories:write", "memories:delete", "security:audit"):
+                self._log_audit("key_env_master", requested_tenant_id, route, action, f"DENIED_INSUFFICIENT_SCOPE:{required_scope}", client_ip)
+                return False, None, f"Insufficient scopes. Required: {required_scope}"
             admin_record = APIKeyRecord(
                 key_id="key_env_master",
                 key_hash=self.hash_secret(token),
@@ -564,7 +695,7 @@ class SecurityManager:
                 project_id="proj_system",
                 tenant_id=requested_tenant_id or "default",
                 scopes=["admin", "memories:read", "memories:write", "memories:delete", "security:audit"],
-                role="admin",
+                role="platform_admin",
                 is_active=True,
                 expires_at=None,
                 created_at=time.time(),
@@ -575,6 +706,34 @@ class SecurityManager:
 
         token_hash = self.hash_secret(token)
         now = time.time()
+
+        # Brief key-lookup cache: skip the DB, the last_used_at write and the
+        # audit write on a cache hit for an active, non-expired key. Scope and
+        # tenant checks are still enforced in memory so a cached key can never
+        # bypass authorization.
+        cached = self._get_cached_key(token_hash, now)
+        if cached is not None:
+            record = cached
+            if record.expires_at and now > record.expires_at:
+                self._evict_cached_key(record.key_id)
+                self._log_audit(record.key_id, requested_tenant_id, route, action, "DENIED_EXPIRED", client_ip)
+                return False, record, "API token has expired"
+            if required_scope:
+                if "admin" not in record.scopes and required_scope not in record.scopes:
+                    self._log_audit(
+                        record.key_id, requested_tenant_id, route, action,
+                        f"DENIED_INSUFFICIENT_SCOPE:{required_scope}", client_ip
+                    )
+                    return False, record, f"Insufficient scopes. Required: {required_scope}"
+            if requested_tenant_id and record.role != "admin" and "admin" not in record.scopes:
+                if record.tenant_id != requested_tenant_id and record.tenant_id != "*":
+                    self._log_audit(
+                        record.key_id, requested_tenant_id, route, action,
+                        "DENIED_TENANT_MISMATCH", client_ip
+                    )
+                    return False, record, f"Tenant authorization boundary violation. Key bound to: {record.tenant_id}"
+            self._log_audit(record.key_id, requested_tenant_id or record.tenant_id, route, action, "ALLOWED", client_ip)
+            return True, record, "Authenticated"
 
         conn = self._get_connection()
         try:
@@ -587,7 +746,14 @@ class SecurityManager:
             cur.execute(sql, (token_hash,))
             row = cur.fetchone()
             if not row:
-                self._log_audit(None, requested_tenant_id, route, action, "DENIED_INVALID_KEY", client_ip)
+                # Invalid key: count the failure for IP rate limiting and cap
+                # audit writes so a flood of bad keys does not flood the log.
+                if client_ip:
+                    self._record_ip_failure(client_ip)
+                    if self._is_ip_rate_limited(client_ip):
+                        return False, None, "Too many failed attempts. Try again later."
+                if self._should_audit_failure(client_ip):
+                    self._log_audit(None, requested_tenant_id, route, action, "DENIED_INVALID_KEY", client_ip)
                 return False, None, "Invalid API token"
 
             data = dict(row)
@@ -635,7 +801,9 @@ class SecurityManager:
                     )
                     return False, record, f"Tenant authorization boundary violation. Key bound to: {record.tenant_id}"
 
-            # Update last_used_at timestamp
+            # Cache the validated record briefly; persist last_used_at once on
+            # this (cache-miss) load. Cache hits skip both the DB and this write.
+            self._cache_key(token_hash, now, record)
             upd_sql = self._format_sql("UPDATE api_keys SET last_used_at = ? WHERE key_id = ?")
             cur.execute(upd_sql, (now, record.key_id))
             conn.commit()
@@ -645,6 +813,56 @@ class SecurityManager:
         finally:
             self._return_connection(conn)
 
+    def _get_cached_key(self, token_hash: str, now: float) -> Optional[APIKeyRecord]:
+        """Return a cached, still-valid key record, or None on cache miss.
+
+        Entries past their TTL are evicted. Revoked keys are evicted by
+        revoke_api_key so revocation is honored immediately.
+        """
+        with self._auth_lock:
+            entry = self._key_cache.get(token_hash)
+            if entry is None:
+                return None
+            expires_at, record = entry
+            if now > expires_at:
+                del self._key_cache[token_hash]
+                return None
+            return record
+
+    def _cache_key(self, token_hash: str, now: float, record: APIKeyRecord) -> None:
+        with self._auth_lock:
+            self._key_cache[token_hash] = (now + _AUTH_KEY_CACHE_TTL, record)
+
+    def _evict_cached_key(self, key_id: str) -> None:
+        with self._auth_lock:
+            for token_hash, (_expires_at, record) in list(self._key_cache.items()):
+                if record.key_id == key_id:
+                    del self._key_cache[token_hash]
+
+    def _record_ip_failure(self, client_ip: str) -> None:
+        with self._auth_lock:
+            self._ip_failures[client_ip].append(time.time())
+
+    def _is_ip_rate_limited(self, client_ip: str) -> bool:
+        """Sliding-window per-IP failure count. True = deny before auth/DB."""
+        with self._auth_lock:
+            now = time.time()
+            window_start = now - _IP_RATE_WINDOW
+            hits = [t for t in self._ip_failures.get(client_ip, []) if t >= window_start]
+            self._ip_failures[client_ip] = hits
+            return len(hits) >= _IP_RATE_MAX_FAILURES
+
+    def _should_audit_failure(self, client_ip: Optional[str]) -> bool:
+        """Cap audit writes for failed lookups so a flood of bad keys cannot
+        flood the audit log. Returns True if this failure should be audited."""
+        if client_ip is None:
+            return True
+        with self._auth_lock:
+            if self._ip_audited_failures[client_ip] >= _IP_MAX_FAILED_AUDITS:
+                return False
+            self._ip_audited_failures[client_ip] += 1
+            return True
+
     def revoke_api_key(self, key_id: str) -> bool:
         conn = self._get_connection()
         try:
@@ -652,7 +870,12 @@ class SecurityManager:
             sql = self._format_sql("UPDATE api_keys SET is_active = 0 WHERE key_id = ?")
             cur.execute(sql, (key_id,))
             conn.commit()
-            return cur.rowcount > 0
+            revoked = cur.rowcount > 0
+            if revoked:
+                # Evict from the in-memory key cache so a revoked key is denied
+                # immediately instead of living out its cache TTL.
+                self._evict_cached_key(key_id)
+            return revoked
         finally:
             self._return_connection(conn)
 
@@ -725,22 +948,53 @@ class SecurityManager:
         outcome: str,
         client_ip: Optional[str]
     ) -> None:
+        """Buffer an audit row. Rows are flushed in batches (one connection,
+        one transaction) so the auth hot path never opens a dedicated
+        connection per audit event. Never raises."""
+        record = (
+            f"audit_{secrets.token_hex(8)}",
+            time.time(),
+            key_id,
+            tenant_id,
+            route,
+            action,
+            outcome,
+            client_ip,
+        )
+        with self._auth_lock:
+            self._audit_buffer.append(record)
+            if (
+                len(self._audit_buffer) >= _AUDIT_FLUSH_MAX
+                or (time.time() - self._last_audit_flush) >= _AUDIT_FLUSH_INTERVAL
+            ):
+                self._flush_audit_buffer_locked()
+
+    def _flush_audit_buffer_locked(self) -> None:
+        """Write all buffered audit rows in a single connection/transaction.
+
+        Must be called with self._auth_lock held. On failure the batch is put
+        back at the head of the buffer so a later flush retries it (audit
+        evidence is never silently dropped).
+        """
+        if not self._audit_buffer:
+            return
+        batch = self._audit_buffer
+        self._audit_buffer = []
+        self._last_audit_flush = time.time()
+        conn = self._get_connection()
         try:
-            conn = self._get_connection()
-            try:
-                cur = conn.cursor()
-                log_id = f"audit_{secrets.token_hex(8)}"
-                sql = self._format_sql("""
-                    INSERT INTO auth_audit_logs (
-                        id, timestamp, key_id, tenant_id, route, action, outcome, client_ip
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                """)
-                cur.execute(sql, (log_id, time.time(), key_id, tenant_id, route, action, outcome, client_ip))
-                conn.commit()
-            finally:
-                self._return_connection(conn)
+            cur = conn.cursor()
+            sql = self._format_sql(
+                "INSERT INTO auth_audit_logs (id, timestamp, key_id, tenant_id, route, action, outcome, client_ip) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
+            )
+            cur.executemany(sql, batch)
+            conn.commit()
         except Exception as e:
-            logger.warning(f"Failed to record auth audit log: {e}")
+            self._audit_buffer = batch + self._audit_buffer
+            logger.warning(f"Failed to flush auth audit batch ({len(batch)} rows): {e}")
+        finally:
+            self._return_connection(conn)
 
     def log_audit_action(
         self,
