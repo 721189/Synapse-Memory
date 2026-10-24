@@ -349,7 +349,8 @@ at which point the engine starts. No manual SQL step is needed for Compose.
 The equivalent manual step for a managed database (or before a Helm install):
 
 ```bash
-DATABASE_URL="postgresql://synapse_admin:$POSTGRES_PASSWORD@host:5432/synapse_cognitive" \
+# <admin-password> = the value you set for POSTGRES_PASSWORD
+DATABASE_URL="postgresql://synapse_admin:<admin-password>@host:5432/synapse_cognitive" \
   python scripts/provision_db_roles.py \
     --runtime-role synapse_app --admin-role synapse_admin \
     --runtime-password "$SYNAPSE_APP_DB_PASSWORD" --apply-migrations

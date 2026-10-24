@@ -11,11 +11,8 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONPATH=/app/sdk/python \
     PIP_NO_CACHE_DIR=1
 
-# System deps: libpq for psycopg2/pgvector; curl for healthcheck.
-RUN apt-get update && apt-get install -y --no-install-recommends \
-        curl \
-    && rm -rf /var/lib/apt/lists/*
-
+# No curl: the healthcheck below uses Python's stdlib, and avoiding the extra
+# package keeps a libcurl CVE out of the scanned image surface (F-04 follow-up).
 WORKDIR /app
 
 # Install the engine + production dependencies (pgvector driver).
@@ -42,6 +39,6 @@ ENV SYNAPSE_SQLITE_DB_PATH=/data/synapse_memory.db
 EXPOSE 8008
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=25s --retries=3 \
-    CMD curl -fsS http://127.0.0.1:8008/liveness || exit 1
+    CMD python -c "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8008/liveness', timeout=4).status == 200 else 1)"
 
 CMD ["uvicorn", "synapse_memory.api.fastapi_server:app", "--host", "0.0.0.0", "--port", "8008"]

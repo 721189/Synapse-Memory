@@ -183,6 +183,11 @@ jobs:
           SYNAPSE_ENCRYPTION_KEY: "2N53Wk7u2V5bK1wU_1F5Y9mZ7zN53Wk7u2V5bK1wU_0="
         run: |
           python -c "from synapse_memory.core.pgvector_db import PGVectorMemoryStore; s = PGVectorMemoryStore(connection_string='$DATABASE_URL', dimension=384, fail_closed=True); print('schema provisioned; connected =', s.is_connected)"
+          # The auth schema is created by SecurityManager, not by the memories
+          # migrations. The engine runs with SYNAPSE_APPLY_DB_SCHEMA=false and
+          # only validates it, so it must be created here as the admin role or
+          # startup fails closed with "Auth table 'public.api_keys' is missing".
+          python -c "from synapse_memory.core.auth import SecurityManager; SecurityManager(connection_string='$DATABASE_URL', fail_closed=True); print('auth schema provisioned')"
 
       - name: Re-run provisioning to grant DML on the created tables (idempotency check)
         env:

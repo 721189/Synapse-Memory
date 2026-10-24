@@ -4,13 +4,12 @@ from typing import Any, List, Optional
 
 logger = logging.getLogger("SynapseEncryption")
 
-Fernet: Any
 try:
     from cryptography.fernet import Fernet
     HAS_CRYPTOGRAPHY = True
 except ImportError:
     HAS_CRYPTOGRAPHY = False
-    Fernet = None
+    Fernet = None  # type: ignore[misc,assignment]
 
 
 class KeyManagementProvider:

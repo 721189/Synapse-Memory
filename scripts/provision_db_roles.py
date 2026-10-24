@@ -444,6 +444,19 @@ def _apply_migrations(dsn, runtime_role):
 
     print("Applied " + str(applied) + " schema migration(s) as the admin role; "
           "runtime role '" + runtime_role + "' remains a NON-owner.")
+
+    # The auth schema (api_keys / auth_audit_log) is created by SecurityManager,
+    # NOT by the memories migrations. With SYNAPSE_APPLY_DB_SCHEMA=false the
+    # engine only VALIDATES it, so it must be created here as the admin role —
+    # otherwise the engine fails closed at startup with
+    # "Auth table 'public.api_keys' is missing".
+    try:
+        from synapse_memory.core.auth import SecurityManager
+        SecurityManager(connection_string=dsn, fail_closed=True)
+    except Exception as exc:
+        print("FAIL auth schema provisioning failed: " + str(exc))
+        return 1
+    print("Auth schema (api_keys / audit log) provisioned as the admin role.")
     return 0
 
 
