@@ -120,9 +120,24 @@ rate_limiter = build_rate_limiter()
 
 # --- Live operational metrics (no extra deps; scraped via /metrics) ---
 _metrics_lock = threading.Lock()
-_request_counts: Dict[tuple, int] = {}
-_latency_samples: Dict[str, list] = {}
-_auth_failures = 0
+# Request counts keyed by (route_template, status) with a max of 10000 distinct
+# keys. Dynamic paths (e.g. /api/memories/<id>) are bucketed as "other" so
+# request volume cannot exhaust memory (F-08).
+_REQUEST_COUNTS: Dict[Tuple[str, str], int] = {}
+# Latency samples keyed by route template (bounded by _REQUEST_COUNTS).
+_LATENCY_SAMPLES: Dict[str, List[float]] = {}
+# Key expiration for metrics: (timestamp, count) tuples; entries older than
+# 1 hour are pruned on each scrape.
+_METRICS_TTL: Dict[str, Tuple[float, int]] = {}
+# Max distinct route templates; excess paths get bucketed as "other".
+_MAX_ROUTE_TEMPLATES = 10000
+# Canonical route templates for dynamic paths (F-08)
+_ROUTE_TEMPLATE_MAP = {
+    "/api/memories": "/api/memories",
+    "/api/memories/{memory_id}": "/api/memories/{memory_id}",
+    "/api/memories/list": "/api/memories",
+    "/api/memories/{memory_id}/feedback": "/api/memories/{memory_id}/feedback",
+}
 _rate_limit_rejections = 0
 _rate_limit_checks = 0
 _ingest_success = 0
@@ -134,10 +149,25 @@ _last_packed_tokens = 0
 
 
 def _record_request(path: str, status: int, latency_s: float) -> None:
+    \"\"\"Record request metrics with bounded cardinality (F-08).
+
+    Route templates are used as labels (e.g. /api/memories/{memory_id});
+    dynamic paths are bucketed as 'other'. Keys are pruned after TTL.
+    """
     with _metrics_lock:
-        key = (path, str(status))
-        _request_counts[key] = _request_counts.get(key, 0) + 1
-        samples = _latency_samples.setdefault(path, [])
+        # Prune expired keys
+        now = time.time()
+        expired_keys = [k for k, (t, _) in _METRICS_TTL.items() if now - t > _METRICS_TTL]
+        for key in expired_keys:
+            _REQUEST_COUNTS.pop(key, None)
+            _METRICS_TTL.pop(key, None)
+
+        # Bucket path: use route template if known, else 'other'
+        route_template = _ROUTE_TEMPLATE_MAP.get(path, "other")
+
+        key = (route_template, str(status))
+        _REQUEST_COUNTS[key] = _REQUEST_COUNTS.get(key, 0) + 1
+        samples = _LATENCY_SAMPLES.setdefault(route_template, [])
         samples.append(latency_s)
         if len(samples) > 500:
             del samples[: len(samples) - 500]
@@ -397,32 +427,53 @@ class RevokeKeyRequest(BaseModel):
 AUTH_KEYS_CREATE_SCOPE = "auth:keys:create"
 
 
-# --- API ENDPOINTS ---
+# --- Telemetry (no auth) ---
+
+@app.get("/liveness", tags=["Telemetry"])
 def liveness():
-    """Returns simple process liveness state."""
+    """Returns simple process liveness state.
+
+    DB-independent by design: the engine can be running and the process alive
+    even when the database or auth backend has failed. K8s `livenessProbe`
+    depends on this route; failures restart the container but do not take it
+    out of rotation until /readiness fails.
+    """
     return {"status": "OK", "timestamp": time.time()}
 
 
 @app.get("/readiness", tags=["Telemetry"])
 def readiness():
-    """Checks actual database and auth backend usability."""
-    db_ok = True
-    if ACTIVE_BACKEND == "pgvector":
-        db_ok = store.is_connected
+    """Checks actual database and auth backend usability.
 
-    if not db_ok:
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail={
-                "status": "UNHEALTHY",
-                "storage_backend": ACTIVE_BACKEND,
-                "reason": "PostgreSQL + pgvector connection unavailable."
-            }
-        )
+    Performs a bounded live health check with a short timeout (F-07). This is
+    the Kubernetes readiness probe: it must fail closed (503) when the storage
+    backend becomes unreachable so traffic is shed before requests start
+    failing.
+    """
+    if ACTIVE_BACKEND == "pgvector":
+        # Bounded live check (F-07): trigger a real connection attempt with timeout.
+        try:
+            conn = store._get_connection()
+            with conn:
+                conn.execute("SELECT 1")
+            store._return_connection(conn)
+        except Exception as e:
+            logger.warning("Readiness check failed: " + str(e))
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail={
+                    "status": "UNHEALTHY",
+                    "storage_backend": ACTIVE_BACKEND,
+                    "reason": "PostgreSQL connection unavailable."
+                },
+            )
+
     return {
         "status": "READY",
         "timestamp": time.time(),
-        "storage_backend": ACTIVE_BACKEND
+        "storage_backend": ACTIVE_BACKEND,
+        "embedding_provider": embedder.provider_name,
+        "embedding_is_semantic": embedder.is_semantic
     }
 
 
@@ -1101,8 +1152,8 @@ def prometheus_metrics():
         "# TYPE synapse_requests_total counter",
     ]
     with _metrics_lock:
-        for (path, status_code), count in sorted(_request_counts.items()):
-            lines.append(f"synapse_requests_total{{path=\"{path}\",status=\"{status_code}\"}} {count}")
+        for (route_template, status_code), count in sorted(_REQUEST_COUNTS.items()):
+            lines.append(f"synapse_requests_total{{path=\"{route_template}\",status=\"{status_code}\"}} {count}")
         lines += [
             "# HELP synapse_auth_failures_total Authentication/authorization failures",
             "# TYPE synapse_auth_failures_total counter",

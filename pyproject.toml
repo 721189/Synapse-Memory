@@ -9,7 +9,7 @@ build-backend = "setuptools.build_meta"
 name = "synapse-memory-workspace"
 version = "1.2.0"
 authors = [
-  { name = "Synapse Cognitive Systems", email = "singhshivam20009@gmail.com" },
+  { name = "Synapse Cognitive Systems", email = "synapse-memory@users.noreply.github.com" },
 ]
 description = "A sovereign, secure, and performant cognitive memory engine for AI agents."
 readme = "README.md"
@@ -17,6 +17,7 @@ requires-python = ">=3.10"
 classifiers = [
     "Programming Language :: Python :: 3",
     "Operating System :: OS Independent",
+    "License :: Other/Proprietary License",
 ]
 dependencies = [
     "fastapi>=0.95.0",

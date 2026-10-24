@@ -54,7 +54,18 @@ class SynapseEmbedder:
     def _get_provider(self, allow_fallback: bool = False):
         if self.provider_name in ("deterministic", "hash", "local"):
             # Deterministic hash provider: always available, no external deps,
-            # safe default for production when no semantic provider is configured.
+            # but NOT a real semantic embedding model. Safe for offline/dev use;
+            # production must not silently run on it.
+            is_production = os.getenv("NODE_ENV", "").lower() == "production"
+            allow_hash = os.getenv("SYNAPSE_ALLOW_DETERMINISTIC_EMBEDDING", "false").lower() == "true"
+            if is_production and not allow_hash:
+                raise RuntimeError(
+                    "Refusing to start in production with the deterministic hash "
+                    "embedding provider (it is not a semantic model). "
+                    "Set SYNAPSE_EMBEDDING_PROVIDER to a real semantic provider "
+                    "(gemini, openai, sentence-transformers) or opt in with "
+                    "SYNAPSE_ALLOW_DETERMINISTIC_EMBEDDING=true."
+                )
             dim = int(os.getenv("SYNAPSE_EMBEDDING_DIMENSION", "128"))
             return LocalEmbeddingProvider(dim=dim)
         elif self.provider_name == "gemini":

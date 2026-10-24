@@ -1,6 +1,6 @@
 import logging
 import os
-from typing import Any, Optional
+from typing import Any, List, Optional
 
 logger = logging.getLogger("SynapseEncryption")
 
@@ -33,57 +33,94 @@ class KeyManagementProvider:
     convenience that must never back team/production data.
     """
     @staticmethod
+    def get_encryption_keys(key_file: Optional[str] = None) -> List[bytes]:
+        """Return the configured encryption keys, primary (encrypting) key first.
+
+        Resolution order (first configured source wins):
+          1. `SYNAPSE_ENCRYPTION_KEYS` — comma-separated list of urlsafe-base64
+             Fernet keys. The first key encrypts new writes; every listed key can
+             decrypt, so older keys can be retired without re-encrypting existing
+             ciphertext (MultiFernet rotation).
+          2. `SYNAPSE_ENCRYPTION_KEY` — single key (backward compatible).
+          3. `SYNAPSE_ENCRYPTION_KEY_B64_FILE` — path to a file containing ONE key.
+          4. KMS/Vault provider hook (`SYNAPSE_KMS_PROVIDER` + `SYNAPSE_KMS_KEY_REF`).
+          5. Local keyfile (dev fallback): `SYNAPSE_KEY_FILE` (default `.synapse_key`).
+          6. Auto-generate and persist one durable key (dev only).
+
+        Production deployments MUST use (1), (2), (3) or (4).
+        """
+        keys: List[bytes] = []
+
+        # 1. Direct env key(s) — comma separated; first listed key encrypts.
+        env_keys = os.environ.get("SYNAPSE_ENCRYPTION_KEYS")
+        if env_keys:
+            for k in env_keys.split(","):
+                k = k.strip()
+                if k:
+                    keys.append(k.encode("utf-8"))
+
+        # 2. Backward compatible single key.
+        if not keys:
+            env_key = os.environ.get("SYNAPSE_ENCRYPTION_KEY")
+            if env_key:
+                keys.append(env_key.strip().encode("utf-8"))
+
+        # 3. Key-from-file (Docker secrets / K8s secret volume mount).
+        if not keys:
+            b64_file = os.environ.get("SYNAPSE_ENCRYPTION_KEY_B64_FILE")
+            if b64_file:
+                try:
+                    with open(b64_file, "rb") as f:
+                        file_key = f.read().strip()
+                        if file_key:
+                            logger.info("Loaded encryption key from SYNAPSE_ENCRYPTION_KEY_B64_FILE.")
+                            keys.append(file_key)
+                except Exception as e:
+                    logger.warning(f"Could not read key file {b64_file}: {e}")
+
+        # 4. KMS/Vault provider hook.
+        if not keys:
+            kms_provider = os.environ.get("SYNAPSE_KMS_PROVIDER")
+            if kms_provider:
+                kms_ref = os.environ.get("SYNAPSE_KMS_KEY_REF", "")
+                loader = _KMS_LOADERS.get(kms_provider.lower())
+                if loader is None:
+                    raise RuntimeError(
+                        f"Unknown SYNAPSE_KMS_PROVIDER '{kms_provider}'. "
+                        f"Supported: {sorted(_KMS_LOADERS)}."
+                    )
+                logger.info(f"Loading encryption key via KMS provider '{kms_provider}'.")
+                keys.append(loader(kms_ref))
+
+        # 5. Local dev fallback keyfile.
+        if not keys:
+            target_file = key_file or os.environ.get("SYNAPSE_KEY_FILE", ".synapse_key")
+            if os.path.exists(target_file):
+                try:
+                    with open(target_file, "rb") as f:
+                        file_key = f.read().strip()
+                        if file_key:
+                            keys.append(file_key)
+                except Exception as e:
+                    logger.warning(f"Could not read key file {target_file}: {e}")
+
+        # 6. Generate a durable 32-byte urlsafe base64 key (dev only).
+        if not keys:
+            new_key = FernetEncryptionProvider.generate_key()
+            target_file = key_file or os.environ.get("SYNAPSE_KEY_FILE", ".synapse_key")
+            try:
+                with open(target_file, "wb") as f:
+                    f.write(new_key)
+                os.chmod(target_file, 0o600)
+            except Exception as e:
+                logger.warning(f"Could not persist encryption key to {target_file}: {e}")
+            keys.append(new_key)
+
+        return keys
+
+    @staticmethod
     def get_encryption_key(key_file: Optional[str] = None) -> bytes:
-        # 1. Direct env key.
-        env_key = os.environ.get("SYNAPSE_ENCRYPTION_KEY")
-        if env_key:
-            return env_key.strip().encode("utf-8")
-
-        # 2. Key-from-file (Docker secrets / K8s secret volume mount).
-        b64_file = os.environ.get("SYNAPSE_ENCRYPTION_KEY_B64_FILE")
-        if b64_file:
-            try:
-                with open(b64_file, "rb") as f:
-                    file_key = f.read().strip()
-                    if file_key:
-                        logger.info("Loaded encryption key from SYNAPSE_ENCRYPTION_KEY_B64_FILE.")
-                        return file_key
-            except Exception as e:
-                logger.warning(f"Could not read key file {b64_file}: {e}")
-
-        # 3. KMS/Vault provider hook.
-        kms_provider = os.environ.get("SYNAPSE_KMS_PROVIDER")
-        if kms_provider:
-            kms_ref = os.environ.get("SYNAPSE_KMS_KEY_REF", "")
-            loader = _KMS_LOADERS.get(kms_provider.lower())
-            if loader is None:
-                raise RuntimeError(
-                    f"Unknown SYNAPSE_KMS_PROVIDER '{kms_provider}'. "
-                    f"Supported: {sorted(_KMS_LOADERS)}."
-                )
-            logger.info(f"Loading encryption key via KMS provider '{kms_provider}'.")
-            return loader(kms_ref)
-
-        # 4. Local dev fallback keyfile.
-        target_file = key_file or os.environ.get("SYNAPSE_KEY_FILE", ".synapse_key")
-        if os.path.exists(target_file):
-            try:
-                with open(target_file, "rb") as f:
-                    file_key = f.read().strip()
-                    if file_key:
-                        return file_key
-            except Exception as e:
-                logger.warning(f"Could not read key file {target_file}: {e}")
-
-        # Generate a durable 32-byte urlsafe base64 key
-        new_key = FernetEncryptionProvider.generate_key()
-        try:
-            with open(target_file, "wb") as f:
-                f.write(new_key)
-            os.chmod(target_file, 0o600)
-        except Exception as e:
-            logger.warning(f"Could not persist encryption key to {target_file}: {e}")
-        return new_key
+        return KeyManagementProvider.get_encryption_keys(key_file)[0]
 
 
 def _kms_loader_aws(ref: str) -> bytes:
