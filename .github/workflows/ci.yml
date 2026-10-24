@@ -323,3 +323,67 @@ jobs:
           path: ./
           base: ${{ github.event.before }}
           head: ${{ github.event.after }}
+
+  version-consistency:
+    name: Version Consistency
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: "3.11"
+      - name: All artifacts must advertise the same version
+        run: python scripts/check_version_consistency.py
+
+  production-startup:
+    name: Production Startup Guard
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: "3.11"
+      - name: Install (lean)
+        run: pip install -e "sdk/python[pgvector,dev]"
+      - name: Engine must refuse deterministic embeddings in production
+        run: |
+          if NODE_ENV=production SYNAPSE_EMBEDDING_PROVIDER=deterministic \
+             python -c "from synapse_memory.core.embedder import SynapseEmbedder; SynapseEmbedder()"; then
+            echo "::error::Engine started with the deterministic (non-semantic) provider under NODE_ENV=production"
+            exit 1
+          fi
+          echo "OK: production refuses the deterministic provider"
+      - name: Compose must resolve a semantic provider
+        working-directory: deploy
+        env:
+          SYNAPSE_API_KEY: ci-placeholder
+          SYNAPSE_ENCRYPTION_KEY: ci-placeholder
+          SYNAPSE_APP_DB_PASSWORD: ci-placeholder
+          POSTGRES_PASSWORD: ci-placeholder
+          SYNAPSE_EMBEDDING_PROVIDER: gemini
+          GEMINI_API_KEY: ci-placeholder
+        run: |
+          rendered=$(docker compose config)
+          echo "$rendered" | grep -q 'SYNAPSE_EMBEDDING_PROVIDER: gemini' \
+            || { echo "::error::Compose does not set a semantic embedding provider"; exit 1; }
+          echo "$rendered" | grep -Eq 'SYNAPSE_EMBEDDING_PROVIDER: (deterministic|hash|local)$' \
+            && { echo "::error::Compose resolves the non-semantic provider"; exit 1; } || true
+          echo "OK: compose resolves gemini"
+      - name: Helm must refuse deterministic embeddings in production
+        run: |
+          cd deploy/helm-chart
+          if helm template t . --set config.embeddingProvider=deterministic >/dev/null 2>&1; then
+            echo "::error::Helm rendered a production release with deterministic embeddings"
+            exit 1
+          fi
+          helm template t . >/dev/null
+          echo "OK: helm refuses deterministic, renders with the default provider"
+
+  deployment-smoke:
+    name: Deployment Smoke (Compose)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - name: Boot the real stack, verify auth write/read, tear down
+        run: python3 scripts/deploy_smoke.py

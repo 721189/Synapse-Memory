@@ -4,7 +4,7 @@ replicaCount: 3
 image:
   repository: synapse-memory/gateway
   pullPolicy: IfNotPresent
-  tag: "v1.2.0"
+  tag: "v1.3.0"
 
 service:
   type: ClusterIP
@@ -62,7 +62,7 @@ gateway:
   replicaCount: 2
   image:
     repository: synapse-memory/gateway
-    tag: "v1.2.0"
+    tag: "v1.3.0"
   resources:
     requests:
       cpu: 250m
@@ -75,7 +75,7 @@ engine:
   replicaCount: 2
   image:
     repository: synapse-memory/engine
-    tag: "v1.2.0"
+    tag: "v1.3.0"
   resources:
     requests:
       cpu: 500m
@@ -103,6 +103,9 @@ config:
   # an engine running outside this release).
   pythonEngineUrl: ""
   pythonPort: "8008"
+  # REQUIRED in production: the engine refuses the deterministic hash provider.
+  # Set to gemini | openai | sentence-transformers and provide the matching key.
+  embeddingProvider: "gemini"
   enableDemoRoutes: "false"
   rateLimitPerMin: "120"
   allowedOrigins: "http://localhost:3000"

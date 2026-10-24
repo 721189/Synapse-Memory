@@ -160,5 +160,40 @@ class TestLegacyRawAdminRoleIsNotPrivileged(unittest.TestCase):
                     pass
 
 
+class TestWildcardTenantIsExplicitOnly(unittest.TestCase):
+    """A "*" binding is the ONLY way to span tenants without platform_admin."""
+
+    def _record(self, tenant, role="developer"):
+        return APIKeyRecord(
+            key_id="key_wild",
+            key_hash="",
+            name="wild",
+            organization_id="org_a",
+            project_id="proj_a",
+            tenant_id=tenant,
+            scopes=["memories:read"],
+            role=role,
+            is_active=True,
+            expires_at=None,
+            created_at=time.time(),
+            last_used_at=None,
+        )
+
+    def test_wildcard_binding_may_select_any_tenant(self):
+        wildcard = self._record("*")
+        self.assertTrue(tenant_selection_allowed(wildcard, "tenant_b"))
+        self.assertTrue(tenant_selection_allowed(wildcard, "tenant_c"))
+
+    def test_ordinary_binding_stays_inside_its_tenant(self):
+        scoped = self._record("tenant_a")
+        self.assertTrue(tenant_selection_allowed(scoped, "tenant_a"))
+        self.assertFalse(tenant_selection_allowed(scoped, "tenant_b"))
+
+    def test_wildcard_binding_does_not_grant_admin_scopes(self):
+        wildcard = self._record("*")
+        self.assertFalse(scope_satisfied(wildcard, "auth:keys:create"))
+        self.assertFalse(scope_satisfied(wildcard, "security:audit"))
+
+
 if __name__ == "__main__":
     unittest.main()

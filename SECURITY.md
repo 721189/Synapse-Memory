@@ -110,3 +110,18 @@ against them.
 | **Searchable plaintext** | `content_plain` (and the tsvector built from it) is plaintext so lexical search works. A database dump exposes memory text. | `SYNAPSE_STORE_SEARCHABLE_PLAINTEXT=false` stores no plaintext and disables lexical/FTS matching. |
 | **Deterministic embeddings** | The hash provider is not semantic; production refuses to start with it unless `SYNAPSE_ALLOW_DETERMINISTIC_EMBEDDING=true`. | Use `gemini`, `openai` or `sentence-transformers`; `/readiness` reports `embedding_is_semantic`. |
 | **Per-tenant corpus size** | Ingest and pruning are O(n) in the tenant/category set; the default cap is 50 records. | See `docs/capacity.md`. Large tenants need SQL-side candidate selection, which is not implemented yet. |
+
+## Assurance status (be explicit with customers)
+
+- **Independent security review: not yet performed.** The threat model below is
+  the maintainers' own; do not treat it as third-party assurance.
+- **Load and outage behaviour** is covered by `tests/test_load_resilience.py`
+  (parallel writers/readers, database interruption, restart durability) — these
+  run against SQLite and a live pgvector instance in CI.
+- **Backup/restore** is covered by `tests/test_backup_restore_drill.py`; rehearse
+  it against YOUR storage before relying on it.
+- **Deployment wiring** is covered by `scripts/deploy_smoke.py` (real Compose
+  stack, authenticated write/read, teardown).
+- **Performance numbers**: see `docs/capacity.md`. Measure at your workload size
+  before making latency/throughput claims; only `sdk/python/benchmark/` results
+  committed to the repo count as evidence.

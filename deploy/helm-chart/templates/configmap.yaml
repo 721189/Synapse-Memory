@@ -37,3 +37,14 @@ data:
   RATE_LIMIT_PER_MIN: {{ .Values.config.rateLimitPerMin | quote }}
   ALLOWED_ORIGINS: {{ .Values.config.allowedOrigins | quote }}
   SYNAPSE_SQLITE_DB_PATH: {{ .Values.config.sqliteDbPath | quote }}
+  # Semantic embedding provider (F-06 / P0 startup). The engine refuses to start
+  # with the deterministic hash provider when NODE_ENV=production, so this must
+  # name a real model; the guard below fails the render early instead of letting
+  # a pod crash-loop.
+  {{- if and (eq (toString .Values.config.embeddingProvider) "deterministic") (eq .Values.config.nodeEnv "production") }}
+  {{- fail "config.embeddingProvider=deterministic is not allowed with nodeEnv=production; set gemini, openai or sentence-transformers" }}
+  {{- end }}
+  {{- if not .Values.config.embeddingProvider }}
+  {{- fail "config.embeddingProvider is required; set gemini, openai or sentence-transformers" }}
+  {{- end }}
+  SYNAPSE_EMBEDDING_PROVIDER: {{ .Values.config.embeddingProvider | quote }}
