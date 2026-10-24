@@ -754,52 +754,25 @@ User Query: ${prompt}`;
   });
 });
 
-// Enterprise Security: Authenticated PII Scrubbing endpoint
-const handleScrubPii = (req: express.Request, res: express.Response) => {
-  const apiKey = req.header("X-Synapse-API-Key") || req.header("Authorization");
-  if (process.env.NODE_ENV === "production" && !apiKey) {
-    return res.status(401).json({ error: "Authentication required for PII scrubbing service." });
-  }
-
-  const { text } = req.body;
-  if (!text) return res.status(400).json({ error: "Text is required" });
-
-  let redactionCount = 0;
-  let scrubbed = text;
-
-  const patterns = [
-    /\b(sk-[a-zA-Z0-9]{20,})\b/g,
-    /\b(\d{3}[-]?\d{2}[-]?\d{4})\b/g,
-    /\b(4\d{3}[\s-]?\d{4}[\s-]?\d{4}[\s-]?\d{4})\b/g,
-    /password\s*[:=]\s*([^\s]+)/gi,
-    /[\w\.-]+@[\w\.-]+\.\w+/g,
-    /\+?\d{1,4}[-.\s]?\(?\d{1,3}\)?[-.\s]?\d{1,4}[-.\s]?\d{1,4}[-.\s]?\d{1,9}/g
-  ];
-
-  for (const pat of patterns) {
-    const matches = scrubbed.match(pat);
-    if (matches) {
-      redactionCount += matches.length;
-    }
-  }
-
-  scrubbed = scrubbed
-    .replace(/\b(sk-[a-zA-Z0-9]{20,})\b/g, '[REDACTED_API_KEY]')
-    .replace(/\b(\d{3}[-]?\d{2}[-]?\d{4})\b/g, '[REDACTED_SSN]')
-    .replace(/\b(4\d{3}[\s-]?\d{4}[\s-]?\d{4}[\s-]?\d{4})\b/g, '[REDACTED_CREDIT_CARD]')
-    .replace(/password\s*[:=]\s*([^\s]+)/gi, 'password=[REDACTED]')
-    .replace(/[\w\.-]+@[\w\.-]+\.\w+/g, '[REDACTED_EMAIL]')
-    .replace(/\+?\d{1,4}[-.\s]?\(?\d{1,3}\)?[-.\s]?\d{1,4}[-.\s]?\d{1,4}[-.\s]?\d{1,9}/g, '[REDACTED_PHONE]');
-
-  const detectedPII = redactionCount > 0 || scrubbed !== text;
-
-  res.json({
-    success: true,
-    detectedPII,
-    scrubbedText: scrubbed,
-    redactionCount,
-    encryptionCMEK: "aes-256-gcm-kam-verified"
+// Enterprise Security: PII scrubbing is served by the engine ONLY (F-11).
+// The gateway used to run its own weaker regex set, treat any present header as
+// "authenticated", and return a hard-coded encryptionCMEK value implying a KMS
+// operation that never happened. Both aliases now proxy to the engine's
+// authenticated, tested scrubber; an unreachable engine yields the standard 503
+// from the terminal error middleware instead of a local, unvalidated redaction.
+const handleScrubPii = async (req: express.Request, res: express.Response) => {
+  const result = await callPythonBackend(req, "/api/security/scrub", {
+    method: "POST",
+    body: JSON.stringify(req.body ?? {}),
   });
+  if (!result || (result as any).error) {
+    return res.status(503).json({
+      success: false,
+      error: "scrub_unavailable",
+      detail: "PII scrubbing is served by the cognitive engine, which is unavailable.",
+    });
+  }
+  return res.json(result);
 };
 
 app.post("/api/security/scrub-pii", handleScrubPii);

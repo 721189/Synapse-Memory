@@ -105,6 +105,21 @@ _KNOWN_SCOPES = frozenset({
 # Brief TTL for in-memory API-key lookups (seconds). A revoked/expired key can
 # still validate until its cache entry expires or is evicted (revoke evicts).
 _AUTH_KEY_CACHE_TTL = 30.0
+# F-10: a cached key is re-validated against the database at least this often,
+# even if its TTL has not expired. revoke_api_key() only evicts the cache of the
+# replica that served the revoke, so WITHOUT this a key revoked on replica A
+# stays usable on replica B for up to the full TTL. With it, the maximum
+# cross-replica revocation delay is this value (default 5s), independent of TTL.
+# Set SYNAPSE_AUTH_REVALIDATE_SECONDS to trade DB reads for a tighter bound.
+try:
+    _AUTH_REVALIDATE_SECONDS = max(
+        0.5, float(os.environ.get("SYNAPSE_AUTH_REVALIDATE_SECONDS", "5"))
+    )
+except (TypeError, ValueError):
+    _AUTH_REVALIDATE_SECONDS = 5.0
+# F-13: hard cap on per-IP auth state so spoofed/rotating source addresses
+# cannot grow the failure maps without bound.
+_MAX_TRACKED_IPS = 8192
 # Flush buffered audit rows when the buffer reaches this size or this many
 # seconds have elapsed since the last flush, whichever comes first.
 _AUDIT_FLUSH_MAX = 50
@@ -327,7 +342,9 @@ class SecurityManager:
         # Auth hot-path / abuse-protection state (P2). The gateway runs a single
         # shared SecurityManager instance, so this is shared across requests and
         # guarded by self._auth_lock.
-        self._key_cache: Dict[str, Tuple[float, APIKeyRecord]] = {}
+        # token_hash -> (expires_at, record, cached_at); cached_at drives the
+        # periodic revalidation that bounds cross-replica revocation delay (F-10).
+        self._key_cache: Dict[str, Tuple[float, APIKeyRecord, float]] = {}
         self._audit_buffer: List[
             Tuple[str, float, Optional[str], Optional[str], str, str, str, Optional[str]]
         ] = []
@@ -916,32 +933,79 @@ class SecurityManager:
     def _get_cached_key(self, token_hash: str, now: float) -> Optional[APIKeyRecord]:
         """Return a cached, still-valid key record, or None on cache miss.
 
-        Entries past their TTL are evicted. Revoked keys are evicted by
-        revoke_api_key so revocation is honored immediately.
+        An entry is treated as a miss when either its TTL expired OR it is older
+        than ``_AUTH_REVALIDATE_SECONDS``. The second condition is what bounds
+        cross-replica revocation delay (F-10): it forces a database re-read, so a
+        key revoked on another replica is denied here within that window instead
+        of living out the full 30s TTL.
         """
         with self._auth_lock:
             entry = self._key_cache.get(token_hash)
             if entry is None:
                 return None
-            expires_at, record = entry
-            if now > expires_at:
+            expires_at, record, cached_at = entry
+            if now > expires_at or (now - cached_at) > _AUTH_REVALIDATE_SECONDS:
                 del self._key_cache[token_hash]
                 return None
             return record
 
     def _cache_key(self, token_hash: str, now: float, record: APIKeyRecord) -> None:
         with self._auth_lock:
-            self._key_cache[token_hash] = (now + _AUTH_KEY_CACHE_TTL, record)
+            self._key_cache[token_hash] = (now + _AUTH_KEY_CACHE_TTL, record, now)
+
+    def close(self) -> None:
+        """Flush buffered audit rows and drop in-process caches.
+
+        Called from the FastAPI shutdown hook (F-13). Without it an abrupt
+        process stop loses the pending audit batch, which matters because those
+        rows are the security event record.
+        """
+        try:
+            with self._auth_lock:
+                self._flush_audit_buffer_locked()
+        except Exception:  # pragma: no cover - shutdown must never raise
+            pass
+        with self._auth_lock:
+            self._key_cache.clear()
+            self._ip_failures.clear()
+            self._ip_audited_failures.clear()
 
     def _evict_cached_key(self, key_id: str) -> None:
         with self._auth_lock:
-            for token_hash, (_expires_at, record) in list(self._key_cache.items()):
+            for token_hash, entry in list(self._key_cache.items()):
+                record = entry[1]
                 if record.key_id == key_id:
                     del self._key_cache[token_hash]
 
     def _record_ip_failure(self, client_ip: str) -> None:
         with self._auth_lock:
             self._ip_failures[client_ip].append(time.time())
+            self._prune_ip_state_locked()
+
+    def _prune_ip_state_locked(self) -> None:
+        """Bound per-IP auth state (F-13).
+
+        Drops expired failure windows and, if the map is still larger than
+        _MAX_TRACKED_IPS, evicts the least-recently-seen source addresses. Called
+        with ``_auth_lock`` held.
+        """
+        if len(self._ip_failures) <= _MAX_TRACKED_IPS and len(self._ip_audited_failures) <= _MAX_TRACKED_IPS:
+            return
+        now = time.time()
+        window_start = now - _IP_RATE_WINDOW
+        for ip in list(self._ip_failures.keys()):
+            hits = [t for t in self._ip_failures[ip] if t >= window_start]
+            if hits:
+                self._ip_failures[ip] = hits
+            else:
+                del self._ip_failures[ip]
+        # Still over the ceiling: evict the oldest half (dicts keep insertion
+        # order, so the earliest entries are the least recently created).
+        for mapping in (self._ip_failures, self._ip_audited_failures):
+            excess = len(mapping) - _MAX_TRACKED_IPS
+            if excess > 0:
+                for ip in list(mapping.keys())[:excess]:
+                    del mapping[ip]
 
     def _is_ip_rate_limited(self, client_ip: str) -> bool:
         """Sliding-window per-IP failure count. True = deny before auth/DB."""

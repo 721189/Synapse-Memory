@@ -10,7 +10,7 @@ from synapse_memory.integrations.langchain import SynapseLangChainMemory
 from synapse_memory.integrations.llamaindex import SynapseLlamaIndexMemory
 from synapse_memory.client import SynapseClient, SynapseError, CreateResult, QueryResult
 
-__version__ = "1.2.0"
+__version__ = "1.3.0"
 __api_compat_version__ = "v1"
 
 __all__ = [

@@ -55,6 +55,12 @@ def searchable_projection(content: str) -> str:
     return ""
 
 
+# F-15: the in-process fallback cache is an offline/dev convenience, not a second
+# copy of production data. Bound it so it cannot grow without limit when the
+# database is unavailable.
+_FALLBACK_CACHE_MAX = 1000
+
+
 class PGVectorMemoryStore:
     """
     Enterprise-grade Postgres + pgvector + HNSW storage engine.
@@ -510,6 +516,14 @@ class PGVectorMemoryStore:
             ctx = tenant_id
         cur.execute("SET LOCAL app.current_tenant = %s;", (ctx,))
 
+    def _cache_fallback(self, memory: Dict[str, Any]) -> None:
+        """Bounded insert into the offline fallback cache (F-15)."""
+        if len(self._fallback_cache) >= _FALLBACK_CACHE_MAX:
+            overflow = len(self._fallback_cache) - _FALLBACK_CACHE_MAX + 1
+            for key in list(self._fallback_cache.keys())[:overflow]:
+                del self._fallback_cache[key]
+        self._fallback_cache[memory["id"]] = memory
+
     def insert_memory(self, memory: Dict[str, Any]) -> None:
         """Inserts memory with embedding vector into pgvector table with tenant isolation.
 
@@ -517,11 +531,15 @@ class PGVectorMemoryStore:
         `content_plain` stores the searchable projection for tsvector/BM25.
         """
         tenant_id = memory.get("tenant_id") or memory.get("tenantId") or "default"
-        mem_copy = memory.copy()
-        mem_copy["tenant_id"] = tenant_id
-        self._fallback_cache[memory["id"]] = mem_copy
 
         if not self._connected or not HAS_PSYCOPG2:
+            # Offline/dev mode only: with no database the in-process cache IS the
+            # store. Previously every insert was mirrored here even when
+            # PostgreSQL was connected, keeping a second plaintext copy of the
+            # content and embedding per row (F-15).
+            mem_copy = memory.copy()
+            mem_copy["tenant_id"] = tenant_id
+            self._cache_fallback(mem_copy)
             return
 
         conn = self._get_connection()

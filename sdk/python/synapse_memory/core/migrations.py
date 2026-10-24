@@ -34,21 +34,50 @@ class Migration:
     postgres: Optional[Callable[[Any], None]] = None
 
 
-def _add_column_if_missing(cur: Any, table: str, column: str, coltype: str) -> None:
-    """Idempotent ADD COLUMN that works on both SQLite and PostgreSQL."""
+def _column_exists(cur: Any, table: str, column: str) -> bool:
+    """Dialect-aware column existence probe (PostgreSQL then SQLite)."""
     try:
         cur.execute(
             "SELECT 1 FROM information_schema.columns WHERE table_name=%s AND column_name=%s",
             (table, column),
         )
-        if not cur.fetchone():
-            cur.execute(f"ALTER TABLE {table} ADD COLUMN {column} {coltype};")
+        if cur.fetchone():
+            return True
+        return False
     except Exception:
-        # SQLite has no information_schema; fall back to a no-op probe + add.
-        try:
-            cur.execute(f"ALTER TABLE {table} ADD COLUMN {column} {coltype};")
-        except Exception:
-            pass  # column already exists
+        # SQLite has no information_schema; fall through to PRAGMA.
+        pass
+    try:
+        cur.execute(f"PRAGMA table_info({table});")
+        for row in cur.fetchall():
+            if isinstance(row, dict):
+                if row.get("name") == column:
+                    return True
+            elif len(row) > 1 and row[1] == column:
+                return True
+        return False
+    except Exception:
+        return False
+
+
+def _add_column_if_missing(cur: Any, table: str, column: str, coltype: str) -> None:
+    """Idempotent ADD COLUMN that works on both SQLite and PostgreSQL.
+
+    Only a real duplicate-column condition counts as success. Any other failure
+    — missing privileges, invalid DDL, lock timeout, schema drift — is re-raised
+    so ``fail_closed=True`` aborts startup instead of recording a migration
+    version for a column that was never created (F-12).
+    """
+    if _column_exists(cur, table, column):
+        return
+    try:
+        cur.execute(f"ALTER TABLE {table} ADD COLUMN {column} {coltype};")
+    except Exception:
+        # Re-probe: a concurrent replica may have added it, in which case this
+        # is genuinely done. Otherwise the failure is real and must propagate.
+        if _column_exists(cur, table, column):
+            return
+        raise
 
 
 def _m1_embedding_metadata(cur: Any) -> None:

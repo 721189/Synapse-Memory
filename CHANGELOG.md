@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 1.3.0 � unreleased
 - **Security audit F-01…F-09 remediation.**
   - **F-01 (P0, privilege escalation):** all authorization now runs through one
     canonical effective-role path (`normalize_role` → `effective_role`). A stored

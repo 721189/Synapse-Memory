@@ -291,6 +291,19 @@ app.add_middleware(
 )
 
 
+@app.on_event("shutdown")
+def _flush_audit_on_shutdown() -> None:
+    """Flush buffered audit rows on graceful shutdown (F-13).
+
+    Without this, a clean container stop still loses the pending audit batch;
+    abrupt SIGKILL remains a documented residual risk (see SECURITY.md).
+    """
+    try:
+        security_manager.close()
+    except Exception:  # pragma: no cover - shutdown must never raise
+        pass
+
+
 # Security Authentication Dependency & Scope Enforcement
 def require_scope(scope: str):
     async def dependency(
@@ -1261,44 +1274,57 @@ def scrub_pii(
     principal: APIKeyRecord = Depends(require_scope("memories:read"))
 ):
     """
-    Authenticated PII scrubbing endpoint.
-    Returns scrubbed content and redaction count without echoing original sensitive input.
+    Authenticated PII scrubbing endpoint — the single implementation.
+
+    The Node gateway proxies both of its aliases here instead of running its own
+    weaker regex set (F-11). Ordering matters: high-entropy identifiers and
+    structured digit runs (card / Aadhaar / PAN / SSN) are redacted BEFORE the
+    generic phone matcher, which would otherwise swallow them and leave them
+    only *counted* as detected rather than actually removed.
+
+    Nothing cryptographic happens in this handler, so the response carries no
+    encryption/CMEK claim.
     """
-    text = payload.get("text", "")
-    if not text:
-        raise HTTPException(status_code=400, detail="Text field required.")
-
     import re
-    redaction_count = 0
-    patterns = [
-        r'[\w\.-]+@[\w\.-]+\.\w+',  # email
-        r'\+?\d{1,4}[-.\s]?\(?\d{1,3}\)?[-.\s]?\d{1,4}[-.\s]?\d{1,4}[-.\s]?\d{1,9}',  # phone
-        r'(sk-proj-[a-zA-Z0-9]{20,})',  # OpenAI
-        r'(sk-ant-[a-zA-Z0-9\-_]{20,})',  # Anthropic
-        r'(xox[bpas]-[a-zA-Z0-9\-_]{10,})',  # Slack
-        r'(gh[pousr]_[a-zA-Z0-9]{20,})',  # GitHub
-        r'(AKIA[0-9A-Z]{16})',  # AWS access key
-        r'\b(\d{3}[-]?\d{2}[-]?\d{4})\b',  # US SSN
-        r'\b(\d{4}[-\s]?\d{4}[-\s]?\d{4}[-\s]?\d{4})\b',  # credit card
-        r'\b(\d{4}[-\s]?\d{4}[-\s]?\d{4})\b',  # Aadhaar (12-digit grouped)
-        r'\b([A-Z]{5}[0-9]{4}[A-Z])\b',  # India PAN
-    ]
-    for pat in patterns:
-        redaction_count += len(re.findall(pat, text))
 
-    scrubbed = re.sub(r'[\w\.-]+@[\w\.-]+\.\w+', '[REDACTED_EMAIL]', text)
-    scrubbed = re.sub(r'\+?\d{1,4}[-.\s]?\(?\d{1,3}\)?[-.\s]?\d{1,4}[-.\s]?\d{1,4}[-.\s]?\d{1,9}', '[REDACTED_PHONE]', scrubbed)
-    scrubbed = re.sub(r'(sk-proj-[a-zA-Z0-9]{20,}|sk-ant-[a-zA-Z0-9\-_]{20,}|xox[bpas]-[a-zA-Z0-9\-_]{10,}|gh[pousr]_[a-zA-Z0-9]{20,}|AKIA[0-9A-Z]{16})', '[REDACTED_API_KEY]', scrubbed)
-    scrubbed = re.sub(r'\b(\d{3}[-]?\d{2}[-]?\d{4})\b', '[REDACTED_SSN]', scrubbed)
-    scrubbed = re.sub(r'\b(\d{4}[-\s]?\d{4}[-\s]?\d{4}[-\s]?\d{4})\b', '[REDACTED_CARD]', scrubbed)
-    scrubbed = re.sub(r'\b([A-Z]{5}[0-9]{4}[A-Z])\b', '[REDACTED_PAN]', scrubbed)
+    text = payload.get("text", "")
+    if not isinstance(text, str) or not text.strip():
+        raise HTTPException(status_code=400, detail="Text field required.")
+    if len(text) > 20000:
+        raise HTTPException(status_code=413, detail="Text exceeds the 20000 character limit.")
+
+    redactions = [
+        (
+            r"(sk-proj-[A-Za-z0-9]{20,}|sk-ant-[A-Za-z0-9\-_]{20,}"
+            r"|xox[bpas]-[A-Za-z0-9\-_]{10,}|gh[pousr]_[A-Za-z0-9]{20,}"
+            r"|AKIA[0-9A-Z]{16})",
+            "[REDACTED_API_KEY]",
+        ),
+        (
+            r"\b(?:4[0-9]{3}|5[1-5][0-9]{2}|3[47][0-9]{2}|6(?:011|5[0-9]{2}))"
+            r"[-\s]?[0-9]{4}[-\s]?[0-9]{4}[-\s]?[0-9]{1,4}\b",
+            "[REDACTED_CARD]",
+        ),
+        (r"\b[0-9]{4}[-\s]?[0-9]{4}[-\s]?[0-9]{4}\b", "[REDACTED_AADHAAR]"),
+        (r"\b[A-Z]{5}[0-9]{4}[A-Z]\b", "[REDACTED_PAN]"),
+        (r"\b[0-9]{3}-[0-9]{2}-[0-9]{4}\b", "[REDACTED_SSN]"),
+        (r"[\w\.-]+@[\w\.-]+\.\w+", "[REDACTED_EMAIL]"),
+        (r"password\s*[:=]\s*\S+", "password=[REDACTED]"),
+        (r"\+?[0-9][0-9\-.\s()]{7,}[0-9]", "[REDACTED_PHONE]"),
+    ]
+
+    scrubbed = text
+    redaction_count = 0
+    for pattern, replacement in redactions:
+        scrubbed, count = re.subn(pattern, replacement, scrubbed)
+        redaction_count += count
 
     return envelope(
         {
-            "detectedPII": redaction_count > 0 or scrubbed != text,
+            "detectedPII": redaction_count > 0,
             "scrubbedText": scrubbed,
             "redactionCount": redaction_count,
-            "encryptionCMEK": "kms-key-aes256-synapse-active",
+            "scrubber": "synapse-engine/regex-v2",
         },
         request,
     )

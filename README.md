@@ -10,7 +10,7 @@ Field-level encryption on `content` at rest (the `content_plain` search projecti
 Database-level tenant isolation (PostgreSQL RLS) · Fail-closed by design · Production-hardened (P0–P2)
 
 [![CI/CD Pipeline](https://github.com/721189/Synapse-Memory/actions/workflows/ci.yml/badge.svg)](https://github.com/721189/Synapse-Memory/actions/workflows/ci.yml)
-[![Version](https://img.shields.io/badge/version-1.2.0-blue.svg)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-1.3.0-blue.svg)](CHANGELOG.md)
 [![Python](https://img.shields.io/badge/python-3.10%20%7C%203.11%20%7C%203.12-blue.svg)](https://www.python.org/)
 [![Node.js](https://img.shields.io/badge/node-20.19%2B-green.svg)](https://nodejs.org/)
 [![PostgreSQL](https://img.shields.io/badge/postgres-16%20%2B%20pgvector%20HNSW-336791.svg)](https://github.com/pgvector/pgvector)
@@ -54,7 +54,7 @@ Database-level tenant isolation (PostgreSQL RLS) · Fail-closed by design · Pro
 
 ## 1. Executive Summary
 
-**Synapse Memory** (v1.2.0) is a persistent, encrypted, multi-tenant memory layer that solves the
+**Synapse Memory** (v1.3.0) is a persistent, encrypted, multi-tenant memory layer that solves the
 statelessness of LLM APIs. It ingests text, embeds it, deduplicates it, stores it encrypted, and later
 returns **only the most relevant context that fits a finite token budget** — fused across lexical and
 dense retrieval, decayed by recency and usage, and packed by dynamic programming instead of naive
@@ -62,8 +62,8 @@ truncation.
 
 | | |
 |---|---|
-| **Status** | Production-hardened — P0/P1/P2 roadmap complete, CI green on `main` and `production-hardening` |
-| **Surfaces** | HTTP engine (FastAPI, `:8008`) · Node gateway + React dashboard (`:3000`) · Python SDK (`synapse-memory-engine` 1.2.0) |
+| **Status** | Production-hardened codebase. `main` requires review + green CI, and a release exists only when tag, package and images are published together per `docs/release-checklist.md` � an unreleased commit is not a release. |
+| **Surfaces** | HTTP engine (FastAPI, `:8008`) · Node gateway + React dashboard (`:3000`) · Python SDK (`synapse-memory-engine` 1.3.0) |
 | **Storage** | PostgreSQL 16 + pgvector HNSW (production) · SQLite (single-node dev) — both with Fernet field encryption |
 | **Integrations** | LangChain · LlamaIndex · raw HTTP (any language) |
 | **Deployment** | Docker Compose (4 services) · Kubernetes Helm chart (split engine/gateway + HPA) · bare `uvicorn` |
@@ -465,7 +465,7 @@ helm install synapse deploy/helm-chart \
 | HPA | `minReplicas 3` / `maxReplicas 15`, CPU+memory 80% |
 | Ingress | optional; TLS termination at ingress recommended |
 | Secrets | via existing Secret — **never** ConfigMap; kubelet `$(VAR)` expansion ordering guarded |
-| Chart version | `0.1.0` (app 1.2.0) — chart version ≠ app version, see `Chart.yaml` |
+| Chart version | `0.1.0` (app 1.3.0) — chart version ≠ app version, see `Chart.yaml` |
 
 ### 7.3 Migrate-then-run: least-privilege database roles
 
@@ -500,10 +500,10 @@ python scripts/provision_db_roles.py --verify-only   # must exit 0
 
 | Component | Version | Notes |
 |---|---|---|
-| Python SDK (`synapse-memory-engine`) | **1.2.0** | `SynapseClient`, `__version__ = "1.2.0"` |
+| Python SDK (`synapse-memory-engine`) | **1.3.0** | `SynapseClient`, `__version__ = "1.3.0"` |
 | HTTP API compat | **v1** | canonical `{success, data, request_id}` envelope; `/api/*` aliases stable |
-| Engine / gateway images | **1.2.0 pair** | must deploy matching tags |
-| Helm chart | **0.1.0** (app 1.2.0) | chart version ≠ app version; see `Chart.yaml` |
+| Engine / gateway images | **1.3.0 pair** | must deploy matching tags |
+| Helm chart | **0.2.0** (app 1.3.0) | chart version ≠ app version; see `Chart.yaml` |
 | Schema | **v4 ledger** | forward-only; v4 adds `content_plain` |
 | Python | 3.10 / 3.11 / 3.12 | CI-tested matrix |
 | Node.js | ≥ 20.19 (20.x, 22.x in CI) | gateway build matrix |
