@@ -543,6 +543,22 @@ def main(argv=None):
             rc = _apply_migrations(args.database_url, args.runtime_role)
             if rc != 0:
                 return rc
+            # Re-apply the grants: migrations just created the tables AS THE
+            # ADMIN ROLE, after the first grant pass ran, so the runtime role
+            # would have no privileges on them. This second pass is what makes a
+            # fresh deployment able to query on its very first request.
+            print("Re-applying runtime grants on the migrated schema...")
+            failures, advisories = provision(
+                args.database_url, args.runtime_role, args.admin_role,
+                args.runtime_password, args.admin_password,
+                verify_only=False, skip_verify=args.skip_verify)
+            for item in advisories:
+                print("  [warn] " + item)
+            if failures:
+                print("VERIFICATION FAILED (" + str(len(failures)) + " problem(s)):")
+                for item in failures:
+                    print("  - " + item)
+                return 1
         print("Next: start the engine with SYNAPSE_APPLY_DB_SCHEMA=false and the "
               "runtime-role DATABASE_URL.")
     return 0

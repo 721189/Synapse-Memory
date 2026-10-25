@@ -127,6 +127,11 @@ def main():
 
         log("PASS")
         return 0
+    except SystemExit as exc:
+        log(f"FAILED: {exc}")
+        log("dumping service logs (provisioning + engine + gateway)")
+        run(COMPOSE + ["logs", "--no-color", "--tail", "300"], check=False)
+        raise
     finally:
         log("tearing the stack down")
         run(COMPOSE + ["down", "-v"], check=False)
