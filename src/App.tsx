@@ -55,15 +55,7 @@ export default function App() {
       <ConnectionSettings open={settingsOpen} onClose={() => { setSettingsOpen(false); fetchAppData(); }} />
 
       <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-8">
-        {/* Honesty: these views are illustrative, not live engine output. */}
-        {(activeTab === 'differentiation' || activeTab === 'infrastructure') && (
-          <div
-            role="note"
-            className="mx-auto mb-4 max-w-6xl rounded-xl border border-amber-500/30 bg-amber-500/10 px-4 py-2 text-xs font-semibold uppercase tracking-wide text-amber-300"
-          >
-            Simulated view — illustrative only; not backed by live engine data
-          </div>
-        )}        {activeTab === 'gateway' && <GatewayPlayground onRefreshStats={fetchAppData} />}
+        {activeTab === 'gateway' && <GatewayPlayground onRefreshStats={fetchAppData} />}
         {activeTab === 'memories' && <MemoryManager memories={memories} onRefresh={fetchAppData} />}
         {activeTab === 'poisoning' && <PoisoningLab onRefresh={fetchAppData} />}
         {activeTab === 'security' && <EnterpriseSecurityTab onRefresh={fetchAppData} />}
