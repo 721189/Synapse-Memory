@@ -1,0 +1,62 @@
+version: '3.8'
+
+# Observability stack (Prometheus + Grafana) for Synapse Memory.
+#
+# Usage:
+#   1. Start the main stack first (creates the `synapse-internal` network):
+#        docker compose -f deploy/docker-compose.yml up -d
+#   2. Then start monitoring:
+#        docker compose -f deploy/observability/docker-compose.yml up -d
+#
+# Grafana is then available at http://localhost:3001 (admin / admin by default)
+# with the "Synapse Memory" dashboard auto-provisioned.
+#
+# NOTE: the main compose file declares its network as `synapse-internal`. Docker
+# Compose prefixes it with the project name by default (e.g. `synapsememory_synapse-internal`).
+# If `synapse-internal` below does not resolve, set the same project name for both
+# compose files (e.g. `docker compose -p synapse ...`) or adjust the external name.
+
+services:
+  prometheus:
+    image: prom/prometheus:v2.53.0
+    container_name: synapse-prometheus
+    restart: unless-stopped
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.path=/prometheus"
+      - "--storage.tsdb.retention.time=15d"
+    volumes:
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - synapse-prometheus-data:/prometheus
+    ports:
+      - "${PROMETHEUS_PORT:-9090}:9090"
+    networks:
+      - synapse-internal
+
+  grafana:
+    image: grafana/grafana:11.1.0
+    container_name: synapse-grafana
+    restart: unless-stopped
+    environment:
+      - GF_SECURITY_ADMIN_USER=${GRAFANA_ADMIN_USER:-admin}
+      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_ADMIN_PASSWORD:-admin}
+      - GF_USERS_ALLOW_SIGN_UP=false
+      - GF_AUTH_ANONYMOUS_ENABLED=false
+    volumes:
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - synapse-grafana-data:/var/lib/grafana
+    ports:
+      - "${GRAFANA_PORT:-3001}:3000"
+    depends_on:
+      - prometheus
+    networks:
+      - synapse-internal
+
+networks:
+  synapse-internal:
+    external: true
+
+volumes:
+  synapse-prometheus-data:
+  synapse-grafana-data:

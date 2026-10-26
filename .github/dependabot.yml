@@ -1,0 +1,44 @@
+# Dependabot automated dependency scanning & updates (GitHub-native, no external token).
+# Provides continuous vulnerability + update PRs for the Python SDK, the Node gateway,
+# and the SHA-pinned GitHub Actions used in CI. (Snyk-style scanning can be layered on
+# later, but Dependabot runs out-of-the-box with zero secrets.)
+
+version: 2
+updates:
+  # Published Python SDK (`synapse-memory-engine`)
+  - package-ecosystem: "pip"
+    directory: "/sdk/python"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 10
+    labels:
+      - "dependencies"
+      - "python"
+
+  # Root workspace manifest (tooling only, not published)
+  - package-ecosystem: "pip"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 5
+    labels:
+      - "dependencies"
+
+  # Node.js gateway + React dashboard
+  - package-ecosystem: "npm"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 10
+    labels:
+      - "dependencies"
+      - "javascript"
+
+  # GitHub Actions (SHA-pinned references)
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    labels:
+      - "dependencies"
+      - "ci"

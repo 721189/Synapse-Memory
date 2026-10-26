@@ -1,0 +1,21 @@
+# Prometheus scrape configuration for the Synapse Memory engine.
+#
+# The engine exposes a dependency-free Prometheus text endpoint at GET /metrics
+# (default port 8008). Metrics are live: request counters/latency, auth failures,
+# rate-limit rejections, ingest/retrieval volumes, DB pool utilization, packed
+# tokens, and the active rate-limiter backend.
+
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+scrape_configs:
+  - job_name: "synapse-memory-engine"
+    metrics_path: /metrics
+    scheme: http
+    static_configs:
+      # Inside the docker-compose network the engine is reachable by service name.
+      # For a standalone/local engine, replace with: ["localhost:8008"]
+      - targets: ["synapse-memory-engine:8008"]
+        labels:
+          service: "synapse-memory-engine"
