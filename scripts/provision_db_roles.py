@@ -436,6 +436,37 @@ def _apply_migrations(dsn, runtime_role):
     def _connect():
         return psycopg2.connect(dsn)
 
+    # Ensure the memories table exists before running migrations.
+    # The migration runner assumes the table is already present; on a fresh
+    # database (empty volume) it does not exist, causing ALTER TABLE to fail.
+    # This CREATE TABLE IF NOT EXISTS is idempotent and safe to re-run.
+    try:
+        conn = _connect()
+        cur = conn.cursor()
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS memories (
+                id VARCHAR(128) PRIMARY KEY,
+                tenant_id VARCHAR(128) NOT NULL DEFAULT 'default',
+                content TEXT NOT NULL,
+                category VARCHAR(64) NOT NULL,
+                confidence REAL NOT NULL,
+                created_at DOUBLE PRECISION NOT NULL,
+                last_accessed_at DOUBLE PRECISION NOT NULL,
+                access_count INTEGER NOT NULL DEFAULT 0,
+                token_cost INTEGER NOT NULL DEFAULT 0,
+                feedback_multiplier REAL NOT NULL DEFAULT 1.0,
+                supersedes VARCHAR(128),
+                superseded_by VARCHAR(128)
+            );
+        """)
+        conn.commit()
+        cur.close()
+        conn.close()
+        print("Ensured memories table exists (CREATE TABLE IF NOT EXISTS).")
+    except Exception as exc:
+        print("WARN failed to ensure memories table: " + str(exc))
+        # Continue anyway – the table may already exist or another issue occurred.
+
     try:
         applied = run_migrations(_connect, is_postgres=True, fail_closed=True)
     except Exception as exc:
