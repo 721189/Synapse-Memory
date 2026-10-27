@@ -272,6 +272,18 @@ def _pack(
         return packer.greedy_pack(candidates, token_budget=token_budget)
     if method == "knapsack_dp":
         return packer.pack(candidates, token_budget=token_budget)
+    if method == "rank_discount_dp":
+        # Benchmark-only objective ablation: use rank discount rather than raw
+        # RRF score as DP utility, while preserving original records in results.
+        # This is an experiment, not a change to the production packer default.
+        weighted_candidates = []
+        for rank, item in enumerate(candidates, start=1):
+            weighted = item.copy()
+            weighted["relevance_score"] = 1.0 / math.log2(rank + 1.0)
+            weighted_candidates.append(weighted)
+        chosen = packer.pack(weighted_candidates, token_budget=token_budget)
+        chosen_ids = {str(item["id"]) for item in chosen}
+        return [item for item in candidates if str(item["id"]) in chosen_ids]
     raise ValueError("Unknown packing method: {0}".format(method))
 
 
@@ -322,6 +334,7 @@ def run_benchmark(
         "ranked_fit",
         "greedy_ratio",
         "knapsack_dp",
+        "rank_discount_dp",
     )
 
     with tempfile.TemporaryDirectory(prefix="synapse-retrieval-bench-") as temp_dir:
@@ -720,6 +733,7 @@ def run_benchmark(
                             "ranked_fit": "Greedy rank-order fit; skip any item that does not fit in remaining budget.",
                             "greedy_ratio": "KnapsackPacker greedy relevance-per-token fallback strategy.",
                             "knapsack_dp": "KnapsackPacker dynamic programming maximizing the sum of raw relevance_score values under the token budget.",
+                            "rank_discount_dp": "Benchmark-only DP objective using 1/log2(rank+1) as item utility, mapped back to original records for evaluation; not a production default.",
                         },
                         "objective_vs_quality": "The packer optimizes the numeric relevance_score sum; hand-authored relevant_memory_ids define evaluation quality. Candidate recall and retention of relevant candidates are reported separately so retrieval misses are not blamed on packing.",
                         "latency_scope": "Ranker latency excludes query embedding, disk reads, process startup, and network latency; query embedding, write/embed, SQLite insertion, and packing timings are reported separately.",
@@ -842,11 +856,19 @@ def main() -> int:
         )
     print("\nContext packing:")
     for method, values in result["context_packing"].items():
+        candidate_retention = values["mean_retained_candidate_relevant_recall"]
+        retention_display = (
+            "n/a" if candidate_retention is None else "{0:.3f}".format(candidate_retention)
+        )
         print(
-            "  {0:<18} relevant_recall={1:.3f} mean_tokens={2:.1f} "
-            "over_budget={3}".format(
+            "  {0:<18} fact_recall={1:.3f} candidate_recall={2:.3f} "
+            "retained_candidate={3} score_utility={4:.1f}% tokens={5:.1f} "
+            "over_budget={6}".format(
                 method,
                 values["mean_relevant_recall"],
+                values["mean_candidate_recall"],
+                retention_display,
+                values["mean_score_utility_retained_pct"],
                 values["mean_tokens_used"],
                 values["over_budget_query_count"],
             )
