@@ -74,6 +74,14 @@ def _estimate_tokens(text: str) -> int:
     return max(15, int(len(text.split()) * 1.3) + 8)
 
 
+def _distribution_version(name: str) -> Optional[str]:
+    """Return installed distribution versions for experiment reproducibility."""
+    try:
+        return importlib.metadata.version(name)
+    except importlib.metadata.PackageNotFoundError:
+        return None
+
+
 class _SentenceTransformerBenchmarkEmbedder:
     """CPU-only, revision-pinned neural embedder used only by the benchmark."""
 
@@ -759,6 +767,7 @@ def run_benchmark(
                         "name": dataset.get("name", dataset_path.stem),
                         "path": str(dataset_path),
                         "sha256": hashlib.sha256(dataset_bytes).hexdigest(),
+                        "evaluation_notes": dataset.get("evaluation_notes", {}),
                         "document_count": len(document_specs),
                         "query_count": len(query_specs),
                         "tenant_count": len(tenants),
@@ -788,6 +797,15 @@ def run_benchmark(
                         ),
                         "embedding_dimension": embedder.dimension,
                         "embedding_is_semantic": embedder.is_semantic,
+                        "embedding_runtime_versions": {
+                            name: _distribution_version(name)
+                            for name in (
+                                "sentence-transformers",
+                                "torch",
+                                "transformers",
+                                "huggingface-hub",
+                            )
+                        },
                         "storage": "SQLite encrypted store; corpus preloaded before rank-only timings",
                     },
                     "configuration": {
