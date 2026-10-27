@@ -593,12 +593,31 @@ jobs:
               )
           PY
 
-      - name: Evaluate retrieval against corrected LongMemEval evidence labels
+      - name: Download and checksum-pin corrected LongMemEval-S data
+        id: longmemeval-data
         run: |
-          python sdk/python/benchmark/longmemeval_external_eval.py \
+          python - <<'PY' >> "$GITHUB_OUTPUT"
+          from huggingface_hub import hf_hub_download
+          path = hf_hub_download(
+              repo_id="agentscope-ai/ReMe_longmemeval_clean_s_v2",
+              filename="longmemeval_s_reme_cleaned.json",
+              repo_type="dataset",
+              revision="main",
+          )
+          print("path=" + path)
+          PY
+
+      - name: Evaluate full LongMemEval-S with reviewed evidence-session labels
+        run: |
+          python sdk/python/benchmark/evaluate_longmemeval.py \
+            --dataset "${{ steps.longmemeval-data.outputs.path }}" \
             --output longmemeval-external-results.json \
-            --max-per-type 20 \
-            --top-k 5
+            --embedding-provider sentence-transformers \
+            --model-name sentence-transformers/all-MiniLM-L6-v2 \
+            --model-revision 1110a243fdf4706b3f48f1d95db1a4f5529b4d41 \
+            --top-k 5 \
+            --candidate-k 10 \
+            --token-budget 512
 
       - name: Generate blinded developer-query relevance review packet
         run: |
@@ -617,21 +636,26 @@ jobs:
 
           result = json.loads(Path("longmemeval-external-results.json").read_text())
           assert result["source"]["dataset_sha256"] == "f8b308cc2d184d029dd2226e0c0a88eeac298e6318706d588e015beb1b83fc7d"
-          assert result["dataset_counts"]["source_questions"] == 500
-          assert result["dataset_counts"]["evaluated_answerable_questions"] > 0
-          assert result["dataset_counts"]["excluded_questions"].get("evidence_missing_after_temporal_filter", 0) == 0
-          assert set(result["overall"]) == {"lexical_bm25", "dense_cosine", "hybrid_rrf"}
-          assert result["model"]["revision"] == "1110a243fdf4706b3f48f1d95db1a4f5529b4d41"
-          assert len(result["by_question_type"]) >= 5
+          assert result["source"]["question_count"] == 500
+          assert result["source"]["positive_evidence_question_count"] > 0
+          assert result["source"]["label_validation"].startswith("passed:")
+          assert result["environment"]["embedding_is_semantic"] is True
+          assert result["environment"]["embedding_model_revision"] == "1110a243fdf4706b3f48f1d95db1a4f5529b4d41"
+          assert set(result["ranking"]) == {"lexical_bm25", "dense_cosine", "hybrid_rrf"}
+          assert len(result["ranking"]["hybrid_rrf"]["per_question_type"]) >= 5
+          assert all(v["over_budget_query_count"] == 0 for v in result["context_packing"].values())
           packet = json.loads(Path("developer-relevance-review-packet.json").read_text())
           assert packet["label_status"] == "awaiting_independent_human_review"
           assert packet["review_protocol"]["reviewers_required"] == 2
           assert len(packet["cases"]) > 0
           print("LongMemEval dataset SHA:", result["source"]["dataset_sha256"])
-          print("Evaluated answerable questions:", result["dataset_counts"]["evaluated_answerable_questions"])
-          for method, metrics in result["overall"].items():
-              print("{0}: Recall@5={1:.3f}, MRR@5={2:.3f}, nDCG@5={3:.3f}".format(
-                  method, metrics["recall_at_k"], metrics["mrr_at_k"], metrics["ndcg_at_k"]
+          print("Positive-evidence questions:", result["source"]["positive_evidence_question_count"])
+          print("No-evidence questions:", result["source"]["no_evidence_question_count"])
+          print("Future sessions excluded:", result["source"]["future_sessions_excluded_before_query_time"])
+          for method, metrics in result["ranking"].items():
+              print("{0}: Recall@5={1:.3f}, Recall@10={2:.3f}, MRR={3:.3f}, nDCG@10={4:.3f}".format(
+                  method, metrics["mean_recall_at_5"], metrics["mean_recall_at_10"],
+                  metrics["mean_mrr"], metrics["mean_ndcg_at_10"]
               ))
           print("Developer review cases awaiting two independent reviewers:", len(packet["cases"]))
           PY
