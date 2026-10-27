@@ -249,7 +249,7 @@ class TestCliSafety(unittest.TestCase):
         with redirect_stdout(buf):
             code = self.mod.main(["--database-url", ""])
         self.assertEqual(code, 2)
-        self.assertIn("No DATABASE_URL configured", buf.getvalue())
+        self.assertIn("No bootstrap database URL configured", buf.getvalue())
 
 
 class TestConfiguredEmbeddingDimension(unittest.TestCase):
