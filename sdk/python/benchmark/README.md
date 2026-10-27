@@ -1,61 +1,82 @@
-# Reproducible Retrieval Benchmarks
+# Reproducible Retrieval and Packing Benchmarks
 
-## Current recommended baseline: strategy ablation
+## What CI measures
 
-Run from the repository root after installing the project dependencies:
+The dedicated CI job runs both fixtures five times after one warm-up and uploads
+the full raw JSON output as a workflow artifact. The fixture is synthetic and
+the deterministic hash embedder is non-semantic; these runs are useful for
+ranking and selection regression checks, not a semantic-retrieval claim.
+
+| Fixture | Corpus | Queries | Evaluation design |
+|---|---:|---:|---|
+| retrieval_dataset.json | 25 memories | 14 queries | Small controlled baseline, mostly single-fact labels |
+| packing_stress_dataset.json | 96 memories | 24 queries | Paraphrase-heavy queries; two relevant facts per query; three isolated tenants |
+
+Run from the repository root after installing the SDK:
 
     python -m pip install -e sdk/python
-    python sdk/python/benchmark/retrieval_baselines.py --output sdk/python/benchmark/retrieval-baseline-results.json --repeats 5 --warmups 1 --top-k 5 --candidate-k 10 --token-budget 90
+    python sdk/python/benchmark/retrieval_baselines.py --dataset sdk/python/benchmark/retrieval_dataset.json --output retrieval-baseline-results.json --repeats 5 --warmups 1 --top-k 5 --candidate-k 10 --token-budget 90
+    python sdk/python/benchmark/retrieval_baselines.py --dataset sdk/python/benchmark/packing_stress_dataset.json --output packing-stress-results.json --repeats 5 --warmups 1 --top-k 5 --candidate-k 10 --token-budget 90
 
-The runner writes a complete JSON record containing the dataset SHA-256, source
-revision when available, Python/platform/package version, fixed embedding
-configuration, input parameters, individual latency samples, per-query ranked
-IDs, relevance metrics, packing outcomes, write-cost samples, tenant-isolation
-probes, and a real delete check. Preserve the resulting JSON as an experiment
-artifact when reporting measurements.
+The JSON output includes dataset SHA-256, source revision, environment and
+configuration, raw latency samples, per-query results, token usage, tenant
+isolation probes, and a verified deletion check.
 
-### What is compared
+## How to interpret packing results
 
-| Dimension | Variants | Measurement |
-|---|---|---|
-| Retrieval ranking | BM25 lexical-only, exact cosine dense-only, Synapse hybrid RRF | recall@k, precision@k, MRR, p50/p95/p99 ranker latency |
-| Context selection | unbudgeted top-k, rank-order fit, greedy relevance/token ratio, 0/1 knapsack DP | relevant-fact recall after selection, tokens used, budget utilization, latency |
-| Write cost | deterministic embedding and encrypted SQLite insert | per-item embedding, insert, and combined latency samples |
-| Isolation and deletion | tenant-scoped SQLite list/vector/lexical operations and sentinel deletion | cross-tenant rows and whether deletion is verified |
+The packer optimizes the sum of each candidate's numeric relevance_score under
+the token budget. The benchmark's judged relevance_memory_ids are a separate
+quality signal; they are not guaranteed to be proportional to those scores.
+The benchmark therefore records three distinct stages:
 
-Example smoke run:
+- **Candidate recall:** what proportion of the query's judged relevant memories
+  reached the hybrid top-candidate list before packing.
+- **Retained candidate-relevant recall:** what proportion of those relevant
+  candidate memories survived packing. Queries with no relevant candidate are
+  counted separately rather than blaming the packer for an unretrieved fact.
+- **Score utility retained:** how much of the raw hybrid score sum the packing
+  strategy retained, which helps inspect the optimizer's stated objective.
 
-    python sdk/python/benchmark/retrieval_baselines.py --output /tmp/synapse-baseline.json --repeats 1 --warmups 0
+Also compare overall relevant-fact recall after packing, mean tokens used,
+budget utilization, over-budget count, and packing latency. A high score sum
+does not automatically mean high judged-fact recall; conversely, high judged-fact
+recall on a hand-authored fixture is not proof of better LLM answers.
 
-### Dataset and fairness rules
+## Knapsack precision finding
 
-- Dataset: retrieval_dataset.json, a small fixed synthetic corpus with 23
-  memories, 14 judged queries, and three tenant IDs. The judgments are included
-  in the dataset so reviewers can challenge them.
-- All methods receive the same tenant-filtered corpus and query text. The
-  document/query vectors are generated with the same fixed 128-dimensional
-  deterministic hash provider.
-- The deterministic provider is NOT semantic. This experiment validates
-  ranking/packing mechanics over a controlled lexical-like fixture; it is not
-  evidence of semantic retrieval quality.
-- Ranker timings use a preloaded SQLite corpus and exclude network, process
-  startup, database-read, and query-embedding time. Query embedding, encrypted
-  insert, and packing costs are measured separately.
-- SQLite uses exact scans. This benchmark says nothing about pgvector HNSW
-  latency or recall. Compare production topology separately, with the same
-  embedding model, dataset, candidate policy, and hardware.
-- Run at least five measured repetitions after warm-up for informal local
-  comparisons. For publishable comparisons, repeat on named hardware and retain
-  every JSON output. Do not hand-pick the fastest run.
-- Tenant-isolation probes check actual tenant filters exposed by the SQLite
-  store. They are regression guards, not penetration tests or proof of
-  PostgreSQL RLS behavior.
+The old dynamic-programming implementation converted scores with
+int(relevance_score * 1000). RRF differences are often below 0.001, so this
+collapsed distinct values into integer ties. For example, a 10-token item with
+score 0.0060 could win a tie against two 5-token items with score 0.00349 each,
+even though the pair has the higher total score (0.00698 vs 0.0060). The DP now
+preserves finite floating-point relevance values and treats non-finite scores
+as zero. Regression tests assert the optimal choice remains stable when scores
+are multiplied by a positive constant and that NaN/Infinity cannot poison DP.
 
-The CI smoke test runs one repetition to validate the output schema and safety
-invariants, not to create performance claims.
+This correction fixes the quantization bug; it does not change the objective
+from score-sum maximization to ground-truth recall maximization. The larger
+stress fixture is intended to reveal whether score maximization and judged
+relevant-fact retention diverge when queries require multiple facts.
+
+## Methodology and limitations
+
+- The deterministic 128-dimensional hash embedder is not semantic. The
+  paraphrase-heavy fixture stresses wording mismatch, but does not replace a
+  real neural embedding model or user-derived relevance judgments.
+- Every ranking method receives the same tenant-filtered corpus and query.
+  BM25, exact cosine, and hybrid RRF rankings are compared over the same
+  deterministic vectors. SQLite is a local exact scan, not a proxy for pgvector
+  HNSW latency or recall.
+- Ranker timings use a preloaded corpus and exclude process startup, database
+  reads, query embedding, network, and LLM answer generation. Write and packing
+  timings are reported separately.
+- The dataset labels are hand-authored. Review the JSON per-query results, not
+  only aggregate metrics; keep all repetitions and do not select only the best
+  run.
+- The CI run validates reproducible mechanics and stores measurements. Its
+  timings are machine-specific and must not be published as a product SLA.
 
 ---
-
 ## Historical Mem0 head-to-head (run_mem0_benchmark)
 
 The result and numbers in this legacy section are a single historical run from
