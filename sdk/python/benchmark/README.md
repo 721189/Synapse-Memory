@@ -42,6 +42,20 @@ budget utilization, over-budget count, and packing latency. A high score sum
 does not automatically mean high judged-fact recall; conversely, high judged-fact
 recall on a hand-authored fixture is not proof of better LLM answers.
 
+## Packing objective ablation
+
+The harness now compares a benchmark-only `rank_discount_dp` method alongside
+raw-score DP. It assigns candidate rank *r* utility `1 / log2(r + 1)` and runs
+the same DP under the same token budget. This tests whether rank position is a
+better selection signal than the raw RRF score sum on these fixtures. Results
+are mapped back to the original retrieval records before evaluating score
+utility and judged-fact recall.
+
+`rank_discount_dp` is an experiment only; production continues using the
+existing raw-score DP. Do not promote the rank-discount objective until it is
+tested with a real semantic embedder, representative user queries, and
+independent relevance judgments.
+
 ## Knapsack precision finding
 
 The old dynamic-programming implementation converted scores with
