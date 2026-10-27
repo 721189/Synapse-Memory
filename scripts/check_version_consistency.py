@@ -50,7 +50,7 @@ def main() -> int:
     client_version = find("sdk/python/synapse_memory/client.py", r'^SDK_VERSION = "([^"]+)"', "SDK_VERSION")
     api_version = find(
         "sdk/python/synapse_memory/api/fastapi_server.py",
-        r'^\s+version="([^"]+)"',
+        r'^[ \t]+version="([^"]+)"',
         "FastAPI OpenAPI version",
     )
     changelog_heading = find(
