@@ -65,6 +65,21 @@ class TestConfiguredProviderOutputDimensions(unittest.TestCase):
             embedder = SynapseEmbedder()
         self.assertEqual(embedder.dimension, 768)
 
+    def test_empty_dimension_environment_uses_provider_default(self):
+        # Compose can legally expand an unset optional variable to the empty
+        # string. It must behave like an unset value, not crash at int("").
+        with patch.dict(
+            os.environ,
+            {
+                "NODE_ENV": "development",
+                "SYNAPSE_EMBEDDING_PROVIDER": "deterministic",
+                "SYNAPSE_EMBEDDING_DIMENSION": "",
+            },
+            clear=True,
+        ):
+            embedder = SynapseEmbedder()
+        self.assertEqual(embedder.dimension, 128)
+
 
 class TestDefaultProviderDimension(unittest.TestCase):
     def test_gemini_provider_defaults_to_3072_dimensions(self):
