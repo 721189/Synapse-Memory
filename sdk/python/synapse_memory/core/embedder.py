@@ -113,7 +113,7 @@ class SynapseEmbedder:
                 f"Unknown embedding provider '{self.provider_name}'; falling back to deterministic hash provider."
             )
             raw_dimension = os.getenv("SYNAPSE_EMBEDDING_DIMENSION", "").strip()
-                    dim = int(raw_dimension) if raw_dimension else 128
+            dim = int(raw_dimension) if raw_dimension else 128
             return LocalEmbeddingProvider(dim=dim)
         raise RuntimeError(
             f"Unknown embedding provider '{self.provider_name}'. "
