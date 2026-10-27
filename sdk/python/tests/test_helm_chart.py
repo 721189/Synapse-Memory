@@ -174,7 +174,7 @@ class TestEngineEnvParityWithCompose(unittest.TestCase):
     def test_migration_role_is_explicit(self):
         self.assertIn("- name: SYNAPSE_DB_ADMIN_ROLE", self.engine)
         self.assertIn("SYNAPSE_DB_ADMIN_ROLE:", read(CONFIGMAP))
-        self.assertIn("config.dbAdminRole", read(VALUES))
+        self.assertIn('dbAdminRole: "synapse_admin"', read(VALUES))
 
     def test_migrate_then_run_env_present(self):
         self.assertIn("- name: SYNAPSE_APPLY_DB_SCHEMA", self.engine)
