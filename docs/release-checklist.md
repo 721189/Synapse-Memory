@@ -10,6 +10,7 @@ the artifacts below carry the same version and the tests for that commit passed.
 |---|---|
 | Python SDK | `sdk/python/pyproject.toml` → `version` |
 | Runtime string | `sdk/python/synapse_memory/__init__.py` → `__version__` |
+| SDK client/API strings | `client.py` → `SDK_VERSION`; FastAPI `version` in `api/fastapi_server.py`; `sdk/python/setup.py` |
 | Workspace manifest | `pyproject.toml` (root) → `version` |
 | Gateway package | `package.json` → `version` |
 | Engine/gateway images | `deploy/docker-compose.yml` → `GATEWAY_VERSION` default |
@@ -21,7 +22,9 @@ the artifacts below carry the same version and the tests for that commit passed.
 
 1. **CI green on the exact commit.** Every job in *Synapse CI/CD Matrix
    Pipeline* must pass, including `Python PGVector Integration Tests` (live
-   Postgres + non-owner runtime role) and `Split Docker Images + Compose Smoke`.
+   Postgres + non-owner runtime role), the synthetic 3,072-dimensional halfvec HNSW
+   integration test, `Split Docker Images + Compose Smoke`, and a fresh-database
+   deployment smoke from empty volumes.
    A red run means no release, regardless of what the README says.
 2. **Version bump** in every row of the table above; add a dated `CHANGELOG.md`
    section describing user-visible changes and any migration notes.
