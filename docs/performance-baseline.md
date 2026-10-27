@@ -13,7 +13,7 @@ Use the offline, machine-readable benchmark for a repeatable strategy comparison
     python sdk/python/benchmark/retrieval_baselines.py --output sdk/python/benchmark/retrieval-baseline-results.json --repeats 5 --warmups 1 --top-k 5 --candidate-k 10 --token-budget 90
 
 The harness stores dataset SHA-256 and source revision alongside raw latency
-samples and per-query relevance judgments. Its 23-document / 14-query synthetic
+samples and per-query relevance judgments. Its 25-document / 14-query synthetic
 fixture compares BM25 lexical-only, exact dense cosine, hybrid RRF, and four
 context-selection strategies. It also records embedding/encrypted-insert cost,
 tenant-filter leakage probes on SQLite, and a verified deletion check.
