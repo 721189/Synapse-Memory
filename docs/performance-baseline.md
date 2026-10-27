@@ -44,6 +44,18 @@ Interpretation constraints:
 - CI timings verify implementation and provide reproducible comparisons; they are
   not SLAs and should not be advertised as production latency.
 
+## Benchmark-only rank-discount objective
+
+In addition to raw-score DP, the benchmark now evaluates a rank-discount DP
+ablation with utility `1 / log2(rank + 1)`. It uses the same candidate set and
+token budget but values higher-ranked candidates more directly. This lets us
+compare raw score utility retained versus human-judged fact retention without
+changing production behavior.
+
+Treat this as an experiment, not a recommendation: the rank-discount objective
+still needs evaluation with real semantic embeddings and independent relevance
+labels before it can be considered for the production packer.
+
 ## Historical operational stress-test observations
 
 Measured locally (SQLite backend, test_load_resilience.py, 17 offline tests) —
