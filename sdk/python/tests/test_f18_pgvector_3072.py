@@ -1,68 +1,99 @@
-"""P0: 3072-d production embedding path against a real pgvector database.
+"""High-dimensional pgvector coverage without paid embedding API calls.
 
-Gated: runs only when DATABASE_URL points at PostgreSQL *and* the operator opts
-in with SYNAPSE_LIVE_GEMINI=1 (a real provider call is expensive and needs a
-key). Otherwise it skips, so CI without a key still passes.
-
-Why this exists: the rest of the suite uses 128- or 384-dimensional vectors,
-which never exercises the shipped default (gemini, 3072-d) or the HNSW index
-built at that width.
+Static tests always run. The live test is enabled by SYNAPSE_LIVE_PGVECTOR_3072=1
+and DATABASE_URL, and should point at an isolated, disposable PostgreSQL database.
+It uses synthetic vectors because this test is about pgvector type/index/query
+compatibility, not semantic embedding quality.
 """
 import os
 import unittest
 
 import pytest
 
-from synapse_memory.core.embedding_provider import GeminiEmbeddingProvider
+from synapse_memory.core.pgvector_db import PGVectorMemoryStore
 
 DATABASE_URL = os.environ.get("DATABASE_URL", "")
-LIVE = os.environ.get("SYNAPSE_LIVE_GEMINI") == "1" and bool(DATABASE_URL)
+LIVE = os.environ.get("SYNAPSE_LIVE_PGVECTOR_3072") == "1" and bool(DATABASE_URL)
 
 
-@pytest.mark.skipif(not LIVE, reason="needs DATABASE_URL + SYNAPSE_LIVE_GEMINI=1")
+def _store_without_connection(dimension: int) -> PGVectorMemoryStore:
+    store = object.__new__(PGVectorMemoryStore)
+    store.dimension = dimension
+    store.m = 16
+    store.ef_construction = 64
+    return store
+
+
+class TestHNSWDimensionContract(unittest.TestCase):
+    def test_standard_vector_index_is_used_up_to_2000_dimensions(self) -> None:
+        store = _store_without_connection(2000)
+        self.assertIn("embedding vector_cosine_ops", store._hnsw_index_sql())
+        self.assertNotIn("halfvec_cosine_ops", store._hnsw_index_sql())
+        self.assertEqual(store._vector_distance_sql(), "embedding <=> %s::vector")
+
+    def test_halfvec_expression_index_is_used_above_2000_dimensions(self) -> None:
+        store = _store_without_connection(3072)
+        ddl = store._hnsw_index_sql()
+        self.assertIn("(embedding::halfvec(3072)) halfvec_cosine_ops", ddl)
+        self.assertIn("(embedding::halfvec(3072)) <=> (%s)::halfvec(3072)", store._vector_distance_sql())
+
+    def test_dimensions_above_halfvec_limit_are_rejected(self) -> None:
+        with self.assertRaisesRegex(ValueError, "1–4000 dimensions"):
+            PGVectorMemoryStore(
+                dimension=4001, auto_init=False, encryption_provider=object()
+            )
+
+
+@pytest.mark.skipif(
+    not LIVE,
+    reason="set DATABASE_URL and SYNAPSE_LIVE_PGVECTOR_3072=1 for isolated live pgvector validation",
+)
 class TestProductionDimension(unittest.TestCase):
-    def test_3072_dimensional_round_trip_and_vector_search(self):
-        from synapse_memory.core.pgvector_db import PGVectorMemoryStore
+    def test_3072_dimensional_hnsw_index_insert_and_query(self) -> None:
+        import psycopg2
 
-        store = PGVectorMemoryStore(connection_string=DATABASE_URL, dimension=3072)
+        store = PGVectorMemoryStore(
+            connection_string=DATABASE_URL,
+            dimension=3072,
+            fail_closed=True,
+        )
         self.assertTrue(store.is_connected, "pgvector store failed to connect")
+        tenant = "tenant_3072_ci"
+        memory_id = "mem_3072_synthetic_probe"
+        vector = [0.0] * 3072
+        vector[17] = 1.0
 
-        provider = GeminiEmbeddingProvider(api_key=os.environ["GEMINI_API_KEY"])
-        self.assertEqual(provider.dimension, 3072)
+        try:
+            store.delete_memory(memory_id, tenant_id=tenant)
+            store.insert_memory(
+                {
+                    "id": memory_id,
+                    "tenant_id": tenant,
+                    "content": "Synthetic 3072-dimensional index compatibility probe.",
+                    "category": "test",
+                    "confidence": 0.99,
+                    "created_at": 1.0,
+                    "access_count": 0,
+                    "token_cost": 8,
+                    "embedding": vector,
+                }
+            )
 
-        text = "The deployment region is eu-west-1 for cluster alpha."
-        vector = provider.embed(text)
-        self.assertEqual(len(vector), 3072, "provider did not return 3072 dimensions")
+            result = store.vector_search(vector, top_k=1, tenant_id=tenant)
+            self.assertTrue(result, "3072-dimensional vector_search returned no records")
+            self.assertEqual(result[0]["id"], memory_id)
 
-        store.insert_memory({
-            "id": "mem_3072_probe",
-            "tenant_id": "tenant_3072",
-            "content": text,
-            "category": "fact",
-            "confidence": 0.99,
-            "created_at": 1.0,
-            "access_count": 0,
-            "token_cost": 20,
-            "embedding": vector,
-        })
-
-        results = store.vector_search(vector, top_k=1, tenant_id="tenant_3072")
-        self.assertTrue(results, "vector_search returned nothing at 3072 dimensions")
-        self.assertEqual(results[0]["id"], "mem_3072_probe")
-
-        # A mismatched width must fail closed rather than silently corrupt the index.
-        with self.assertRaises(Exception):
-            store.insert_memory({
-                "id": "mem_3072_bad",
-                "tenant_id": "tenant_3072",
-                "content": "wrong width",
-                "category": "fact",
-                "confidence": 0.5,
-                "created_at": 1.0,
-                "access_count": 0,
-                "token_cost": 5,
-                "embedding": [0.0] * 384,
-            })
+            with psycopg2.connect(DATABASE_URL) as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        "SELECT indexdef FROM pg_indexes "
+                        "WHERE schemaname = 'public' AND indexname = 'idx_memories_hnsw';"
+                    )
+                    row = cur.fetchone()
+            self.assertIsNotNone(row, "HNSW index was not created")
+            self.assertIn("halfvec_cosine_ops", row[0])
+        finally:
+            store.delete_memory(memory_id, tenant_id=tenant)
 
 
 if __name__ == "__main__":
