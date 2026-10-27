@@ -152,11 +152,17 @@ def _encode_many(embedder: Any, texts: Sequence[str]) -> List[List[float]]:
     return [embedder.embed_query(text) for text in texts]
 
 
-def _validate_source_records(records: Any) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
-    if not isinstance(records, list) or len(records) != 500:
+def _validate_source_records(
+    records: Any, expected_count: Optional[int] = 500
+) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
+    if not isinstance(records, list) or (
+        expected_count is not None and len(records) != expected_count
+    ):
         raise ValueError(
-            "Expected the reviewed LongMemEval-S release with exactly 500 records; "
-            "received {0}.".format(len(records) if isinstance(records, list) else type(records).__name__)
+            "Expected {0} LongMemEval records; received {1}.".format(
+                expected_count if expected_count is not None else "a list of",
+                len(records) if isinstance(records, list) else type(records).__name__,
+            )
         )
 
     ids = [str(item.get("question_id", "")) for item in records]
