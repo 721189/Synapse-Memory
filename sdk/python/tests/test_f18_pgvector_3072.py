@@ -56,6 +56,8 @@ class TestProductionDimension(unittest.TestCase):
             connection_string=DATABASE_URL,
             dimension=3072,
             fail_closed=True,
+            admin_role="synapse_test",
+            runtime_role="synapse_test",
         )
         self.assertTrue(store.is_connected, "pgvector store failed to connect")
         tenant = "tenant_3072_ci"
