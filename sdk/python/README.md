@@ -36,7 +36,7 @@ with SynapseClient(
     print(created.id, result.fused_context)
 ```
 
-The client automatically retries safe reads and explicitly read-only retrieval requests. It does not automatically replay mutating requests after ambiguous failures; callers should reconcile the operation before manually retrying.
+The client automatically retries idempotent `GET`/`HEAD`/`OPTIONS` requests and honours `Retry-After`. It does not automatically replay `POST` requests (including `/query`, which updates access metadata) after an ambiguous failure; callers should reconcile the operation before manually retrying, or provide their own idempotency mechanism.
 
 ## Testing
 
