@@ -57,6 +57,67 @@ the comparison isolates the effect of embedding choice on this fixture; it does
 not prove general production quality or better LLM answers. Do not switch the
 production packer objective based on this small set alone.
 
+## External validation with reviewed LongMemEval evidence sessions
+
+The semantic CI job downloads the corrected ReMe Cleaned-S release of LongMemEval
+and runs the full **500-question** set through Synapse's retrieval and context
+packing code. It verifies the exact dataset SHA-256 before evaluation, uses the
+published corrected `answer_session_ids` evidence labels, and excludes every
+history session later than the question timestamp. A missing or future-dated
+gold evidence session fails validation rather than silently changing the metric.
+The raw conversation dataset is not committed to this repository or uploaded
+as a workflow artifact.
+
+The evaluator compares BM25, pinned neural dense retrieval, and RRF hybrid
+ranking at Recall@5, Recall@10, Precision@5, MRR, and nDCG@10. It also compares
+context-packing strategies using evidence recall at budget, candidate recall,
+retention, token usage, and budget violations. It measures retrieval of evidence
+sessions, not answer-generation accuracy. LongMemEval is a general long-term
+conversational-memory benchmark, not a developer-only benchmark.
+
+Run it locally after installing the pinned semantic dependencies and downloading
+the reviewed dataset file from the source card:
+
+```bash
+python -m pip install -e sdk/python
+python -m pip install --index-url https://download.pytorch.org/whl/cpu torch==2.14.1+cpu
+python -m pip install -r sdk/python/benchmark/requirements-semantic.txt
+python sdk/python/benchmark/evaluate_longmemeval.py \
+  --dataset /path/to/longmemeval_s_reme_cleaned.json \
+  --output longmemeval-external-results.json \
+  --embedding-provider sentence-transformers \
+  --model-name sentence-transformers/all-MiniLM-L6-v2 \
+  --model-revision 1110a243fdf4706b3f48f1d95db1a4f5529b4d41 \
+  --top-k 5 --candidate-k 10 --token-budget 512
+```
+
+The source is
+[the corrected ReMe Cleaned-S dataset card](https://huggingface.co/datasets/agentscope-ai/ReMe_longmemeval_clean_s_v2),
+pinned to snapshot `f8bd08fd19ef175c99c7065c322191e16c69f0ea`. The card reports
+SHA-256 `f8b308cc2d184d029dd2226e0c0a88eeac298e6318706d588e015beb1b83fc7d`,
+but the file retrieved from that exact snapshot hashes to
+`57ed3225673015880c42eaf764406e656d9ac3fc4821337e3ec3c28ac8259823`.
+CI records this discrepancy explicitly and validates the actual bytes, all 500
+records, and every reviewed evidence timestamp before scoring. The dataset card
+documents corrections to answer and evidence-session labels, including
+future-evidence leakage. This is a third-party corrected benchmark label set,
+not a blind annotation study conducted specifically for Synapse. Do not
+redistribute the downloaded data without checking the dataset's applicable
+license and terms.
+
+## Developer-specific relevance review (human step required)
+
+The same CI job creates a blinded packet from the top-ranked developer-memory
+candidates across deterministic and neural runs. Reviewers score candidate
+evidence from 0 (irrelevant), 1 (related but insufficient), to 2 (directly
+useful evidence). Only the blind packet is uploaded. The mapping key is deliberately not published;
+it can be regenerated after review from the same dataset and raw benchmark artifacts
+using the same deterministic seed. Send only the packet to two reviewers and do
+not share raw result artifacts or the regenerated key with them. The packet is explicitly marked
+`awaiting_independent_human_review`: CI cannot manufacture independent labels.
+Resolve disagreements and then calculate nDCG/MRR from adjudicated labels
+before using this developer-specific evaluation to support product claims.
+
 ## How to interpret packing results
 
 The packer optimizes the sum of each candidate's numeric relevance_score under
@@ -194,3 +255,60 @@ engine code, not benchmark noise.
 - Live PostgreSQL tables (`test_pgvector_integration.py`, 20/20 passing) are
   gated behind a running PG and skipped when absent — no daemon required to run
   the harness itself.
+
+
+## Recording independent developer-query relevance judgments
+
+The CI job produces a blinded JSON packet, but it cannot create independent
+human labels. Download the packet artifact from the
+[latest successful semantic CI run](https://github.com/721189/Synapse-Memory/actions/workflows/ci.yml)
+and give each reviewer their own separate copy. Do not let reviewers edit the
+same file or see each other's scores before submitting. Keep the mapping key
+and raw benchmark results private until both reviews are complete.
+
+Each reviewer grades every candidate from 0 (irrelevant), 1 (related but
+insufficient), to 2 (directly useful evidence). Merge the two returned copies
+into one packet by filling `reviewer_a.relevance` and
+`reviewer_b.relevance`. For every disagreement, add
+`adjudicated_relevance` (0/1/2) and a non-empty `adjudication_note` after
+discussion. Equal labels are accepted without adjudication. Do not alter
+candidate IDs, case IDs, or query/candidate content.
+
+Download the latest successful run's `semantic-packing-evaluation` artifact from
+[GitHub Actions](https://github.com/721189/Synapse-Memory/actions/workflows/ci.yml)
+and extract `semantic-eval-hash-baseline.json` and `semantic-eval-neural.json`.
+The mapping key is intentionally not uploaded. Regenerate it deterministically
+from the version-controlled fixture and the exact result files (this also writes
+a regenerated blind packet; compare it to the packet reviewed by the humans):
+
+```bash
+python sdk/python/benchmark/create_blind_developer_review_packet.py \\
+  --dataset sdk/python/benchmark/semantic_packing_eval_dataset.json \\
+  --results semantic-eval-hash-baseline.json semantic-eval-neural.json \\
+  --packet-output regenerated-developer-review-packet.json \\
+  --mapping-output developer-relevance-review-key.json \\
+  --max-queries 12
+```
+
+Then install the SDK and run the scorer:
+
+```bash
+python -m pip install -e sdk/python
+python sdk/python/benchmark/score_developer_relevance_reviews.py \
+  --packet reviewed-developer-relevance.json \
+  --mapping-key developer-relevance-review-key.json \
+  --results semantic-eval-hash-baseline.json semantic-eval-neural.json \
+  --output developer-relevance-scored.json
+```
+
+The scorer fails closed on missing labels, invalid grades, unresolved
+disagreements, missing mappings, or unjudged ranked candidates. It reports
+reviewer agreement, nominal and quadratic-weighted Cohen's kappa, adjudicated
+nDCG@5, MRR@5, precision@5, and recall within the reviewed candidate pool.
+The recall metric is **not full-corpus recall**. Because this is a small sample
+of curated developer-memory queries, treat results as exploratory evidence,
+not a general product claim. Do not publish the mapping key or raw conversation
+dataset.
+
+A durable record of the current LongMemEval-S run and its limitations is
+available in [the dated evaluation report](reports/longmemeval-2026-10-27.md).
