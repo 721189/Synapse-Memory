@@ -474,7 +474,7 @@ jobs:
   semantic-retrieval-benchmark:
     name: Semantic Retrieval + Packing Evaluation
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 45
     env:
       HF_HOME: ~/.cache/huggingface
       HF_HUB_DISABLE_TELEMETRY: "1"
@@ -593,12 +593,72 @@ jobs:
               )
           PY
 
-      - name: Upload semantic evaluation raw results
+      - name: Evaluate retrieval against corrected LongMemEval evidence labels
+        run: |
+          python sdk/python/benchmark/longmemeval_external_eval.py \
+            --output longmemeval-external-results.json \
+            --max-per-type 20 \
+            --top-k 5
+
+      - name: Generate blinded developer-query relevance review packet
+        run: |
+          python sdk/python/benchmark/create_blind_developer_review_packet.py \
+            --dataset sdk/python/benchmark/semantic_packing_eval_dataset.json \
+            --results semantic-eval-hash-baseline.json semantic-eval-neural.json \
+            --packet-output developer-relevance-review-packet.json \
+            --mapping-output developer-relevance-review-key.json \
+            --max-queries 12
+
+      - name: Validate external benchmark provenance and output
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          result = json.loads(Path("longmemeval-external-results.json").read_text())
+          assert result["source"]["dataset_sha256"] == "f8b308cc2d184d029dd2226e0c0a88eeac298e6318706d588e015beb1b83fc7d"
+          assert result["dataset_counts"]["source_questions"] == 500
+          assert result["dataset_counts"]["evaluated_answerable_questions"] > 0
+          assert result["dataset_counts"]["excluded_questions"].get("evidence_missing_after_temporal_filter", 0) == 0
+          assert set(result["overall"]) == {"lexical_bm25", "dense_cosine", "hybrid_rrf"}
+          assert result["model"]["revision"] == "1110a243fdf4706b3f48f1d95db1a4f5529b4d41"
+          assert len(result["by_question_type"]) >= 5
+          packet = json.loads(Path("developer-relevance-review-packet.json").read_text())
+          assert packet["label_status"] == "awaiting_independent_human_review"
+          assert packet["review_protocol"]["reviewers_required"] == 2
+          assert len(packet["cases"]) > 0
+          print("LongMemEval dataset SHA:", result["source"]["dataset_sha256"])
+          print("Evaluated answerable questions:", result["dataset_counts"]["evaluated_answerable_questions"])
+          for method, metrics in result["overall"].items():
+              print("{0}: Recall@5={1:.3f}, MRR@5={2:.3f}, nDCG@5={3:.3f}".format(
+                  method, metrics["recall_at_k"], metrics["mrr_at_k"], metrics["ndcg_at_k"]
+              ))
+          print("Developer review cases awaiting two independent reviewers:", len(packet["cases"]))
+          PY
+
+      - name: Upload semantic and external benchmark results
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: semantic-packing-evaluation-${{ github.sha }}
           path: |
             semantic-eval-hash-baseline.json
             semantic-eval-neural.json
+            longmemeval-external-results.json
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Upload blinded developer relevance review packet
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: developer-relevance-review-packet-${{ github.sha }}
+          path: developer-relevance-review-packet.json
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Upload separate developer relevance review key
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: developer-relevance-review-key-${{ github.sha }}
+          path: developer-relevance-review-key.json
           if-no-files-found: error
           retention-days: 30
