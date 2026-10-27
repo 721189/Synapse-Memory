@@ -85,7 +85,7 @@ class DeveloperRelevanceScoringTests(unittest.TestCase):
         packet, mapping, result = fixtures(disagree=True)
         scored = MODULE.score_reviews(packet, mapping, [("fixture.json", result)])
         self.assertEqual(scored["judgments"]["reviewer_disagreement_count"], 1)
-        self.assertEqual(scored["judgments"]["reviewer_disagreement_rate"], 1 / 3)
+        self.assertAlmostEqual(scored["judgments"]["reviewer_disagreement_rate"], 1 / 3, places=6)
 
     def test_invalid_grades_and_unjudged_ranked_candidates_fail_closed(self):
         packet, mapping, result = fixtures()
