@@ -44,13 +44,19 @@ SOURCE_DATASET = (
 )
 SOURCE_URL = (
     "https://huggingface.co/datasets/agentscope-ai/"
-    "ReMe_longmemeval_clean_s_v2/resolve/main/"
+    "ReMe_longmemeval_clean_s_v2/resolve/"
+    "f8bd08fd19ef175c99c7065c322191e16c69f0ea/"
     "longmemeval_s_reme_cleaned.json"
 )
-# Generated dataset SHA-256 published by the third-party dataset card. A changed
-# file must be reviewed, not silently accepted as the same benchmark.
-EXPECTED_DATASET_SHA256 = (
+# The dataset card reports f8b308..., but the file downloaded from the exact
+# Hugging Face snapshot below has SHA-256 57ed322... . Pin the observed snapshot
+# and actual bytes; the evaluator then validates all evidence IDs and timestamps.
+DATASET_REVISION = "f8bd08fd19ef175c99c7065c322191e16c69f0ea"
+DATASET_CARD_REPORTED_SHA256 = (
     "f8b308cc2d184d029dd2226e0c0a88eeac298e6318706d588e015beb1b83fc7d"
+)
+EXPECTED_DATASET_SHA256 = (
+    "57ed3225673015880c42eaf764406e656d9ac3fc4821337e3ec3c28ac8259823"
 )
 MODEL_NAME = "sentence-transformers/all-MiniLM-L6-v2"
 MODEL_REVISION = "1110a243fdf4706b3f48f1d95db1a4f5529b4d41"
@@ -522,7 +528,10 @@ def evaluate(
                 "human annotation study performed specifically for Synapse."
             ),
             "upstream_dataset": "xiaowu0162/longmemeval-cleaned, revision 98d7416c24c778c2fee6e6f3006e7a073259d48f",
+            "dataset_revision": DATASET_REVISION,
+            "dataset_card_reported_sha256": DATASET_CARD_REPORTED_SHA256,
             "reviewed_ground_truth_sha256": "97dd2b0df872f12c682041c44fe8082f9fa55ab882f5c78c9237b7c77ba9bb00",
+            "dataset_card_sha256_mismatch": dataset_sha != DATASET_CARD_REPORTED_SHA256,
             **dataset_stats,
         },
         "environment": {
