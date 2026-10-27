@@ -617,6 +617,7 @@ jobs:
           PY
 
       - name: Evaluate full LongMemEval-S with reviewed evidence-session labels
+        id: longmemeval_eval
         run: |
           python sdk/python/benchmark/evaluate_longmemeval.py \
             --dataset "${{ steps.longmemeval-data.outputs.path }}" \
@@ -629,7 +630,7 @@ jobs:
             --token-budget 512
 
       - name: Validate external benchmark provenance and output
-        if: always()
+        if: always() && steps.longmemeval_eval.outcome == 'success'
         run: |
           python - <<'PY'
           import json
