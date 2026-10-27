@@ -318,6 +318,18 @@ def _fetchone(cur, sql, params):
     return cur.fetchone()
 
 
+def bootstrap_role_conflict(bootstrap_role, migration_role):
+    """Explain why the bootstrap credential must not be the migration role."""
+    if bootstrap_role and bootstrap_role == migration_role:
+        return (
+            "Refusing to provision with the bootstrap connection and migration role "
+            + repr(migration_role) + " as the same PostgreSQL role. Use a separate "
+            "bootstrap/superuser DSN for --database-url and set "
+            "SYNAPSE_MIGRATION_DATABASE_URL to the non-superuser migration role DSN."
+        )
+    return None
+
+
 def provision(dsn, runtime_role, admin_role, runtime_password, admin_password,
               verify_only=False, skip_verify=False):
     """Apply the plan, then verify the invariant.
@@ -331,13 +343,9 @@ def provision(dsn, runtime_role, admin_role, runtime_password, admin_password,
         cur = conn.cursor()
         caller_row = _fetchone(cur, "SELECT current_user;", ())
         caller_role = caller_row[0] if caller_row else None
-        if not verify_only and caller_role == admin_role:
-            failures.append(
-                "Refusing to provision with the bootstrap connection and migration role "
-                + repr(admin_role) + " as the same PostgreSQL role. Use a separate "
-                "bootstrap/superuser DSN for --database-url and set "
-                "SYNAPSE_MIGRATION_DATABASE_URL to the non-superuser migration role DSN."
-            )
+        conflict = None if verify_only else bootstrap_role_conflict(caller_role, admin_role)
+        if conflict:
+            failures.append(conflict)
             return failures, advisories
 
         admin_exists = bool(_fetchone(
