@@ -274,8 +274,10 @@ into one packet by filling `reviewer_a.relevance` and
 discussion. Equal labels are accepted without adjudication. Do not alter
 candidate IDs, case IDs, or query/candidate content.
 
-After extracting the private mapping key and the raw
-`retrieval-baselines-<commit>` artifact, install the SDK and run:
+After extracting the private mapping key from the workflow workspace or a
+privately retained copy, and extracting `semantic-eval-hash-baseline.json` and
+`semantic-eval-neural.json` from the
+[`semantic-packing-evaluation` artifact](https://github.com/721189/Synapse-Memory/actions/runs/40542907118/artifacts/12752493391), install the SDK and run:
 
 ```bash
 python -m pip install -e sdk/python
