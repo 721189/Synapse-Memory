@@ -252,12 +252,6 @@ class TestCliSafety(unittest.TestCase):
         self.assertIn("No DATABASE_URL configured", buf.getvalue())
 
 
-if __name__ == "__main__":
-    unittest.main()
-
-
-
-
 class TestConfiguredEmbeddingDimension(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -300,3 +294,5 @@ class TestConfiguredEmbeddingDimension(unittest.TestCase):
                 self.mod._configured_embedding_dimension()
 
 
+if __name__ == "__main__":
+    unittest.main()
