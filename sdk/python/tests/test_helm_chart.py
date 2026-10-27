@@ -10,9 +10,9 @@ that `helm lint` / YAML parsing silently PASS but production breaks on:
     engine routing works for ANY release name (a hardcoded hostname only
     works for one specific naming scheme).
   * kubelet ``$(VAR)`` expansion only sees variables defined EARLIER in the
-    same env list: ``DB_PASSWORD`` must precede ``DATABASE_URL`` and
+    same env list: ``SYNAPSE_APP_DB_PASSWORD`` must precede ``DATABASE_URL`` and
     ``REDIS_PASSWORD`` must precede ``REDIS_URL``, otherwise pods boot with
-    the literal ``$(DB_PASSWORD)`` as the password and fail-closed startup
+    the literal ``$(SYNAPSE_APP_DB_PASSWORD)`` as the password and fail-closed startup
     crash-loops.
   * Engine env parity with ``deploy/docker-compose.yml``: REDIS_URL,
     RATE_LIMIT_PER_MIN, ALLOWED_ORIGINS, GEMINI_API_KEY, SYNAPSE_APPLY_DB_SCHEMA.
