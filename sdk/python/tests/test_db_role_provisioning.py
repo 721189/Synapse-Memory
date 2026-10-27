@@ -52,6 +52,10 @@ class TestProvisioningContract(unittest.TestCase):
         self.assertEqual(self.mod.RUNTIME_TABLE_PRIVILEGES,
                          ("SELECT", "INSERT", "UPDATE", "DELETE"))
 
+    def test_bootstrap_and_migration_roles_must_be_distinct(self):
+        self.assertIsNone(self.mod.bootstrap_role_conflict("postgres", ADMIN))
+        self.assertIsNotNone(self.mod.bootstrap_role_conflict(ADMIN, ADMIN))
+
     def test_runtime_role_attributes_exclude_superuser_and_bypassrls(self):
         attrs = self.mod.LEAST_PRIVILEGE_ATTRS
         tokens = attrs.split()
@@ -250,4 +254,49 @@ class TestCliSafety(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+
+
+class TestConfiguredEmbeddingDimension(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.mod = load_module()
+
+    def test_default_dimensions_match_supported_providers(self):
+        from unittest.mock import patch
+
+        cases = (
+            ("gemini", 3072),
+            ("openai", 1536),
+            ("sentence-transformers", 384),
+            ("deterministic", 128),
+        )
+        for provider, expected in cases:
+            with self.subTest(provider=provider), patch.dict(
+                os.environ, {"SYNAPSE_EMBEDDING_PROVIDER": provider}, clear=True
+            ):
+                self.assertEqual(self.mod._configured_embedding_dimension(), expected)
+
+    def test_explicit_dimension_overrides_provider_default(self):
+        from unittest.mock import patch
+
+        with patch.dict(
+            os.environ,
+            {"SYNAPSE_EMBEDDING_PROVIDER": "gemini", "SYNAPSE_EMBEDDING_DIMENSION": "1536"},
+            clear=True,
+        ):
+            self.assertEqual(self.mod._configured_embedding_dimension(), 1536)
+
+    def test_invalid_or_unsupported_dimension_fails_closed(self):
+        from unittest.mock import patch
+
+        with patch.dict(
+            os.environ,
+            {"SYNAPSE_EMBEDDING_PROVIDER": "gemini", "SYNAPSE_EMBEDDING_DIMENSION": "4001"},
+            clear=True,
+        ):
+            with self.assertRaisesRegex(ValueError, "between 1 and 4000"):
+                self.mod._configured_embedding_dimension()
+
 
