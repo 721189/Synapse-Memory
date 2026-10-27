@@ -27,6 +27,11 @@ COPY demo ./demo
 COPY src ./src
 RUN npm run build && npm prune --omit=dev
 
+# npm is build-time tooling only; the production process runs the bundled Node
+# application directly. Remove the globally bundled npm CLI and its dependency
+# tree so old package-manager advisories are not shipped in the runtime image.
+RUN rm -rf /usr/local/lib/node_modules/npm /usr/local/bin/npm /usr/local/bin/npx
+
 # Run as a non-root user.
 RUN groupadd --system synapse && useradd --system --gid synapse --home /app synapse \
     && chown -R synapse:synapse /app
