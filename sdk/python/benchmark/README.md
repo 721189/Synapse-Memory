@@ -106,9 +106,10 @@ applicable license and terms.
 The same CI job creates a blinded packet from the top-ranked developer-memory
 candidates across deterministic and neural runs. Reviewers score candidate
 evidence from 0 (irrelevant), 1 (related but insufficient), to 2 (directly
-useful evidence). The packet and its mapping key are uploaded as separate
-artifacts; send only the packet to two reviewers and keep the key private until
-both reviews are complete. The packet is explicitly marked
+useful evidence). Only the blind packet is uploaded. The mapping key is deliberately not published;
+it can be regenerated after review from the same dataset and raw benchmark artifacts
+using the same deterministic seed. Send only the packet to two reviewers and do
+not share raw result artifacts or the regenerated key with them. The packet is explicitly marked
 `awaiting_independent_human_review`: CI cannot manufacture independent labels.
 Resolve disagreements and then calculate nDCG/MRR from adjudicated labels
 before using this developer-specific evaluation to support product claims.
