@@ -2,9 +2,9 @@
 
 ## Unreleased
 
-## 1.3.1 — release candidate 2026-10-27
+## 1.3.1 — released 2026-10-27
 
-- **Post-release correctness fixes (pending PyPI publication):** support the shipped
+- **Embedding compatibility and release correctness:** support the shipped
   3,072-dimensional embedding width using a pgvector-supported halfvec HNSW
   expression index and matching query expression; refuse implicit model-width
   changes when existing embeddings have not been re-embedded; add an isolated,
@@ -98,6 +98,8 @@
   `synapse-memory-workspace` tooling manifest; the published SDK lives in
   `sdk/python`. New tag-triggered publish workflow builds, fresh-venv-verifies
   and trusted-publishes the wheel (see `docs/publishing.md`).
+
+- **Publication:** released `v1.3.1` to PyPI after the GitHub Actions workflow completed package build, metadata/version checks, a fresh-environment install, and trusted publishing.
 
 ## 1.2.0 â€” Production-hardening release (2026-10-15)
 - NULL-safe hybrid RRF (`COALESCE` per channel) + lexical param-count fix.

@@ -65,11 +65,25 @@ def main() -> int:
     package_lock = json.loads(read("package-lock.json"))
     lock_version = package_lock.get("version", "")
     lock_root_version = package_lock.get("packages", {}).get("", {}).get("version", "")
-    readme_version = find(
-        "README.md",
-        r"!\[Version\]\(https://img\.shields\.io/badge/version-([0-9]+\.[0-9]+\.[0-9]+)(?:--rc)?-",
-        "README version badge",
+    readme_text = read("README.md")
+    # Prefer a live PyPI badge, while checking the release version stated in the
+    # README summary. Keep accepting the old static badge for older release branches.
+    pypi_badge = re.search(
+        r"!\[PyPI version\]\(https://img\.shields\.io/pypi/v/synapse-memory-engine(?:\?[^)]*)?\)",
+        readme_text,
     )
+    if pypi_badge:
+        readme_version = find(
+            "README.md",
+            r"\*\*Synapse Memory\*\* \(v([0-9]+\.[0-9]+\.[0-9]+)\)",
+            "README release version in executive summary",
+        )
+    else:
+        readme_version = find(
+            "README.md",
+            r"!\[Version\]\(https://img\.shields\.io/badge/version-([0-9]+\.[0-9]+\.[0-9]+)(?:--rc)?-",
+            "README version badge or PyPI version badge",
+        )
     chart_app = find(r"deploy/helm-chart/Chart.yaml", r'^appVersion: "([^"]+)"', "appVersion")
 
     compose_tags = set(re.findall(r"GATEWAY_VERSION:-v([0-9]+\.[0-9]+\.[0-9]+)", read("deploy/docker-compose.yml")))

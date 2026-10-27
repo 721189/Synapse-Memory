@@ -27,7 +27,7 @@ To help us triage and resolve the issue quickly, please include:
 
 | Version | Status | Guidance |
 | :--- | :--- | :--- |
-| `1.3.1` (source release candidate) | Pending PyPI publication | The source candidate includes follow-up fixes. Install only after the `v1.3.1` tag workflow succeeds and PyPI lists the release. |
+| `1.3.1` (published SDK) | Published; pre-production caveats remain | The release workflow completed package build, metadata/version checks, a fresh-environment install, and trusted publishing. Workload-specific validation, an independent security review, and customer usage remain open. |
 | `1.3.0` (published SDK/API package) | Published; pre-production caveats remain | The published artifact predates the 3,072-dimensional HNSW and clean-deployment fixes; these changes are not retroactively included in 1.3.0. |
 | `1.2.x` | Legacy | No new feature work; upgrade only after checking the release notes and deployment prerequisites. |
 | `0.1.x` | Legacy | Critical fixes only where feasible. |
