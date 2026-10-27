@@ -163,7 +163,7 @@ class TestRetrievalBaselineBenchmark(unittest.TestCase):
         self.assertEqual(len(documents), 96)
         self.assertEqual(len(queries), 24)
         self.assertEqual({item["tenant_id"] for item in documents.values()}, {
-            "tenant-alpha", "tenant-beta", "tenant-gamma"
+            "team_platform", "team_support", "team_sales"
         })
         self.assertEqual(len({item["query"] for item in queries}), len(queries))
 
