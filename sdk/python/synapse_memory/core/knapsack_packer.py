@@ -63,7 +63,7 @@ class KnapsackPacker:
 
         n = len(memories)
         weights = [max(1, int(m.get("token_cost", 1))) for m in memories]
-        values = []
+        values: List[float] = []
         for memory in memories:
             score = float(memory.get("relevance_score", 0.0))
             # Non-finite values are not useful selection signals. Treat them as
