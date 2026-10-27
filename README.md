@@ -316,7 +316,65 @@ Dedup merge     = Jaccard â‰¥ threshold  AND  cosine â‰¥ 0.85  â†’ 
 
 ## 6. Quick Start
 
-### 6.1 Docker Compose (recommended â€” full production-shaped stack)
+### 6.1 Fastest local start (SQLite, no external services)
+
+This path is for evaluating the API on your own machine. It uses SQLite and the
+built-in deterministic hash embedder so you do not need PostgreSQL, an API key,
+or an embedding-provider account. **The hash embedder is not semantic**; use a
+real embedding provider for meaningful semantic retrieval and do not use this
+configuration as a production deployment.
+
+Create a virtual environment and install the published SDK (which also includes
+the FastAPI engine):
+
+```bash
+python -m venv .venv
+# macOS/Linux:
+source .venv/bin/activate
+# Windows PowerShell: .venv\\Scripts\\Activate.ps1
+
+python -m pip install --upgrade pip
+python -m pip install synapse-memory-engine==1.3.1
+```
+
+Start the engine in terminal 1:
+
+```bash
+export SYNAPSE_STORAGE_BACKEND=sqlite
+export SYNAPSE_SQLITE_DB_PATH=./synapse_memory.db
+python -m uvicorn synapse_memory.api.fastapi_server:app --host 127.0.0.1 --port 8008
+```
+
+On Windows PowerShell, set the two variables with `$env:SYNAPSE_STORAGE_BACKEND="sqlite"`
+and `$env:SYNAPSE_SQLITE_DB_PATH="./synapse_memory.db"` before running Uvicorn.
+
+In terminal 2, with the same virtual environment active, save this as
+`quickstart.py` and run `python quickstart.py`:
+
+```python
+from synapse_memory import SynapseClient
+
+with SynapseClient("http://127.0.0.1:8008", tenant_id="local-dev") as client:
+    saved = client.create_memory(
+        "The project uses PostgreSQL in production and SQLite for local demos.",
+        category="fact",
+    )
+    print(f"Saved memory: {saved.id} ({saved.status})")
+
+    result = client.retrieve("Which database is used for local demos?")
+    print("Retrieved context:")
+    print(result.fused_context or "(No context returned; check engine logs.)")
+```
+
+The first run may create a local `.synapse_key` file for encryption. Keep that
+file safe and stable while the database exists: losing or changing the key can
+make existing encrypted content unreadable. Do not commit the key or local
+database to source control.
+
+To stop the engine, press `Ctrl+C` in terminal 1. See [the dedicated quickstart](docs/quickstart.md)
+for production prerequisites, curl commands, and troubleshooting.
+
+### 6.2 Docker Compose (recommended â€” full production-shaped stack)
 
 ```bash
 git clone https://github.com/721189/Synapse-Memory.git
@@ -374,7 +432,7 @@ All health checks are **gated**: the gateway waits for the engine, the engine
 waits for `db-provision` to complete successfully, PostgreSQL and Redis. No
 service starts against an unhealthy or unmigrated dependency.
 
-### 6.2 Python SDK (5-minute path)
+### 6.3 Python SDK (5-minute path)
 
 ```bash
 pip install "synapse-memory-engine[pgvector]"   # production backend
@@ -401,7 +459,7 @@ with SynapseClient("http://127.0.0.1:8008",
         print("handled:", e, "retryable:", e.retryable)
 ```
 
-### 6.3 curl
+### 6.4 curl
 
 ```bash
 # Ingest
@@ -419,7 +477,7 @@ curl -X POST http://localhost:8008/query \
   -d '{"prompt": "What language does the user prefer?", "max_token_budget": 1500}'
 ```
 
-### 6.4 Local development (SQLite, no dependencies)
+### 6.5 Local development (SQLite, no dependencies)
 
 ```bash
 pip install -e "sdk/python[all,dev]"
