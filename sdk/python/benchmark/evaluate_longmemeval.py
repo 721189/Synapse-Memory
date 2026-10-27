@@ -197,15 +197,39 @@ def _validate_source_records(
                     question_id
                 )
             )
-        if len(session_ids) != len(set(session_ids)):
-            raise ValueError(
-                "Question {0} contains duplicate session IDs.".format(question_id)
+        # Some corrected source records repeat the same session entry. Collapse
+        # only exact duplicates (same ID, normalized timestamp, and full turn
+        # content). Conflicting copies remain a hard error: silently choosing
+        # one could change the evidence labels or leak future information.
+        unique_entries = []
+        seen_sessions: Dict[str, Tuple[datetime, str]] = {}
+        duplicate_session_entries_collapsed = 0
+        for session_id, raw_date, session in zip(session_ids, session_dates, sessions):
+            session_id = str(session_id)
+            session_time = _parse_timestamp(raw_date)
+            session_signature = json.dumps(
+                session,
+                sort_keys=True,
+                ensure_ascii=False,
+                separators=(",", ":"),
             )
+            prior = seen_sessions.get(session_id)
+            if prior is not None:
+                if prior != (session_time, session_signature):
+                    raise ValueError(
+                        "Question {0} contains conflicting duplicate session ID {1}; "
+                        "refusing to choose between different dates or contents.".format(
+                            question_id, session_id
+                        )
+                    )
+                duplicate_session_entries_collapsed += 1
+                continue
+            seen_sessions[session_id] = (session_time, session_signature)
+            unique_entries.append((session_id, raw_date, session, session_time))
 
         query_time = _parse_timestamp(row["question_date"])
         documents: List[Dict[str, Any]] = []
-        for session_id, raw_date, session in zip(session_ids, session_dates, sessions):
-            session_time = _parse_timestamp(raw_date)
+        for session_id, raw_date, session, session_time in unique_entries:
             if session_time > query_time:
                 future_sessions_excluded += 1
                 continue
@@ -262,6 +286,7 @@ def _validate_source_records(
         ),
         "reviewed_evidence_session_reference_count": evidence_session_count,
         "future_sessions_excluded_before_query_time": future_sessions_excluded,
+        "duplicate_session_entries_collapsed": duplicate_session_entries_collapsed,
         "label_validation": (
             "passed: every reviewed evidence session is present in the question's "
             "pre-question candidate history"
