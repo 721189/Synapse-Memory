@@ -12,11 +12,14 @@ pip install "synapse-memory-engine[pgvector]"   # prod backend
 ```bash
 export SYNAPSE_ENCRYPTION_KEY='<32-byte urlsafe-base64 Fernet key>'
 export SYNAPSE_API_KEY='syn_live_your_key'
-# Prod:
-export DATABASE_URL='postgresql://user:pass@host:5432/synapse_cognitive'
+# Production: use a pre-provisioned DML-only runtime role (never a bootstrap DSN).
+# Create the schema, extensions and auth root key first; see SECURITY.md and docs/ops-runbook.md.
+export DATABASE_URL='postgresql://synapse_app:<runtime-password>@host:5432/synapse_cognitive'
 export SYNAPSE_STORAGE_BACKEND=pgvector
+export SYNAPSE_APPLY_DB_SCHEMA=false
+# Set SYNAPSE_EMBEDDING_PROVIDER and the matching provider API key.
 uvicorn synapse_memory.api.fastapi_server:app --host 0.0.0.0 --port 8008
-# Dev (SQLite): omit DATABASE_URL.
+# Development (SQLite): omit DATABASE_URL.
 ```
 
 ## 3. Create + retrieve (Python)
