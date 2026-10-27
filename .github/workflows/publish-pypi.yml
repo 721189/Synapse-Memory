@@ -31,6 +31,7 @@ jobs:
     runs-on: ubuntu-latest
     # OIDC token is minted for this job only; no long-lived PyPI credentials anywhere.
     permissions:
+      actions: read
       contents: read
       id-token: write
     environment: pypi
@@ -71,6 +72,52 @@ jobs:
           PKG_VER=$(python -c "import pathlib,re; t=pathlib.Path('sdk/python/pyproject.toml').read_text(); print(re.search(r'^version = \"(.+)\"', t, re.M).group(1))")
           echo "tag=$TAG package=$PKG_VER"
           test "$TAG" = "$PKG_VER"
+
+      - name: Release only an exact main commit with green CI
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          TAG_SHA="$(git rev-list -n 1 "$GITHUB_REF_NAME")"
+          MAIN_SHA="$(git ls-remote origin refs/heads/main | awk '{print $1}')"
+          echo "tag=$TAG_SHA main=$MAIN_SHA"
+          test -n "$MAIN_SHA"
+          test "$TAG_SHA" = "$MAIN_SHA" || {
+            echo "::error::Release tag must point to the exact current main commit."
+            exit 1
+          }
+          RUN_INFO="$(gh api "/repos/$GITHUB_REPOSITORY/actions/workflows/ci.yml/runs?branch=main&event=push&per_page=1" --jq '.workflow_runs[0] | [.head_sha, (.conclusion // "pending")] | @tsv')"
+          IFS=        run: |
+          python -m venv /tmp/fresh-env
+          /tmp/fresh-env/bin/python -m pip install --quiet dist/*.whl
+          /tmp/fresh-env/bin/python - <<'PY'
+          import importlib.metadata as md
+          import synapse_memory
+
+          dist_name = "synapse-memory-engine"
+          installed = md.version(dist_name)
+          assert installed == synapse_memory.__version__, (
+              f"metadata version {installed} != __version__ {synapse_memory.__version__}"
+          )
+          # The import package must NOT collide with the unrelated PyPI project
+          # `synapse-memory` — prove the installed dist owns the import.
+          origin = md.distribution(dist_name).locate_file("")
+          print(f"fresh install OK: {dist_name}=={installed} (import synapse_memory from {origin})")
+          PY
+
+      - name: Publish to PyPI (trusted publishing, no tokens)
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # v1.14.2
+        with:
+          packages-dir: dist/
+          skip-existing: false
+\t' read -r RUN_SHA RUN_CONCLUSION <<< "$RUN_INFO"
+          echo "latest_main_ci_sha=$RUN_SHA conclusion=$RUN_CONCLUSION"
+          test "$RUN_SHA" = "$MAIN_SHA" && test "$RUN_CONCLUSION" = "success" || {
+            echo "::error::Refusing to publish: the exact main commit has no successful CI run."
+            exit 1
+          }
 
       - name: Fresh-environment install verification
         run: |
