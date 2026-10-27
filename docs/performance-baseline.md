@@ -1,47 +1,67 @@
 # Performance Baseline — Synapse Memory
 
-> Benchmark discipline: this document does not define a universal performance
-> SLA. Record source revision, hardware, dataset hash, corpus size, embedding
-> provider/dimension, tenant count, concurrency, and topology with every measured
-> result. Old runs below are historical evidence, not current-release claims.
+> This document does not define a universal performance SLA. Record source
+> revision, hardware, dataset hash, corpus size, embedding provider/dimension,
+> tenant count, concurrency, and topology with every measured result.
 
-## Reproducible retrieval strategy baseline
+## Reproducible retrieval and packing fixtures
 
-Use the offline, machine-readable benchmark for a repeatable strategy comparison:
+The dedicated CI job runs both fixtures five times after one warm-up and uploads
+the raw JSON artifacts:
 
-    python -m pip install -e sdk/python
-    python sdk/python/benchmark/retrieval_baselines.py --output sdk/python/benchmark/retrieval-baseline-results.json --repeats 5 --warmups 1 --top-k 5 --candidate-k 10 --token-budget 90
+| Fixture | Size | Judgments | Purpose |
+|---|---:|---:|---|
+| retrieval_dataset.json | 25 memories / 14 queries | Mostly one relevant memory per query | Controlled baseline |
+| packing_stress_dataset.json | 96 memories / 24 queries | Two relevant memories per query, three tenants | Paraphrase-heavy multi-fact selection stress |
 
-The harness stores dataset SHA-256 and source revision alongside raw latency
-samples and per-query relevance judgments. Its 25-document / 14-query synthetic
-fixture compares BM25 lexical-only, exact dense cosine, hybrid RRF, and four
-context-selection strategies. It also records embedding/encrypted-insert cost,
-tenant-filter leakage probes on SQLite, and a verified deletion check.
+Each artifact records its dataset hash, source revision, configuration, raw
+latency samples, per-query retrieval metrics, token budget and packing results.
+See sdk/python/benchmark/README.md for the exact invocation.
+
+## Separating retrieval and packing
+
+The benchmark reports candidate recall before packing, retention of relevant
+items among those candidates, and retained raw relevance-score sum. This
+separation matters: a memory absent from the candidate list cannot be recovered
+by the packer, and optimizing summed ranking scores is not identical to
+maximizing hand-judged fact recall.
+
+The current DP packer had an avoidable precision issue: converting
+relevance_score to int(score * 1000) rounded away small RRF score differences.
+The implementation now preserves finite float scores and neutralizes non-finite
+values. Regression tests cover a concrete counterexample and scale invariance.
+Follow-up measurements should determine whether any remaining gap is explained
+by the objective mismatch, candidate ordering, token costs, or the DP selection
+itself before changing the production objective.
 
 Interpretation constraints:
 
-- The deterministic 128-dimensional hash embedding is not semantic; this fixture
-  validates ranking and packing behavior, not natural-language understanding.
-- Ranker latency is measured over a preloaded in-memory corpus and excludes
-  network, process startup, database reads, and query-embedding time. These are
-  measured separately where relevant.
-- SQLite is an exact local scan. It is not a proxy for pgvector HNSW performance.
-- Ground-truth relevance labels are hand-authored and the fixture is small. Use
-  representative production queries and a PostgreSQL target before drawing
-  product-level conclusions.
-- CI executes a one-repeat smoke run for output correctness and tenant/deletion
-  invariants; CI timings are not performance results.
+- The deterministic hash embeddings are non-semantic. The paraphrase-heavy
+  fixture is a stress test of wording mismatch, not a semantic-quality benchmark.
+- SQLite results are local exact-scan measurements, not pgvector HNSW performance.
+- Relevance labels are hand-authored and the corpus is synthetic. Use representative
+  application queries and independent judgments before drawing product conclusions.
+- CI timings verify implementation and provide reproducible comparisons; they are
+  not SLAs and should not be advertised as production latency.
 
-Keep each resulting JSON file as an artifact for review. Do not copy benchmark
-numbers into product pages until multiple runs and the full configuration are
-reviewed.
+## Benchmark-only rank-discount objective
+
+In addition to raw-score DP, the benchmark now evaluates a rank-discount DP
+ablation with utility `1 / log2(rank + 1)`. It uses the same candidate set and
+token budget but values higher-ranked candidates more directly. This lets us
+compare raw score utility retained versus human-judged fact retention without
+changing production behavior.
+
+Treat this as an experiment, not a recommendation: the rank-discount objective
+still needs evaluation with real semantic embeddings and independent relevance
+labels before it can be considered for the production packer.
 
 ## Historical operational stress-test observations
 
 Measured locally (SQLite backend, test_load_resilience.py, 17 offline tests) —
 not a production SLA and not necessarily a measurement of the current revision.
-Topology for every observation below: single engine process, local SQLite file,
-default SynapseEmbedder, no Redis, no network hop.
+Topology: single engine process, local SQLite file, default SynapseEmbedder, no
+Redis, no network hop.
 
 | Scenario | Result (historical local run) |
 |---|---|
@@ -64,10 +84,10 @@ samples). Read measurements from the target deployment before setting SLOs.
 
 ## How to set production targets
 
-1. Deploy the supported topology (split engine/gateway, external pgvector,
-   Redis for multi-replica) on production-grade hardware.
-2. Seed a representative corpus (embedding model and dimension, tenant count,
-   category mix, and memory-length distribution).
+1. Deploy the supported topology (split engine/gateway, external pgvector, Redis
+   for multi-replica) on production-grade hardware.
+2. Seed a representative corpus, embedding model and dimension, tenant count,
+   category mix, and memory-length distribution.
 3. Drive load at expected concurrency (reads, writes, bulk, mixed).
 4. Read p50/p95 per endpoint from /metrics over a sustained window.
 5. Set SLOs from measured numbers with headroom. Record hardware, dataset hash,
@@ -75,20 +95,18 @@ samples). Read measurements from the target deployment before setting SLOs.
 
 ## Do NOT do this
 
-- Do not promise a universal p95/p99 before defining hardware, dataset,
-  concurrency, and topology.
-- Do not present projections from bench_suite.py or root benchmark_results.json
-  as measured results; they are not production performance evidence.
+- Do not promise a universal p95/p99 before defining hardware, dataset, concurrency,
+  and topology.
+- Do not present bench_suite.py projections or root benchmark_results.json as
+  measured production results.
 - Do not compare SQLite-local numbers with pgvector-cluster numbers.
-- Do not quote the legacy Mem0 result in sdk/python/benchmark/README.md as a
-  current v1.3.1 comparison; it records a historical 1.2.0 run.
+- Do not claim score-sum-optimized packing guarantees maximum judged-fact recall.
 
 ## Recommended follow-ups
 
-- Add a nightly benchmark job against a specified pgvector service and pinned
-  hardware; report recall/latency across corpus sizes and tenant counts.
-- Evaluate query quality using representative user-derived judgments and a
-  real semantic embedding provider before making semantic retrieval claims.
-- Add LLM answer-quality evaluation separately from retrieval-only scores.
+- Run the larger fixture with a real semantic embedding provider and independent
+  relevance labels, then compare packers using the same candidate lists.
+- Add a pgvector/HNSW benchmark on pinned infrastructure with identical inputs.
+- Measure LLM answer quality separately from retrieval/packing metrics.
 - Build a Grafana dashboard over /metrics (requests, p50/p95, auth/429, pool,
   packed tokens, synapse_rate_limit_backend).

@@ -272,6 +272,18 @@ def _pack(
         return packer.greedy_pack(candidates, token_budget=token_budget)
     if method == "knapsack_dp":
         return packer.pack(candidates, token_budget=token_budget)
+    if method == "rank_discount_dp":
+        # Benchmark-only objective ablation: use rank discount rather than raw
+        # RRF score as DP utility, while preserving original records in results.
+        # This is an experiment, not a change to the production packer default.
+        weighted_candidates = []
+        for rank, item in enumerate(candidates, start=1):
+            weighted = item.copy()
+            weighted["relevance_score"] = 1.0 / math.log2(rank + 1.0)
+            weighted_candidates.append(weighted)
+        chosen = packer.pack(weighted_candidates, token_budget=token_budget)
+        chosen_ids = {str(item["id"]) for item in chosen}
+        return [item for item in candidates if str(item["id"]) in chosen_ids]
     raise ValueError("Unknown packing method: {0}".format(method))
 
 
@@ -322,6 +334,7 @@ def run_benchmark(
         "ranked_fit",
         "greedy_ratio",
         "knapsack_dp",
+        "rank_discount_dp",
     )
 
     with tempfile.TemporaryDirectory(prefix="synapse-retrieval-bench-") as temp_dir:
@@ -496,6 +509,12 @@ def run_benchmark(
                             )
                             if repetition == 0:
                                 selected_ids = [str(item["id"]) for item in selected]
+                                selected_id_set = set(selected_ids)
+                                candidate_ids = {
+                                    str(item["id"]) for item in candidates
+                                }
+                                candidate_relevant = candidate_ids & relevant
+                                selected_relevant = selected_id_set & relevant
                                 token_cost = sum(
                                     max(1, int(item.get("token_cost", 1)))
                                     for item in selected
@@ -503,16 +522,54 @@ def run_benchmark(
                                 metrics = _relevance_metrics(
                                     selected_ids, relevant, top_k
                                 )
+                                candidate_score_sum = sum(
+                                    max(
+                                        0.0,
+                                        float(item.get("relevance_score", 0.0)),
+                                    )
+                                    for item in candidates
+                                )
+                                selected_score_sum = sum(
+                                    max(
+                                        0.0,
+                                        float(item.get("relevance_score", 0.0)),
+                                    )
+                                    for item in selected
+                                )
+                                retained_candidate_recall = (
+                                    len(selected_relevant & candidate_relevant)
+                                    / len(candidate_relevant)
+                                    if candidate_relevant
+                                    else None
+                                )
                                 packed_results[method][query_id] = {
                                     "selected_ids": selected_ids,
+                                    "candidate_relevant_ids": sorted(candidate_relevant),
+                                    "candidate_recall": round(
+                                        len(candidate_relevant) / len(relevant), 4
+                                    ),
+                                    "retained_candidate_relevant_recall": (
+                                        round(retained_candidate_recall, 4)
+                                        if retained_candidate_recall is not None
+                                        else None
+                                    ),
+                                    "candidate_relevance_score_sum": round(
+                                        candidate_score_sum, 8
+                                    ),
+                                    "selected_relevance_score_sum": round(
+                                        selected_score_sum, 8
+                                    ),
+                                    "score_utility_retained_pct": round(
+                                        100.0 * selected_score_sum / candidate_score_sum,
+                                        2,
+                                    ) if candidate_score_sum > 0 else 0.0,
                                     "tokens_used": token_cost,
                                     "budget_utilization_pct": round(
                                         100.0 * token_cost / token_budget, 2
                                     ),
                                     "within_budget": token_cost <= token_budget,
                                     "relevant_recall": round(
-                                        len(set(selected_ids) & relevant) / len(relevant),
-                                        4,
+                                        len(selected_relevant) / len(relevant), 4
                                     ),
                                     "reciprocal_rank": metrics["reciprocal_rank"],
                                 }
@@ -520,10 +577,32 @@ def run_benchmark(
                 packing_summary: Dict[str, Any] = {}
                 for method in packing_methods:
                     rows = list(packed_results[method].values())
+                    candidate_retention_rows = [
+                        row["retained_candidate_relevant_recall"]
+                        for row in rows
+                        if row["retained_candidate_relevant_recall"] is not None
+                    ]
                     packing_summary[method] = {
                         "mean_relevant_recall": round(
                             statistics.fmean(row["relevant_recall"] for row in rows),
                             4,
+                        ),
+                        "mean_candidate_recall": round(
+                            statistics.fmean(row["candidate_recall"] for row in rows),
+                            4,
+                        ),
+                        "mean_retained_candidate_relevant_recall": round(
+                            statistics.fmean(candidate_retention_rows), 4
+                        ) if candidate_retention_rows else None,
+                        "queries_with_relevant_candidate": len(candidate_retention_rows),
+                        "queries_without_relevant_candidate_count": (
+                            len(rows) - len(candidate_retention_rows)
+                        ),
+                        "mean_score_utility_retained_pct": round(
+                            statistics.fmean(
+                                row["score_utility_retained_pct"] for row in rows
+                            ),
+                            2,
                         ),
                         "mean_tokens_used": round(
                             statistics.fmean(row["tokens_used"] for row in rows), 2
@@ -653,8 +732,10 @@ def run_benchmark(
                             "top_k_unbudgeted": "First top_k hybrid results, without enforcing the token budget.",
                             "ranked_fit": "Greedy rank-order fit; skip any item that does not fit in remaining budget.",
                             "greedy_ratio": "KnapsackPacker greedy relevance-per-token fallback strategy.",
-                            "knapsack_dp": "KnapsackPacker dynamic-programming strategy.",
+                            "knapsack_dp": "KnapsackPacker dynamic programming maximizing the sum of raw relevance_score values under the token budget.",
+                            "rank_discount_dp": "Benchmark-only DP objective using 1/log2(rank+1) as item utility, mapped back to original records for evaluation; not a production default.",
                         },
+                        "objective_vs_quality": "The packer optimizes the numeric relevance_score sum; hand-authored relevant_memory_ids define evaluation quality. Candidate recall and retention of relevant candidates are reported separately so retrieval misses are not blamed on packing.",
                         "latency_scope": "Ranker latency excludes query embedding, disk reads, process startup, and network latency; query embedding, write/embed, SQLite insertion, and packing timings are reported separately.",
                         "write_scope": "Per document: deterministic embedding plus encrypted SQLite insert; deduplication is not included.",
                     },
@@ -775,11 +856,19 @@ def main() -> int:
         )
     print("\nContext packing:")
     for method, values in result["context_packing"].items():
+        candidate_retention = values["mean_retained_candidate_relevant_recall"]
+        retention_display = (
+            "n/a" if candidate_retention is None else "{0:.3f}".format(candidate_retention)
+        )
         print(
-            "  {0:<18} relevant_recall={1:.3f} mean_tokens={2:.1f} "
-            "over_budget={3}".format(
+            "  {0:<18} fact_recall={1:.3f} candidate_recall={2:.3f} "
+            "retained_candidate={3} score_utility={4:.1f}% tokens={5:.1f} "
+            "over_budget={6}".format(
                 method,
                 values["mean_relevant_recall"],
+                values["mean_candidate_recall"],
+                retention_display,
+                values["mean_score_utility_retained_pct"],
                 values["mean_tokens_used"],
                 values["over_budget_query_count"],
             )
