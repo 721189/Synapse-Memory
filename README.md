@@ -323,18 +323,18 @@ git clone https://github.com/721189/Synapse-Memory.git
 cd Synapse-Memory
 cp deploy/.env.example deploy/.env
 
-# Required secrets â€” generate them:
+# Generate five distinct secrets for deploy/.env:
 python -c "import secrets; print('syn_live_' + secrets.token_hex(24))"           # SYNAPSE_API_KEY
-python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key())"  # SYNAPSE_ENCRYPTION_KEY
-python -c "import secrets; print(secrets.token_urlsafe(32))"                     # POSTGRES_PASSWORD
-python -c "import secrets; print(secrets.token_urlsafe(32))"                     # SYNAPSE_APP_DB_PASSWORD
+python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"  # SYNAPSE_ENCRYPTION_KEY
+python -c "import secrets; print(secrets.token_urlsafe(32))"                     # POSTGRES_PASSWORD (bootstrap superuser)
+python -c "import secrets; print(secrets.token_urlsafe(32))"                     # SYNAPSE_ADMIN_DB_PASSWORD (migration role)
+python -c "import secrets; print(secrets.token_urlsafe(32))"                     # SYNAPSE_APP_DB_PASSWORD (runtime role)
 
-# Edit deploy/.env and set ALL FOUR before starting:
-#   SYNAPSE_API_KEY           engine authentication
-#   SYNAPSE_ENCRYPTION_KEY    field encryption key
-#   POSTGRES_PASSWORD         admin/owner role (schema owner, migrations)
-#   SYNAPSE_APP_DB_PASSWORD   DML-only runtime role the engine connects as
-# Compose fails during variable interpolation if any of them is missing.
+# In deploy/.env, also set GEMINI_API_KEY if SYNAPSE_EMBEDDING_PROVIDER=gemini
+# (the default), or OPENAI_API_KEY if selecting the OpenAI provider.
+# Keep all five generated secrets different. Compose fails closed if any
+# required value is missing; the API key and encryption key are not passwords
+# for the PostgreSQL bootstrap, migration, or runtime database roles.
 
 docker compose -f deploy/docker-compose.yml up -d
 ```
@@ -349,11 +349,17 @@ at which point the engine starts. No manual SQL step is needed for Compose.
 The equivalent manual step for a managed database (or before a Helm install):
 
 ```bash
-# <admin-password> = the value you set for POSTGRES_PASSWORD
-DATABASE_URL="postgresql://synapse_admin:<admin-password>@host:5432/synapse_cognitive" \
-  python scripts/provision_db_roles.py \
-    --runtime-role synapse_app --admin-role synapse_admin \
-    --runtime-password "$SYNAPSE_APP_DB_PASSWORD" --apply-migrations
+# Bootstrap credentials remain separate from the migration and runtime roles.
+export SYNAPSE_BOOTSTRAP_DATABASE_URL="postgresql://postgres:<bootstrap-password>@host:5432/synapse_cognitive"
+export SYNAPSE_MIGRATION_DATABASE_URL="postgresql://synapse_admin:<migration-password>@host:5432/synapse_cognitive"
+export SYNAPSE_API_KEY="syn_live_your_generated_key"
+export SYNAPSE_ENCRYPTION_KEY="your_generated_fernet_key"
+export SYNAPSE_ADMIN_DB_PASSWORD="<migration-password>"
+export SYNAPSE_APP_DB_PASSWORD="<runtime-password>"
+python scripts/provision_db_roles.py \
+  --runtime-role synapse_app --admin-role synapse_admin \
+  --runtime-password "$SYNAPSE_APP_DB_PASSWORD" \
+  --admin-password "$SYNAPSE_ADMIN_DB_PASSWORD" --apply-migrations
 ```
 
 | Service | Port | Health probe |
@@ -886,7 +892,7 @@ flowchart TD
 | [`docs/ops-runbook.md`](docs/ops-runbook.md) | on-call: health model, deploy checklist, incident playbooks, scaling |
 | [`docs/backup-recovery.md`](docs/backup-recovery.md) | backup strategy + `scripts/backup_restore_drill.py` drill |
 | [`docs/performance-baseline.md`](docs/performance-baseline.md) | measured baseline + 5-step SLO process |
-| [`docs/production-hardening-baseline.md`](docs/production-hardening-baseline.md) | P0â€“P2 gap register â€” all gaps marked closed, CI status |
+| [`docs/production-hardening-baseline.md`](docs/production-hardening-baseline.md) | Historical hardening checklist, known gaps and current verification status |
 | [`docs/branch-protection.md`](docs/branch-protection.md) | GitHub rule settings: required checks, CODEOWNERS, stale-dismiss |
 | [`docs/publishing.md`](docs/publishing.md) | PyPI release pipeline (`synapse-memory-engine`), trusted publishing, fresh-install guarantee |
 | [`SECURITY.md`](SECURITY.md) | threat model, known limitations, vulnerability disclosure |
