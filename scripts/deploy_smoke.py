@@ -98,8 +98,11 @@ def main():
     auth = {"X-Synapse-API-Key": api_key, "X-Tenant-ID": "smoke_tenant"}
 
     log("building and starting the stack")
-    run(COMPOSE + ["up", "-d", "--build"])
     try:
+        # Include startup in the protected region: Compose may fail before the
+        # engine/gateway exist (especially db-provision), so diagnostics must
+        # run even when "up" itself returns a non-zero exit code.
+        run(COMPOSE + ["up", "-d", "--build"])
         wait_for_health()
 
         content = f"smoke memory {int(time.time())}"
@@ -127,9 +130,16 @@ def main():
 
         log("PASS")
         return 0
+    except subprocess.CalledProcessError as exc:
+        log(f"FAILED: command exited with status {exc.returncode}: {exc.cmd}")
+        log("dumping container state and service logs (including db-provision)")
+        run(COMPOSE + ["ps", "--all"], check=False)
+        run(COMPOSE + ["logs", "--no-color", "--tail", "300"], check=False)
+        return exc.returncode or 1
     except SystemExit as exc:
         log(f"FAILED: {exc}")
-        log("dumping service logs (provisioning + engine + gateway)")
+        log("dumping container state and service logs (including db-provision)")
+        run(COMPOSE + ["ps", "--all"], check=False)
         run(COMPOSE + ["logs", "--no-color", "--tail", "300"], check=False)
         raise
     finally:
