@@ -439,8 +439,11 @@ docker compose -f deploy/docker-compose.yml ps             # all services health
 curl -s localhost:3000/api/ready; curl -s localhost:8008/readiness
 ```
 
-Key env vars live in **one file**: `deploy/.env` (copy from `deploy/.env.example` â€” it is the single
-source of truth for configuration). Required: `SYNAPSE_API_KEY`, `SYNAPSE_ENCRYPTION_KEY`, `POSTGRES_PASSWORD`.
+Key env vars live in `deploy/.env` (copy from `deploy/.env.example`). Compose requires
+five distinct values: `SYNAPSE_API_KEY`, `SYNAPSE_ENCRYPTION_KEY`,
+bootstrap-superuser `POSTGRES_PASSWORD`, migration-role `SYNAPSE_ADMIN_DB_PASSWORD`,
+and runtime-role `SYNAPSE_APP_DB_PASSWORD`. Also set the API key for the selected
+embedding provider (the default is Gemini). These DB credentials must not be reused.
 
 ### 7.2 Kubernetes (Helm)
 
@@ -453,8 +456,11 @@ dependency (never installed by the chart).
 kubectl create secret generic synapse-credentials \
   --from-literal=SYNAPSE_API_KEY=... \
   --from-literal=SYNAPSE_ENCRYPTION_KEY=... \
-  --from-literal=POSTGRES_PASSWORD=... \
+  --from-literal=SYNAPSE_APP_DB_PASSWORD=... \
+  --from-literal=GEMINI_API_KEY=... \
   --from-literal=REDIS_PASSWORD=...
+# If using OpenAI embeddings, supply OPENAI_API_KEY instead of GEMINI_API_KEY.
+# Do not place bootstrap or migration-role credentials in this application Secret.
 
 # 3. Migrate-then-run (see 7.3), then install:
 helm install synapse deploy/helm-chart \
@@ -528,9 +534,11 @@ Single source of truth: [`deploy/.env.example`](deploy/.env.example) (compose) a
 |---|---|---|
 | `SYNAPSE_API_KEY` | âœ… | Root API key bootstrapped on first start (hashed at rest). `python -c "import secrets; print('syn_live_'+secrets.token_hex(24))"` |
 | `SYNAPSE_ENCRYPTION_KEY` | âœ… | Fernet 32-byte urlsafe-base64 data-at-rest key. `python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"`. In prod source from KMS/Vault |
-| `POSTGRES_PASSWORD` | âœ… (pgvector) | Database password |
+| `POSTGRES_PASSWORD` | âœ… (Compose) | Bootstrap PostgreSQL superuser password used only to install extensions and provision roles; **not** the API runtime password |
+| `SYNAPSE_ADMIN_DB_PASSWORD` | âœ… (Compose/provisioning) | Password for the distinct non-superuser migration role (`SYNAPSE_DB_ADMIN_ROLE`); do not expose to API pods |
+| `SYNAPSE_APP_DB_PASSWORD` | âœ… (Compose/Helm runtime) | Password for the DML-only, non-owner runtime role (usually `synapse_app`) used by `DATABASE_URL` |
 | `REDIS_PASSWORD` | optional | Redis auth (may be empty) |
-| `GEMINI_API_KEY` / `OPENAI_API_KEY` | optional | Embedding provider keys |
+| `GEMINI_API_KEY` / `OPENAI_API_KEY` | required for selected provider | Embedding-provider key; default provider is Gemini |
 
 ### Storage & schema
 
@@ -575,8 +583,11 @@ Single source of truth: [`deploy/.env.example`](deploy/.env.example) (compose) a
 | Variable | Default | Description |
 |---|---|---|
 | `SYNAPSE_DB_RUNTIME_ROLE` | `synapse_app` | DML-only runtime role (non-owner, `NOBYPASSRLS`) |
-| `SYNAPSE_DB_ADMIN_ROLE` | `synapse_admin` | Migration role (DDL) |
-| `SYNAPSE_APP_DB_PASSWORD` / `SYNAPSE_ADMIN_DB_PASSWORD` | â€” | Role passwords for `scripts/provision_db_roles.py` |
+| `SYNAPSE_DB_ADMIN_ROLE` | `synapse_admin` | Non-superuser schema-migration role (DDL only) |
+| `SYNAPSE_DB_RUNTIME_ROLE` | `synapse_app` | Non-owner, DML-only API runtime role; must not own tables or have `BYPASSRLS` |
+| `SYNAPSE_BOOTSTRAP_DATABASE_URL` | â€” | Bootstrap/superuser DSN for extension installation and role provisioning only |
+| `SYNAPSE_MIGRATION_DATABASE_URL` | â€” | Separate DSN used for schema migrations; must not be the bootstrap role |
+| `SYNAPSE_APP_DB_PASSWORD` / `SYNAPSE_ADMIN_DB_PASSWORD` | â€” | Distinct passwords for runtime and migration roles |
 
 ---
 
