@@ -126,8 +126,8 @@ def score_reviews(packet: Dict[str, Any], mapping: List[Dict[str, Any]],
             if blind_key in found_keys:
                 raise ValueError("Packet repeats a blind candidate ID: {0}".format(blind_key))
             found_keys.add(blind_key)
-            a = _valid_grade(candidate.get("reviewer_a", {}).get("relevance"), blind_key + " reviewer_a")
-            b = _valid_grade(candidate.get("reviewer_b", {}).get("relevance"), blind_key + " reviewer_b")
+            a = _valid_grade(candidate.get("reviewer_a", {}).get("relevance"), str(blind_key) + " reviewer_a")
+            b = _valid_grade(candidate.get("reviewer_b", {}).get("relevance"), str(blind_key) + " reviewer_b")
             reviewer_a.append(a)
             reviewer_b.append(b)
             if a == b:
@@ -139,7 +139,7 @@ def score_reviews(packet: Dict[str, Any], mapping: List[Dict[str, Any]],
                         "Unresolved reviewer disagreement for {0}; add adjudicated_relevance "
                         "after discussion.".format(blind_key)
                     )
-                grade = _valid_grade(candidate["adjudicated_relevance"], blind_key + " adjudicated_relevance")
+                grade = _valid_grade(candidate["adjudicated_relevance"], str(blind_key) + " adjudicated_relevance")
                 if not str(candidate.get("adjudication_note", "")).strip():
                     raise ValueError(
                         "Disagreement {0} needs an adjudication_note.".format(blind_key)
