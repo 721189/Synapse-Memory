@@ -194,9 +194,91 @@ class PGVectorMemoryStore:
                 if not present:
                     raise RuntimeError(
                         "Schema not provisioned: table 'memories' is missing. Run the "
-                        "migration step (SQLite/Postgres DDL + migrations) before starting "
+                        "migration step (PostgreSQL DDL + migrations) before starting "
                         "the engine with apply_schema=False."
                     )
+
+                # A table existing is not enough: an incomplete bootstrap schema
+                # can accept startup and then fail every write/retrieval. Prove the
+                # columns, vector width, RLS policy and width-compatible HNSW index.
+                cur.execute(
+                    "SELECT column_name FROM information_schema.columns "
+                    "WHERE table_schema = 'public' AND table_name = 'memories';"
+                )
+                columns = {
+                    row[0] if isinstance(row, (tuple, list)) else row.get("column_name")
+                    for row in cur.fetchall()
+                }
+                required_columns = {
+                    "id", "tenant_id", "content", "content_plain", "category",
+                    "confidence", "created_at", "last_accessed_at", "access_count",
+                    "token_cost", "embedding", "search_vector", "supersedes", "superseded_by",
+                }
+                missing_columns = sorted(required_columns - columns)
+                if missing_columns:
+                    raise RuntimeError(
+                        "Schema incomplete: public.memories is missing required columns: "
+                        + ", ".join(missing_columns)
+                        + ". Re-run the schema migration before enabling traffic."
+                    )
+
+                cur.execute(
+                    "SELECT format_type(a.atttypid, a.atttypmod) "
+                    "FROM pg_attribute a "
+                    "WHERE a.attrelid = 'public.memories'::regclass "
+                    "AND a.attname = 'embedding' AND NOT a.attisdropped;"
+                )
+                type_row = cur.fetchone()
+                actual_vector_type = (
+                    type_row[0] if isinstance(type_row, (tuple, list))
+                    else (type_row.get("format_type") if type_row else None)
+                ) if type_row else None
+                expected_vector_type = f"vector({self.dimension})"
+                if actual_vector_type != expected_vector_type:
+                    raise RuntimeError(
+                        f"Schema embedding type mismatch: expected {expected_vector_type}, "
+                        f"found {actual_vector_type!r}. Re-embed and migrate intentionally "
+                        "before changing the configured model width."
+                    )
+
+                cur.execute(
+                    "SELECT indexdef FROM pg_indexes "
+                    "WHERE schemaname = 'public' AND indexname = 'idx_memories_hnsw';"
+                )
+                index_row = cur.fetchone()
+                index_def = (
+                    index_row[0] if isinstance(index_row, (tuple, list))
+                    else (index_row.get("indexdef") if index_row else None)
+                ) if index_row else None
+                expected_opclass = (
+                    "halfvec_cosine_ops" if self.dimension > 2000 else "vector_cosine_ops"
+                )
+                if not index_def or expected_opclass not in index_def:
+                    raise RuntimeError(
+                        "Schema HNSW index is missing or incompatible with "
+                        f"{self.dimension}-dimensional embeddings (expected {expected_opclass}). "
+                        "Rebuild the HNSW index before enabling traffic."
+                    )
+
+                cur.execute(
+                    "SELECT c.relrowsecurity, c.relforcerowsecurity "
+                    "FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace "
+                    "WHERE n.nspname = 'public' AND c.relname = 'memories';"
+                )
+                rls_row = cur.fetchone()
+                if not rls_row or not bool(rls_row[0]) or not bool(rls_row[1]):
+                    raise RuntimeError(
+                        "Security violation: public.memories must have ENABLE and FORCE ROW LEVEL SECURITY."
+                    )
+                cur.execute(
+                    "SELECT 1 FROM pg_policies WHERE schemaname = 'public' "
+                    "AND tablename = 'memories' AND policyname = 'tenant_isolation_policy';"
+                )
+                if not cur.fetchone():
+                    raise RuntimeError(
+                        "Security violation: tenant_isolation_policy is missing from public.memories."
+                    )
+
                 cur.execute(
                     """
                     SELECT r.rolsuper, r.rolbypassrls, t.tableowner, current_user
