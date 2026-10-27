@@ -80,7 +80,8 @@ class SynapseEmbedder:
                     "SYNAPSE_EMBEDDING_PROVIDER=gemini but GEMINI_API_KEY is not set. "
                     "Set GEMINI_API_KEY or switch to provider=deterministic."
                 )
-            return GeminiEmbeddingProvider(self.gemini_key)
+            dimension = int(os.getenv("SYNAPSE_EMBEDDING_DIMENSION", "3072"))
+            return GeminiEmbeddingProvider(self.gemini_key, dim=dimension)
         elif self.provider_name == "openai":
             if not self.openai_key:
                 if allow_fallback:
@@ -93,7 +94,8 @@ class SynapseEmbedder:
                     "SYNAPSE_EMBEDDING_PROVIDER=openai but OPENAI_API_KEY is not set. "
                     "Set OPENAI_API_KEY or switch to provider=deterministic."
                 )
-            return OpenAIEmbeddingProvider(self.openai_key)
+            dimension = int(os.getenv("SYNAPSE_EMBEDDING_DIMENSION", "1536"))
+            return OpenAIEmbeddingProvider(self.openai_key, dim=dimension)
         elif self.provider_name == "sentence-transformers":
             # Explicit opt-in: requires [local-models] extra and model availability.
             return SentenceTransformerEmbeddingProvider(
