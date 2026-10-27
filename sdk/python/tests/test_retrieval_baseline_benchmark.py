@@ -61,7 +61,7 @@ class TestRetrievalBaselineBenchmark(unittest.TestCase):
             data = json.loads(output_path.read_text(encoding="utf-8"))
 
             self.assertEqual(data["benchmark"], "synapse_retrieval_baselines")
-            self.assertEqual(data["dataset"]["document_count"], 23)
+            self.assertEqual(data["dataset"]["document_count"], 25)
             self.assertEqual(data["dataset"]["query_count"], 14)
             self.assertFalse(data["environment"]["embedding_is_semantic"])
             self.assertEqual(
