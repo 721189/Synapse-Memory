@@ -48,7 +48,7 @@ def build_packet(dataset_path: Path, result_paths: List[Path], max_queries: int 
                 candidates.update(str(value) for value in method_data.get("top_k_ids", []))
             for method_data in per_query.get("context_packing", {}).values():
                 candidates.update(str(value) for value in method_data.get("selected_ids", []))
-        candidates = [candidate for candidate in candidates if candidate in documents]
+        candidates = sorted(candidate for candidate in candidates if candidate in documents)
         if not candidates:
             continue
         rng.shuffle(candidates)
