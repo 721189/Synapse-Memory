@@ -56,6 +56,16 @@ class TestProvisioningContract(unittest.TestCase):
         self.assertIsNone(self.mod.bootstrap_role_conflict("postgres", ADMIN))
         self.assertIsNotNone(self.mod.bootstrap_role_conflict(ADMIN, ADMIN))
 
+    def test_migrations_require_the_configured_non_superuser_role(self):
+        validate = self.mod.validate_migration_role
+        validate(ADMIN, ADMIN, False, False)
+        with self.assertRaisesRegex(ValueError, "received"):
+            validate("postgres", ADMIN, True, True)
+        with self.assertRaisesRegex(ValueError, "must not be a PostgreSQL superuser"):
+            validate(ADMIN, ADMIN, True, False)
+        with self.assertRaisesRegex(ValueError, "must not have BYPASSRLS"):
+            validate(ADMIN, ADMIN, False, True)
+
     def test_runtime_role_attributes_exclude_superuser_and_bypassrls(self):
         attrs = self.mod.LEAST_PRIVILEGE_ATTRS
         tokens = attrs.split()
