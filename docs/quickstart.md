@@ -1,58 +1,155 @@
-# SynapseMemory Quickstart (5 minutes)
+# Synapse Memory Quickstart
 
-Install, configure a backend, create a memory, retrieve it, handle an error.
+This guide has two paths. Start with the local SQLite path to verify the API
+without provisioning external services. Use the production path only after
+reading the security and database-role requirements.
 
-## 1. Install (fresh environment)
+## Path A — first successful write and retrieval (local development)
+
+### 1. Install
+
+Python 3.10 or newer is required. Create and activate a virtual environment:
+
 ```bash
-pip install "synapse-memory-engine[pgvector]"   # prod backend
-# or: pip install synapse-memory-engine         # SQLite dev backend only
+python -m venv .venv
+# macOS/Linux
+source .venv/bin/activate
+# Windows PowerShell
+.venv\\Scripts\\Activate.ps1
+
+python -m pip install --upgrade pip
+python -m pip install synapse-memory-engine==1.3.1
 ```
 
-## 2. Start the engine
+The package is named `synapse-memory-engine`; the Python import is
+`synapse_memory`. The package is proprietary; installation does not grant
+unrestricted use or deployment rights. See [LICENSE](../LICENSE).
+
+### 2. Start a local engine
+
+In terminal 1, from a directory where you want the local database and key file
+to live:
+
 ```bash
-export SYNAPSE_ENCRYPTION_KEY='<32-byte urlsafe-base64 Fernet key>'
-export SYNAPSE_API_KEY='syn_live_your_key'
-# Production: use a pre-provisioned DML-only runtime role (never a bootstrap DSN).
-# Create the schema, extensions and auth root key first; see SECURITY.md and docs/ops-runbook.md.
-export DATABASE_URL='postgresql://synapse_app:<runtime-password>@host:5432/synapse_cognitive'
-export SYNAPSE_STORAGE_BACKEND=pgvector
-export SYNAPSE_APPLY_DB_SCHEMA=false
-# Set SYNAPSE_EMBEDDING_PROVIDER and the matching provider API key.
-uvicorn synapse_memory.api.fastapi_server:app --host 0.0.0.0 --port 8008
-# Development (SQLite): omit DATABASE_URL.
+export SYNAPSE_STORAGE_BACKEND=sqlite
+export SYNAPSE_SQLITE_DB_PATH=./synapse_memory.db
+python -m uvicorn synapse_memory.api.fastapi_server:app --host 127.0.0.1 --port 8008
 ```
 
-## 3. Create + retrieve (Python)
+For Windows PowerShell, use:
+
+```powershell
+$env:SYNAPSE_STORAGE_BACKEND = "sqlite"
+$env:SYNAPSE_SQLITE_DB_PATH = "./synapse_memory.db"
+python -m uvicorn synapse_memory.api.fastapi_server:app --host 127.0.0.1 --port 8008
+```
+
+Wait for Uvicorn to report that the application has started. Keep this terminal
+running. In this local-only configuration, authentication is intentionally
+development-open; do not expose the port to a network or use this setup in
+production.
+
+The default deterministic hash embedder works offline but is **not semantic**.
+This path verifies write/read plumbing, not semantic-retrieval quality. The
+engine may create `.synapse_key` for encryption. Keep it safe and stable while
+the database exists; do not commit it, and do not delete it while retaining the
+database.
+
+### 3. Write and retrieve a memory
+
+In terminal 2, with the same virtual environment active, save the following as
+`quickstart.py`:
+
 ```python
 from synapse_memory import SynapseClient, SynapseError
 
-with SynapseClient("http://127.0.0.1:8008", api_key="syn_live_your_key", tenant_id="acme") as client:
-    created = client.create_memory("The deploy password rotates every 90 days.", category="fact")
-    print(created.id, created.status)
-    result = client.retrieve("how often does the deploy password rotate?")
-    print(result.fused_context)
+with SynapseClient(
+    "http://127.0.0.1:8008",
+    tenant_id="local-dev",
+    timeout=10,
+) as client:
+    created = client.create_memory(
+        "The project uses PostgreSQL in production and SQLite for local demos.",
+        category="fact",
+    )
+    print(f"Created: id={created.id}, status={created.status}")
+
+    result = client.retrieve("Which database is used for local demos?")
+    print("Retrieved context:")
+    print(result.fused_context or "(No context returned; inspect engine logs.)")
+
+    # Example of explicit API error handling:
     try:
         client.retrieve("")
-    except SynapseError as e:
-        print("handled:", e, "retryable:", e.retryable)
+    except SynapseError as exc:
+        print(f"Request failed: {exc}; retryable={exc.retryable}")
 ```
 
-## 4. Same via curl
+Run it:
+
 ```bash
-curl -X POST localhost:8008/ingest -H 'Content-Type: application/json' \
-  -H 'X-Synapse-API-Key: syn_live_your_key' -H 'X-Tenant-ID: acme' \
-  -d '{"content":"The deploy password rotates every 90 days.","category":"fact"}'
-curl -X POST localhost:8008/query -H 'Content-Type: application/json' \
-  -H 'X-Synapse-API-Key: syn_live_your_key' -H 'X-Tenant-ID: acme' \
-  -d '{"prompt":"how often does the deploy password rotate?"}'
+python quickstart.py
 ```
 
-## 5. Troubleshooting
-| Symptom | Cause | Fix |
-|---|---|---|
-| 401/403 | missing/invalid key or tenant mismatch | check key, `X-Tenant-ID` |
-| 429 | rate limit | back off 60s; per-key (`RATE_LIMIT_PER_MIN`), Redis-backed when `REDIS_URL` set |
-| 503 `/api/ready` | engine/DB down | check `/readiness`, `DATABASE_URL` |
-| `RuntimeError: Field decryption failed` | wrong `SYNAPSE_ENCRYPTION_KEY` | restore the key used at write time |
+Expected result: the script prints a created memory ID and retrieved context
+containing the saved fact. If context is empty, check that the engine is still
+running and inspect its terminal logs before continuing.
 
-Next: API reference (`docs/api-reference.md`), backups (`docs/backup-recovery.md`).
+### 4. Confirm readiness and stop
+
+In a third terminal:
+
+```bash
+python -c "import urllib.request; print(urllib.request.urlopen('http://127.0.0.1:8008/readiness').read().decode())"
+```
+
+Stop the engine with `Ctrl+C` in terminal 1. Keep the database and `.synapse_key`
+together if you want to reuse local data.
+
+## Path B — production-shaped PostgreSQL setup
+
+Do not use Path A as a production configuration. A production deployment needs
+PostgreSQL with pgvector, a real semantic embedding provider, stable encryption
+and API secrets, and separate bootstrap, migration, and least-privilege runtime
+database roles.
+
+1. Install the PostgreSQL extra:
+
+   ```bash
+   python -m pip install "synapse-memory-engine[pgvector]==1.3.1"
+   ```
+
+2. Provision PostgreSQL, pgvector, the schema, and the separate roles before
+   starting the engine. Follow the repository's [security guide](../SECURITY.md)
+   and [operations runbook](ops-runbook.md); do not use a bootstrap/superuser DSN
+   as the application runtime connection.
+3. Configure `DATABASE_URL` with the runtime role, set
+   `SYNAPSE_STORAGE_BACKEND=pgvector` and
+   `SYNAPSE_APPLY_DB_SCHEMA=false`, provide a stable
+   `SYNAPSE_ENCRYPTION_KEY`, and choose a semantic provider using
+   `SYNAPSE_EMBEDDING_PROVIDER` plus its API key or local-model dependencies.
+4. Configure a non-default `SYNAPSE_API_KEY` and keep all secrets outside source
+   control. Use TLS and restrict network access to the engine.
+
+Example runtime command after provisioning and configuration:
+
+```bash
+python -m uvicorn synapse_memory.api.fastapi_server:app --host 0.0.0.0 --port 8008
+```
+
+Do not copy placeholder credentials literally. See [the operations runbook](ops-runbook.md)
+and [backup/recovery guide](backup-recovery.md) before handling real data.
+
+## Troubleshooting
+
+| Symptom | Likely cause | What to check |
+|---|---|---|
+| Connection refused | Engine is not running or bound to another port | Keep terminal 1 open; check the Uvicorn startup log and port 8008 |
+| HTTP 403 | Auth is configured or the supplied key/tenant is invalid | Check `SYNAPSE_API_KEY`, `X-Synapse-API-Key`, and `X-Tenant-ID`; never rely on dev-open auth outside local development |
+| HTTP 429 | Rate limit reached | Back off; see `RATE_LIMIT_PER_MIN` and Redis configuration |
+| HTTP 503 / readiness failure | Engine or database is unavailable | Inspect engine logs, `DATABASE_URL`, and `/readiness` |
+| Decryption failure | Wrong/missing key for existing encrypted data | Restore the exact encryption key used when writing the data |
+| Empty retrieval context | Query did not retrieve a candidate, or provider/configuration mismatch | Confirm the write succeeded; inspect engine logs and use a semantic embedding provider for meaningful semantic retrieval |
+
+Next: [API reference](api-reference.md), [security guide](../SECURITY.md), and
+[backup/recovery](backup-recovery.md).
