@@ -25,11 +25,12 @@ To help us triage and resolve the issue quickly, please include:
 
 ## Supported Versions
 
-| Version | Supported | Security Updates |
+| Version | Status | Guidance |
 | :--- | :--- | :--- |
-| `1.2.x` (SDK + API v1 + chart app 1.2.0) | Yes | Active patches & immediate hotfixes |
-| `0.1.x` | Limited | Critical CVE fixes only |
-| `< 0.1.0` | No | End of Life (upgrade immediately) |
+| `1.3.0` (published SDK/API package) | Published; pre-production caveats remain | Do not treat the current published artifact as a production sign-off. High-dimensional HNSW and clean deployment fixes are under validation on the repository branch and are not yet published. |
+| `1.2.x` | Legacy | No new feature work; upgrade only after checking the release notes and deployment prerequisites. |
+| `0.1.x` | Legacy | Critical fixes only where feasible. |
+| `< 0.1.0` | End of life | Upgrade after reviewing schema/data migration requirements. |
 
 ## Security Architecture & Best Practices
 
