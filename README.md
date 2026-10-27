@@ -10,7 +10,7 @@ Field-level encryption on `content` at rest (the `content_plain` search projecti
 Database-level tenant isolation (PostgreSQL RLS) Â· Fail-closed paths are covered by tests Â· v1.3.1 published; production validation remains open
 
 [![CI/CD Pipeline](https://github.com/721189/Synapse-Memory/actions/workflows/ci.yml/badge.svg)](https://github.com/721189/Synapse-Memory/actions/workflows/ci.yml)
-[![Version](https://img.shields.io/badge/pypi-v-synapse-memory-engine-brightgreen)](CHANGELOG.md)
+[![PyPI version](https://img.shields.io/pypi/v/synapse-memory-engine?color=brightgreen)](https://pypi.org/project/synapse-memory-engine/)
 [![Python](https://img.shields.io/badge/python-3.10%20%7C%203.11%20%7C%203.12-blue.svg)](https://www.python.org/)
 [![Node.js](https://img.shields.io/badge/node-20.19%2B-green.svg)](https://nodejs.org/)
 [![PostgreSQL](https://img.shields.io/badge/postgres-16%20%2B%20pgvector%20HNSW-336791.svg)](https://github.com/pgvector/pgvector)
@@ -477,7 +477,7 @@ helm install synapse deploy/helm-chart \
 | HPA | `minReplicas 3` / `maxReplicas 15`, CPU+memory 80% |
 | Ingress | optional; TLS termination at ingress recommended |
 | Secrets | via existing Secret â€” **never** ConfigMap; kubelet `$(VAR)` expansion ordering guarded |
-| Chart version | `0.3.0` (app 1.3.1 release candidate) â€” chart version â‰  app version, see `Chart.yaml` |
+| Chart version | `0.3.0` (app 1.3.1) â€” chart version â‰  app version, see `Chart.yaml` |
 
 ### 7.3 Migrate-then-run: least-privilege database roles
 
@@ -512,10 +512,10 @@ python scripts/provision_db_roles.py --verify-only   # must exit 0
 
 | Component | Version | Notes |
 |---|---|---|
-| Python SDK (`synapse-memory-engine`) | **1.3.1 candidate** | `SynapseClient`, `__version__ = "1.3.1"`; publication pending |
+| Python SDK (`synapse-memory-engine`) | **1.3.1 published** | `SynapseClient`, `__version__ = "1.3.1"`; [PyPI package](https://pypi.org/project/synapse-memory-engine/1.3.1/) |
 | HTTP API compat | **v1** | canonical `{success, data, request_id}` envelope; `/api/*` aliases stable |
-| Engine / gateway images | **1.3.1 target pair** | build/push both matching tags before deployment |
-| Helm chart | **0.3.0** (app 1.3.1 candidate) | chart version â‰  app version; see `Chart.yaml` |
+| Engine / gateway images | **1.3.1 source version** | Confirm image build and deployment tags separately; PyPI publication does not publish container images |
+| Helm chart | **0.3.0** (app 1.3.1) | chart version â‰  app version; see `Chart.yaml` |
 | Schema | **v4 ledger** | forward-only; v4 adds `content_plain` |
 | Python | 3.10 / 3.11 / 3.12 | CI-tested matrix |
 | Node.js | â‰¥ 20.19 (20.x, 22.x in CI) | gateway build matrix |
