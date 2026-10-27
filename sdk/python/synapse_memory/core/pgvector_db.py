@@ -253,7 +253,16 @@ class PGVectorMemoryStore:
                 expected_opclass = (
                     "halfvec_cosine_ops" if self.dimension > 2000 else "vector_cosine_ops"
                 )
-                if not index_def or expected_opclass not in index_def:
+                expected_expression = (
+                    f"halfvec({self.dimension})"
+                    if self.dimension > 2000
+                    else "vector_cosine_ops"
+                )
+                if (
+                    not index_def
+                    or expected_opclass not in index_def
+                    or expected_expression not in index_def
+                ):
                     raise RuntimeError(
                         "Schema HNSW index is missing or incompatible with "
                         f"{self.dimension}-dimensional embeddings (expected {expected_opclass}). "
@@ -499,7 +508,13 @@ class PGVectorMemoryStore:
                     existing_index = index_row[0] if isinstance(index_row, (tuple, list)) else index_row.get("indexdef")
                 expected_halfvec = self.dimension > 2000
                 existing_halfvec = bool(existing_index and "halfvec_cosine_ops" in existing_index)
-                if existing_index and existing_halfvec != expected_halfvec:
+                expected_index_expression = (
+                    f"halfvec({self.dimension})" if expected_halfvec else "vector_cosine_ops"
+                )
+                if existing_index and (
+                    existing_halfvec != expected_halfvec
+                    or expected_index_expression not in existing_index
+                ):
                     cur.execute("DROP INDEX IF EXISTS idx_memories_hnsw;")
                     existing_index = None
                 if not existing_index:
