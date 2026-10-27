@@ -33,6 +33,9 @@ class DeveloperReviewPacketTests(unittest.TestCase):
                 "q1": {"ranking": {"hybrid_rrf": {"top_k_ids": ["secret-a", "secret-b"]}}}
             }}))
             packet, mapping = MODULE.build_packet(dataset, [result], max_queries=1)
+            packet_again, mapping_again = MODULE.build_packet(dataset, [result], max_queries=1)
+            self.assertEqual(packet, packet_again)
+            self.assertEqual(mapping, mapping_again)
             self.assertEqual(len(packet), 1)
             serialized = json.dumps(packet)
             self.assertNotIn("hybrid_rrf", serialized)
