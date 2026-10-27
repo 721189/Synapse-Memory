@@ -143,7 +143,7 @@ class TestRetrievalBaselineBenchmark(unittest.TestCase):
             self.assertEqual(data["dataset"]["document_count"], 96)
             self.assertEqual(data["dataset"]["query_count"], 24)
             self.assertEqual(data["dataset"]["tenant_count"], 3)
-            self.assertIn("paraphrase-heavy", data["dataset"]["name"])
+            self.assertIn("stress", data["dataset"]["name"])
             for values in data["context_packing"].values():
                 self.assertIn("mean_candidate_recall", values)
                 self.assertIn("mean_retained_candidate_relevant_recall", values)
