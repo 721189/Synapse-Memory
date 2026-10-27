@@ -181,6 +181,7 @@ def _validate_source_records(
     future_sessions_excluded = 0
     evidence_session_count = 0
     candidate_session_count = 0
+    duplicate_session_entries_collapsed = 0
 
     for row in records:
         question_id = str(row["question_id"])
@@ -203,7 +204,6 @@ def _validate_source_records(
         # one could change the evidence labels or leak future information.
         unique_entries = []
         seen_sessions: Dict[str, Tuple[datetime, str]] = {}
-        duplicate_session_entries_collapsed = 0
         for session_id, raw_date, session in zip(session_ids, session_dates, sessions):
             session_id = str(session_id)
             session_time = _parse_timestamp(raw_date)
