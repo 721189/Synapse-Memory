@@ -59,37 +59,47 @@ production packer objective based on this small set alone.
 
 ## External validation with reviewed LongMemEval evidence sessions
 
-The dedicated semantic CI job also runs `longmemeval_external_eval.py` against
-the corrected ReMe Cleaned-S release of LongMemEval. The adapter verifies the
-downloaded JSON's SHA-256 before evaluating it, uses the published corrected
-`answer_session_ids` evidence labels, and excludes every history session later
-than the question timestamp. The subset is deterministic and stratified across
-the six published question types (up to 20 per type); no dataset file is
-committed to this repository.
+The semantic CI job downloads the corrected ReMe Cleaned-S release of LongMemEval
+and runs the full **500-question** set through Synapse's retrieval and context
+packing code. It verifies the exact dataset SHA-256 before evaluation, uses the
+published corrected `answer_session_ids` evidence labels, and excludes every
+history session later than the question timestamp. A missing or future-dated
+gold evidence session fails validation rather than silently changing the metric.
+The raw conversation dataset is not committed to this repository or uploaded
+as a workflow artifact.
 
-The external evaluator compares BM25, pinned neural dense retrieval, and RRF
-hybrid ranking at Recall@5, Precision@5, MRR@5, and nDCG@5. It measures retrieval
-of evidence sessions, not answer-generation accuracy. LongMemEval is a general
-long-term conversational-memory benchmark, not a developer-only benchmark.
+The evaluator compares BM25, pinned neural dense retrieval, and RRF hybrid
+ranking at Recall@5, Recall@10, Precision@5, MRR, and nDCG@10. It also compares
+context-packing strategies using evidence recall at budget, candidate recall,
+retention, token usage, and budget violations. It measures retrieval of evidence
+sessions, not answer-generation accuracy. LongMemEval is a general long-term
+conversational-memory benchmark, not a developer-only benchmark.
 
-Run it locally after installing the pinned semantic dependencies:
+Run it locally after installing the pinned semantic dependencies and downloading
+the reviewed dataset file from the source card:
 
 ```bash
 python -m pip install -e sdk/python
 python -m pip install --index-url https://download.pytorch.org/whl/cpu torch==2.14.1+cpu
 python -m pip install -r sdk/python/benchmark/requirements-semantic.txt
-python sdk/python/benchmark/longmemeval_external_eval.py \
+python sdk/python/benchmark/evaluate_longmemeval.py \
+  --dataset /path/to/longmemeval_s_reme_cleaned.json \
   --output longmemeval-external-results.json \
-  --max-per-type 20 --top-k 5
+  --embedding-provider sentence-transformers \
+  --model-name sentence-transformers/all-MiniLM-L6-v2 \
+  --model-revision 1110a243fdf4706b3f48f1d95db1a4f5529b4d41 \
+  --top-k 5 --candidate-k 10 --token-budget 512
 ```
 
-The dataset is fetched from
-[the corrected ReMe Cleaned-S dataset card](https://huggingface.co/datasets/agentscope-ai/ReMe_longmemeval_clean_s_v2)
-and must match SHA-256
+The source is
+[the corrected ReMe Cleaned-S dataset card](https://huggingface.co/datasets/agentscope-ai/ReMe_longmemeval_clean_s_v2).
+Its published SHA-256 is
 `f8b308cc2d184d029dd2226e0c0a88eeac298e6318706d588e015beb1b83fc7d`.
 The dataset card documents corrections to answer and evidence-session labels,
-including future-evidence leakage. Do not redistribute the downloaded data
-without checking the dataset's applicable license and terms.
+including future-evidence leakage. This is a third-party corrected benchmark
+label set, not a blind annotation study conducted specifically for Synapse.
+Do not redistribute the downloaded data without checking the dataset's
+applicable license and terms.
 
 ## Developer-specific relevance review (human step required)
 
