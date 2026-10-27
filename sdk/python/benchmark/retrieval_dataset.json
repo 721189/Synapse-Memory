@@ -140,6 +140,18 @@
       "tenant_id": "team_platform",
       "category": "security",
       "content": "The root API key and encryption key are distinct secrets and must never be committed to source control."
+    },
+    {
+      "id": "mem_sales_quota",
+      "tenant_id": "team_sales",
+      "category": "fact",
+      "content": "EMEA sales quota attainment is reviewed by region at the end of each month."
+    },
+    {
+      "id": "mem_sales_crm",
+      "tenant_id": "team_sales",
+      "category": "procedure",
+      "content": "Opportunity records must include the account owner, estimated close date, and deal stage."
     }
   ],
   "queries": [
