@@ -1,0 +1,807 @@
+{
+  "schema_version": 1,
+  "name": "synapse-semantic-packing-eval-v1",
+  "purpose": "Curated paraphrase-heavy semantic retrieval and context-packing evaluation with 24 queries, 96 memory documents, two hand-judged relevant memories per query, and three tenant scopes. Relevance judgments are authored for this fixture and are not user-derived or independently reviewed. The fixture should not be used as a production quality claim.",
+  "documents": [
+    {
+      "id": "release_tag",
+      "tenant_id": "team_platform",
+      "category": "fact",
+      "content": "A release is eligible for publication only after a signed version tag is pushed to the canonical repository."
+    },
+    {
+      "id": "release_verification",
+      "tenant_id": "team_platform",
+      "category": "procedure",
+      "content": "The publish gate checks package metadata and requires the integration suite to pass before any artifact is uploaded."
+    },
+    {
+      "id": "backup_key",
+      "tenant_id": "team_platform",
+      "category": "security",
+      "content": "An encrypted snapshot can be restored only with the exact data encryption key that protected the original records."
+    },
+    {
+      "id": "rotation_done",
+      "tenant_id": "team_platform",
+      "category": "security",
+      "content": "Key rotation is complete only after retained records have been re-encrypted and decryption has been verified with the new key."
+    },
+    {
+      "id": "embed_model",
+      "tenant_id": "team_platform",
+      "category": "procedure",
+      "content": "Changing the embedding model changes the vector space, so old vectors are not directly comparable to newly generated vectors."
+    },
+    {
+      "id": "embed_vectors",
+      "tenant_id": "team_platform",
+      "category": "procedure",
+      "content": "After changing the embedding output width, every stored memory must be re-embedded before new queries use the index."
+    },
+    {
+      "id": "tenant_claim",
+      "tenant_id": "team_platform",
+      "category": "security",
+      "content": "Every request must bind a validated tenant identity before any memory read or mutation is allowed."
+    },
+    {
+      "id": "tenant_rls",
+      "tenant_id": "team_platform",
+      "category": "security",
+      "content": "PostgreSQL row-level security denies records when the active session tenant is missing or conflicts with the requested tenant."
+    },
+    {
+      "id": "throttle_header",
+      "tenant_id": "team_platform",
+      "category": "procedure",
+      "content": "A client receiving throttling should use the Retry-After guidance and apply bounded exponential backoff."
+    },
+    {
+      "id": "shared_rate",
+      "tenant_id": "team_platform",
+      "category": "fact",
+      "content": "Redis-backed request counters coordinate rate limits across multiple engine replicas instead of limiting each process independently."
+    },
+    {
+      "id": "delete_primary",
+      "tenant_id": "team_platform",
+      "category": "procedure",
+      "content": "A deletion request must remove the original memory from the active store and prevent it from being returned by later queries."
+    },
+    {
+      "id": "delete_indexes",
+      "tenant_id": "team_platform",
+      "category": "procedure",
+      "content": "Deletion verification must also cover searchable projections and indexes derived from the original content."
+    },
+    {
+      "id": "context_hard_limit",
+      "tenant_id": "team_platform",
+      "category": "fact",
+      "content": "Context assembly must never exceed the configured token allowance merely to include another high-ranked memory."
+    },
+    {
+      "id": "context_selection",
+      "tenant_id": "team_platform",
+      "category": "fact",
+      "content": "Memory selection should be evaluated by relevant facts retained per token, not just the sum of raw ranking scores."
+    },
+    {
+      "id": "readiness",
+      "tenant_id": "team_platform",
+      "category": "operations",
+      "content": "Readiness should report success only when the configured storage backend can serve requests."
+    },
+    {
+      "id": "liveness",
+      "tenant_id": "team_platform",
+      "category": "operations",
+      "content": "Liveness only proves the process is running; it must not be treated as proof that PostgreSQL is accepting queries."
+    },
+    {
+      "id": "plat_distr_01",
+      "tenant_id": "team_platform",
+      "category": "operations",
+      "content": "HTTP request traces include a correlation ID so operators can follow a single request through the gateway."
+    },
+    {
+      "id": "plat_distr_02",
+      "tenant_id": "team_platform",
+      "category": "operations",
+      "content": "The application connection pool defaults to twelve concurrent database connections per process."
+    },
+    {
+      "id": "plat_distr_03",
+      "tenant_id": "team_platform",
+      "category": "fact",
+      "content": "The HNSW graph uses a neighbor parameter of sixteen for the current default index configuration."
+    },
+    {
+      "id": "plat_distr_04",
+      "tenant_id": "team_platform",
+      "category": "procedure",
+      "content": "Transient worker failures use exponential retries with a maximum of five attempts."
+    },
+    {
+      "id": "plat_distr_05",
+      "tenant_id": "team_platform",
+      "category": "fact",
+      "content": "A successful deployment records the container image digest in the release manifest."
+    },
+    {
+      "id": "plat_distr_06",
+      "tenant_id": "team_platform",
+      "category": "operations",
+      "content": "The background compaction task is scheduled once per day during the low-traffic window."
+    },
+    {
+      "id": "plat_distr_07",
+      "tenant_id": "team_platform",
+      "category": "security",
+      "content": "API credentials and data encryption credentials are distinct secrets with separate rotation procedures."
+    },
+    {
+      "id": "plat_distr_08",
+      "tenant_id": "team_platform",
+      "category": "operations",
+      "content": "The gateway exports request counts, status codes, and duration histograms to the metrics endpoint."
+    },
+    {
+      "id": "plat_distr_09",
+      "tenant_id": "team_platform",
+      "category": "procedure",
+      "content": "Database migration output is retained in the deployment log for incident diagnosis."
+    },
+    {
+      "id": "plat_distr_10",
+      "tenant_id": "team_platform",
+      "category": "fact",
+      "content": "The local development server binds to loopback by default to avoid accidental network exposure."
+    },
+    {
+      "id": "plat_distr_11",
+      "tenant_id": "team_platform",
+      "category": "procedure",
+      "content": "Batch ingestion caps each HTTP payload to keep memory use predictable during import."
+    },
+    {
+      "id": "plat_distr_12",
+      "tenant_id": "team_platform",
+      "category": "fact",
+      "content": "A cache entry is revalidated after its configured time-to-live elapses."
+    },
+    {
+      "id": "plat_distr_13",
+      "tenant_id": "team_platform",
+      "category": "operations",
+      "content": "The job queue records failed tasks for later inspection by the service owner."
+    },
+    {
+      "id": "plat_distr_14",
+      "tenant_id": "team_platform",
+      "category": "security",
+      "content": "The service rejects unknown request fields when strict input validation is enabled."
+    },
+    {
+      "id": "plat_distr_15",
+      "tenant_id": "team_platform",
+      "category": "fact",
+      "content": "The API schema is available from the local OpenAPI endpoint when documentation is enabled."
+    },
+    {
+      "id": "plat_distr_16",
+      "tenant_id": "team_platform",
+      "category": "operations",
+      "content": "The deployment pipeline captures image scan summaries before publishing deployment metadata."
+    },
+    {
+      "id": "pref_newest",
+      "tenant_id": "team_support",
+      "category": "preference",
+      "content": "When profile notes conflict, the latest explicit user preference takes precedence over older saved entries."
+    },
+    {
+      "id": "pref_history",
+      "tenant_id": "team_support",
+      "category": "preference",
+      "content": "Older profile notes may remain as history but should be clearly marked as superseded when a newer preference exists."
+    },
+    {
+      "id": "refund_window",
+      "tenant_id": "team_support",
+      "category": "policy",
+      "content": "Eligible refund requests must be submitted within thirty calendar days of purchase."
+    },
+    {
+      "id": "refund_receipt",
+      "tenant_id": "team_support",
+      "category": "policy",
+      "content": "A refund is eligible only when the customer supplies a receipt that identifies the original transaction."
+    },
+    {
+      "id": "payment_health",
+      "tenant_id": "team_support",
+      "category": "procedure",
+      "content": "Before escalating a payment outage, support should confirm that the service health alert is active."
+    },
+    {
+      "id": "payment_oncall",
+      "tenant_id": "team_support",
+      "category": "procedure",
+      "content": "A confirmed payment-processing outage should be handed to the on-call engineer with the incident ID and impact summary."
+    },
+    {
+      "id": "p1_response",
+      "tenant_id": "team_support",
+      "category": "policy",
+      "content": "Priority-one tickets have a fifteen-minute initial-response target during staffed support hours."
+    },
+    {
+      "id": "support_hours",
+      "tenant_id": "team_support",
+      "category": "fact",
+      "content": "The staffed support window runs Monday through Friday, from 09:00 to 18:00 UTC."
+    },
+    {
+      "id": "erase_request",
+      "tenant_id": "team_support",
+      "category": "procedure",
+      "content": "A verified privacy erasure request must remove the customer's personal information from active searchable memory."
+    },
+    {
+      "id": "erase_audit",
+      "tenant_id": "team_support",
+      "category": "security",
+      "content": "The erasure workflow records a non-sensitive audit event after deletion is verified across the primary store and derived indexes."
+    },
+    {
+      "id": "account_check",
+      "tenant_id": "team_support",
+      "category": "security",
+      "content": "An account recovery request must pass identity verification before a reset link is issued."
+    },
+    {
+      "id": "reset_token",
+      "tenant_id": "team_support",
+      "category": "security",
+      "content": "Password reset links expire after twenty minutes and can be consumed only once."
+    },
+    {
+      "id": "duplicate_cases",
+      "tenant_id": "team_support",
+      "category": "procedure",
+      "content": "When two support cases describe the same incident, link the duplicate to the canonical case instead of replying independently."
+    },
+    {
+      "id": "case_owner",
+      "tenant_id": "team_support",
+      "category": "procedure",
+      "content": "Every open support case must have a named owner responsible for the next customer update."
+    },
+    {
+      "id": "pii_redaction",
+      "tenant_id": "team_support",
+      "category": "security",
+      "content": "Customer identifiers should be redacted from general application logs unless access is explicitly authorized."
+    },
+    {
+      "id": "handoff_summary",
+      "tenant_id": "team_support",
+      "category": "procedure",
+      "content": "A shift handoff should include current status, actions already taken, and the next expected update."
+    },
+    {
+      "id": "sup_distr_01",
+      "tenant_id": "team_support",
+      "category": "fact",
+      "content": "The customer portal displays the current severity label next to each active support case."
+    },
+    {
+      "id": "sup_distr_02",
+      "tenant_id": "team_support",
+      "category": "procedure",
+      "content": "Billing questions are assigned to the revenue operations queue when they do not require engineering."
+    },
+    {
+      "id": "sup_distr_03",
+      "tenant_id": "team_support",
+      "category": "policy",
+      "content": "Feature requests receive a response within three business days when submitted through the feedback portal."
+    },
+    {
+      "id": "sup_distr_04",
+      "tenant_id": "team_support",
+      "category": "fact",
+      "content": "The knowledge base article ID is included in support replies when a self-service guide is available."
+    },
+    {
+      "id": "sup_distr_05",
+      "tenant_id": "team_support",
+      "category": "procedure",
+      "content": "Agents should attach the browser version when reporting a reproducible user-interface issue."
+    },
+    {
+      "id": "sup_distr_06",
+      "tenant_id": "team_support",
+      "category": "policy",
+      "content": "The standard onboarding package includes two remote configuration sessions."
+    },
+    {
+      "id": "sup_distr_07",
+      "tenant_id": "team_support",
+      "category": "fact",
+      "content": "The support portal groups open cases by organization and severity."
+    },
+    {
+      "id": "sup_distr_08",
+      "tenant_id": "team_support",
+      "category": "procedure",
+      "content": "A reopened issue is returned to the previous queue unless its product area has changed."
+    },
+    {
+      "id": "sup_distr_09",
+      "tenant_id": "team_support",
+      "category": "security",
+      "content": "Administrative console access requires a second factor in addition to the account password."
+    },
+    {
+      "id": "sup_distr_10",
+      "tenant_id": "team_support",
+      "category": "fact",
+      "content": "The weekly support report counts incoming cases, solved cases, and median time to close."
+    },
+    {
+      "id": "sup_distr_11",
+      "tenant_id": "team_support",
+      "category": "procedure",
+      "content": "Agents may request a screen recording when written reproduction steps are insufficient."
+    },
+    {
+      "id": "sup_distr_12",
+      "tenant_id": "team_support",
+      "category": "policy",
+      "content": "Trial extension requests are reviewed by the account team before any contract dates are modified."
+    },
+    {
+      "id": "sup_distr_13",
+      "tenant_id": "team_support",
+      "category": "fact",
+      "content": "Customer satisfaction surveys are sent after a case is marked resolved."
+    },
+    {
+      "id": "sup_distr_14",
+      "tenant_id": "team_support",
+      "category": "procedure",
+      "content": "The escalation channel uses a template containing service, severity, and customer impact."
+    },
+    {
+      "id": "sup_distr_15",
+      "tenant_id": "team_support",
+      "category": "security",
+      "content": "Production impersonation sessions are time-limited and recorded for audit."
+    },
+    {
+      "id": "sup_distr_16",
+      "tenant_id": "team_support",
+      "category": "fact",
+      "content": "The support dashboard refreshes queue totals every sixty seconds."
+    },
+    {
+      "id": "review_time",
+      "tenant_id": "team_sales",
+      "category": "fact",
+      "content": "The quarterly pipeline review starts at 14:00 UTC on the final Friday of each quarter."
+    },
+    {
+      "id": "review_prework",
+      "tenant_id": "team_sales",
+      "category": "procedure",
+      "content": "Account owners must update forecast amounts and explain material changes before the pipeline review begins."
+    },
+    {
+      "id": "emea_grouping",
+      "tenant_id": "team_sales",
+      "category": "fact",
+      "content": "EMEA opportunities are grouped by country and expected closing quarter for regional analysis."
+    },
+    {
+      "id": "emea_forecast",
+      "tenant_id": "team_sales",
+      "category": "procedure",
+      "content": "Regional forecasts distinguish committed revenue from upside opportunities that still need buyer confirmation."
+    },
+    {
+      "id": "opp_required_fields",
+      "tenant_id": "team_sales",
+      "category": "procedure",
+      "content": "Every opportunity record requires an account owner, expected close date, and current deal stage."
+    },
+    {
+      "id": "opp_stage_evidence",
+      "tenant_id": "team_sales",
+      "category": "procedure",
+      "content": "A deal may advance to the negotiation stage only after the buyer's requirements and decision process are documented."
+    },
+    {
+      "id": "retention_period",
+      "tenant_id": "team_sales",
+      "category": "policy",
+      "content": "Closed-account sales notes are retained for twenty-four months unless a contractual rule requires less."
+    },
+    {
+      "id": "retention_delete",
+      "tenant_id": "team_sales",
+      "category": "procedure",
+      "content": "At the end of the allowed retention period, records are deleted from the active account history and its searchable copies."
+    },
+    {
+      "id": "discount_approval",
+      "tenant_id": "team_sales",
+      "category": "policy",
+      "content": "Discounts above fifteen percent require written approval from the regional sales director."
+    },
+    {
+      "id": "margin_floor",
+      "tenant_id": "team_sales",
+      "category": "policy",
+      "content": "A proposed discount must keep the deal above the approved margin floor unless finance grants an exception."
+    },
+    {
+      "id": "commission_audit",
+      "tenant_id": "team_sales",
+      "category": "procedure",
+      "content": "Commission calculations are checked against the final signed contract value before payout."
+    },
+    {
+      "id": "commission_change",
+      "tenant_id": "team_sales",
+      "category": "procedure",
+      "content": "A post-signature price change must be reflected in the commission record before the next payout cycle."
+    },
+    {
+      "id": "partner_source",
+      "tenant_id": "team_sales",
+      "category": "fact",
+      "content": "Partner-sourced opportunities must record the referring partner before they enter the qualified pipeline."
+    },
+    {
+      "id": "partner_split",
+      "tenant_id": "team_sales",
+      "category": "policy",
+      "content": "When a channel partner shares ownership of a deal, the agreed revenue split must be attached to the opportunity."
+    },
+    {
+      "id": "territory_owner",
+      "tenant_id": "team_sales",
+      "category": "fact",
+      "content": "Each active opportunity is assigned to one primary territory owner who coordinates the next customer action."
+    },
+    {
+      "id": "territory_transfer",
+      "tenant_id": "team_sales",
+      "category": "procedure",
+      "content": "Territory reassignment requires an accepted handoff with the next action and target date."
+    },
+    {
+      "id": "sal_distr_01",
+      "tenant_id": "team_sales",
+      "category": "fact",
+      "content": "The sales dashboard refreshes regional totals every thirty minutes during business hours."
+    },
+    {
+      "id": "sal_distr_02",
+      "tenant_id": "team_sales",
+      "category": "procedure",
+      "content": "New leads are routed according to industry, company size, and assigned territory."
+    },
+    {
+      "id": "sal_distr_03",
+      "tenant_id": "team_sales",
+      "category": "policy",
+      "content": "The standard introductory call is scheduled for twenty-five minutes."
+    },
+    {
+      "id": "sal_distr_04",
+      "tenant_id": "team_sales",
+      "category": "fact",
+      "content": "The weekly sales digest lists new opportunities and deals that have changed stage."
+    },
+    {
+      "id": "sal_distr_05",
+      "tenant_id": "team_sales",
+      "category": "procedure",
+      "content": "Sales representatives should log the meeting outcome on the account record before the end of the day."
+    },
+    {
+      "id": "sal_distr_06",
+      "tenant_id": "team_sales",
+      "category": "fact",
+      "content": "The product demonstration environment resets its sample data every Monday morning."
+    },
+    {
+      "id": "sal_distr_07",
+      "tenant_id": "team_sales",
+      "category": "policy",
+      "content": "Travel expenses must be submitted before the monthly finance close."
+    },
+    {
+      "id": "sal_distr_08",
+      "tenant_id": "team_sales",
+      "category": "procedure",
+      "content": "The account plan includes stakeholders, renewal date, business goals, and expansion risks."
+    },
+    {
+      "id": "sal_distr_09",
+      "tenant_id": "team_sales",
+      "category": "fact",
+      "content": "The standard proposal template contains commercial terms and a customer signature page."
+    },
+    {
+      "id": "sal_distr_10",
+      "tenant_id": "team_sales",
+      "category": "procedure",
+      "content": "A closed-lost deal may be reopened when new buyer evidence changes the qualification assessment."
+    },
+    {
+      "id": "sal_distr_11",
+      "tenant_id": "team_sales",
+      "category": "policy",
+      "content": "Customer references require written permission from the account owner."
+    },
+    {
+      "id": "sal_distr_12",
+      "tenant_id": "team_sales",
+      "category": "fact",
+      "content": "The forecasting dashboard distinguishes new business from existing-customer expansion."
+    },
+    {
+      "id": "sal_distr_13",
+      "tenant_id": "team_sales",
+      "category": "procedure",
+      "content": "A sales engineer joins technical discovery when the prospect requires a non-standard integration."
+    },
+    {
+      "id": "sal_distr_14",
+      "tenant_id": "team_sales",
+      "category": "fact",
+      "content": "The regional team maintains a shared calendar for major industry events."
+    },
+    {
+      "id": "sal_distr_15",
+      "tenant_id": "team_sales",
+      "category": "policy",
+      "content": "Company-branded gifts above the stated threshold require compliance review."
+    },
+    {
+      "id": "sal_distr_16",
+      "tenant_id": "team_sales",
+      "category": "procedure",
+      "content": "The monthly report lists overdue follow-ups and opportunities without a recent activity note."
+    }
+  ],
+  "queries": [
+    {
+      "id": "stress_release_ship",
+      "tenant_id": "team_platform",
+      "query": "What has to be checked off before a new build may be distributed publicly?",
+      "relevant_memory_ids": [
+        "release_tag",
+        "release_verification"
+      ]
+    },
+    {
+      "id": "stress_restore_rotation",
+      "tenant_id": "team_platform",
+      "query": "If the original machine is gone, what is needed to recover an archived copy, and how do we confirm the replacement key is fully in use?",
+      "relevant_memory_ids": [
+        "backup_key",
+        "rotation_done"
+      ]
+    },
+    {
+      "id": "stress_vector_migration",
+      "tenant_id": "team_platform",
+      "query": "We are changing how text becomes a vector. What must happen to the old stored representations before queries can use the new index?",
+      "relevant_memory_ids": [
+        "embed_model",
+        "embed_vectors"
+      ]
+    },
+    {
+      "id": "stress_customer_boundaries",
+      "tenant_id": "team_platform",
+      "query": "How do we stop requests handled by different workers from exposing one workspace's saved information to another customer?",
+      "relevant_memory_ids": [
+        "tenant_claim",
+        "tenant_rls"
+      ]
+    },
+    {
+      "id": "stress_throttle_recovery",
+      "tenant_id": "team_platform",
+      "query": "A client is sending too many requests. What should it do next, and how do separate service replicas coordinate the allowed request volume?",
+      "relevant_memory_ids": [
+        "throttle_header",
+        "shared_rate"
+      ]
+    },
+    {
+      "id": "stress_erase_complete",
+      "tenant_id": "team_platform",
+      "query": "After someone asks us to forget their data, how can we prove that it is gone from both normal retrieval and any derived search structures?",
+      "relevant_memory_ids": [
+        "delete_primary",
+        "delete_indexes"
+      ]
+    },
+    {
+      "id": "stress_budget_quality",
+      "tenant_id": "team_platform",
+      "query": "A prompt has a hard size limit. How should the system choose useful memories without overflowing it?",
+      "relevant_memory_ids": [
+        "context_hard_limit",
+        "context_selection"
+      ]
+    },
+    {
+      "id": "stress_health_distinction",
+      "tenant_id": "team_platform",
+      "query": "The process is alive but its database is unreachable. Which health signal should stop traffic, and which one may still report that the process is running?",
+      "relevant_memory_ids": [
+        "readiness",
+        "liveness"
+      ]
+    },
+    {
+      "id": "stress_profile_conflict",
+      "tenant_id": "team_support",
+      "query": "A user has since changed their mind. Which saved instruction should the assistant follow, and how should the earlier instruction be represented?",
+      "relevant_memory_ids": [
+        "pref_newest",
+        "pref_history"
+      ]
+    },
+    {
+      "id": "stress_refund_eligibility",
+      "tenant_id": "team_support",
+      "query": "What conditions must a buyer meet, and what proof must they provide, to get their money back?",
+      "relevant_memory_ids": [
+        "refund_window",
+        "refund_receipt"
+      ]
+    },
+    {
+      "id": "stress_payment_escalation",
+      "tenant_id": "team_support",
+      "query": "Before escalating a transaction outage, what evidence should support verify and what details should engineering receive?",
+      "relevant_memory_ids": [
+        "payment_health",
+        "payment_oncall"
+      ]
+    },
+    {
+      "id": "stress_priority_response",
+      "tenant_id": "team_support",
+      "query": "For the most severe incoming support cases, what is the initial-response target and during which hours does it apply?",
+      "relevant_memory_ids": [
+        "p1_response",
+        "support_hours"
+      ]
+    },
+    {
+      "id": "stress_privacy_erasure",
+      "tenant_id": "team_support",
+      "query": "Once a customer passes identity checks and requests deletion, what operational steps and evidence are needed to close the request?",
+      "relevant_memory_ids": [
+        "erase_request",
+        "erase_audit"
+      ]
+    },
+    {
+      "id": "stress_account_recovery",
+      "tenant_id": "team_support",
+      "query": "What prevents an impostor from resetting an account, and what limits apply to the recovery link after it is sent?",
+      "relevant_memory_ids": [
+        "account_check",
+        "reset_token"
+      ]
+    },
+    {
+      "id": "stress_case_duplicates",
+      "tenant_id": "team_support",
+      "query": "Two tickets describe the same incident. How should the team avoid duplicate work and ensure someone owns the next customer update?",
+      "relevant_memory_ids": [
+        "duplicate_cases",
+        "case_owner"
+      ]
+    },
+    {
+      "id": "stress_logging_privacy",
+      "tenant_id": "team_support",
+      "query": "How can the team keep identifying customer details out of ordinary logs and still pass useful context between support shifts?",
+      "relevant_memory_ids": [
+        "pii_redaction",
+        "handoff_summary"
+      ]
+    },
+    {
+      "id": "stress_pipeline_review",
+      "tenant_id": "team_sales",
+      "query": "When is the sales forecast meeting held, and what should each account owner prepare in advance?",
+      "relevant_memory_ids": [
+        "review_time",
+        "review_prework"
+      ]
+    },
+    {
+      "id": "stress_regional_forecast",
+      "tenant_id": "team_sales",
+      "query": "How should the EMEA pipeline be organized for review, and how should confirmed income be separated from speculative deals?",
+      "relevant_memory_ids": [
+        "emea_grouping",
+        "emea_forecast"
+      ]
+    },
+    {
+      "id": "stress_opportunity_quality",
+      "tenant_id": "team_sales",
+      "query": "What basic fields and buyer evidence are needed before a deal can move forward in the sales process?",
+      "relevant_memory_ids": [
+        "opp_required_fields",
+        "opp_stage_evidence"
+      ]
+    },
+    {
+      "id": "stress_sales_retention",
+      "tenant_id": "team_sales",
+      "query": "What is the allowed lifetime for notes from a closed account, and what needs to happen when it expires?",
+      "relevant_memory_ids": [
+        "retention_period",
+        "retention_delete"
+      ]
+    },
+    {
+      "id": "stress_discount_control",
+      "tenant_id": "team_sales",
+      "query": "What sign-off and profitability checks are needed before offering a substantial price reduction?",
+      "relevant_memory_ids": [
+        "discount_approval",
+        "margin_floor"
+      ]
+    },
+    {
+      "id": "stress_commission_change",
+      "tenant_id": "team_sales",
+      "query": "What must be reconciled before commission is paid, especially if the signed deal value later changes?",
+      "relevant_memory_ids": [
+        "commission_audit",
+        "commission_change"
+      ]
+    },
+    {
+      "id": "stress_partner_deal",
+      "tenant_id": "team_sales",
+      "query": "For a deal brought in by a channel partner, what source attribution and revenue-sharing agreement need to be recorded?",
+      "relevant_memory_ids": [
+        "partner_source",
+        "partner_split"
+      ]
+    },
+    {
+      "id": "stress_territory_handoff",
+      "tenant_id": "team_sales",
+      "query": "Who is accountable for progressing an open deal, and what must accompany a change in account ownership?",
+      "relevant_memory_ids": [
+        "territory_owner",
+        "territory_transfer"
+      ]
+    }
+  ],
+  "evaluation_notes": {
+    "dataset_origin": "Curated synthetic product/operations memory corpus authored for evaluation; not live user data or a public standardized benchmark.",
+    "relevance_judgments": "Each query has two hand-assigned relevant memory IDs. Review the labels before using metrics for product decisions.",
+    "intended_use": "Compare deterministic hashes versus a pinned neural semantic embedding model, and measure candidate recall separately from context-packing retention.",
+    "limitation": "Single domain-specific model and a small synthetic set cannot establish general semantic retrieval quality."
+  }
+}
