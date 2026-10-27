@@ -37,6 +37,7 @@ services:
       - REDIS_PASSWORD=${REDIS_PASSWORD:-}
       - ALLOWED_ORIGINS=${ALLOWED_ORIGINS:-http://localhost:3000,http://127.0.0.1:3000}
       - GEMINI_API_KEY=${GEMINI_API_KEY:-}
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
     volumes:
       - synapse-engine-data:/data
     depends_on:
@@ -74,6 +75,7 @@ services:
       # and provision roles; schema DDL then runs using the distinct migration DSN.
       - SYNAPSE_BOOTSTRAP_DATABASE_URL=postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}@postgres-pgvector:5432/${POSTGRES_DB:-synapse_cognitive}
       - SYNAPSE_MIGRATION_DATABASE_URL=postgresql://${SYNAPSE_DB_ADMIN_ROLE:-synapse_admin}:${SYNAPSE_ADMIN_DB_PASSWORD:?SYNAPSE_ADMIN_DB_PASSWORD is required}@postgres-pgvector:5432/${POSTGRES_DB:-synapse_cognitive}
+      - SYNAPSE_API_KEY=${SYNAPSE_API_KEY:?SYNAPSE_API_KEY is required}
       - SYNAPSE_ENCRYPTION_KEY=${SYNAPSE_ENCRYPTION_KEY:?SYNAPSE_ENCRYPTION_KEY is required}
       - SYNAPSE_EMBEDDING_PROVIDER=${SYNAPSE_EMBEDDING_PROVIDER:?set a semantic provider (gemini|openai|sentence-transformers); deterministic is refused in production}
       - SYNAPSE_EMBEDDING_DIMENSION=${SYNAPSE_EMBEDDING_DIMENSION:-}
