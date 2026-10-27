@@ -1,5 +1,6 @@
 from typing import List, Dict, Any, Optional
 import logging
+import math
 
 logger = logging.getLogger("KnapsackPacker")
 
@@ -62,9 +63,18 @@ class KnapsackPacker:
 
         n = len(memories)
         weights = [max(1, int(m.get("token_cost", 1))) for m in memories]
-        values = [max(0, int(float(m.get("relevance_score", 0.0)) * 1000)) for m in memories]
+        values = []
+        for memory in memories:
+            score = float(memory.get("relevance_score", 0.0))
+            # Non-finite values are not useful selection signals. Treat them as
+            # zero rather than allowing NaN/inf to poison DP comparisons.
+            values.append(max(0.0, score) if math.isfinite(score) else 0.0)
 
-        dp = [0] * (budget + 1)
+        # Preserve score precision. Hybrid RRF scores are commonly around
+        # 0.01-0.03, with rank-to-rank differences below 0.001. Converting to
+        # int(score * 1000) collapses distinct scores into ties (or zero), so
+        # the chosen set can change when every score is rescaled.
+        dp = [0.0] * (budget + 1)
         items_included: List[List[int]] = [[] for _ in range(budget + 1)]
 
         for i in range(n):
