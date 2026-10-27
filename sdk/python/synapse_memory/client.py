@@ -90,10 +90,11 @@ class SynapseClient:
     ) -> Dict[str, Any]:
         """Perform a request without automatically replaying ambiguous writes.
 
-        GET/HEAD/OPTIONS are retry-safe by default. Callers may explicitly mark
-        semantically read-only POSTs (for example /query) as retry-safe. Mutation
-        requests are never automatically replayed after a timeout or a 5xx,
-        because the server may already have committed the operation.
+        GET/HEAD/OPTIONS are retry-safe by default. POST requests are not
+        retried unless the caller explicitly opts in with a proven idempotency
+        contract. This matters for /query too: retrieval updates access counts and
+        last-access timestamps. Mutation requests are not replayed after an
+        ambiguous timeout or 5xx response.
         """
         url = f"{self.base_url}{path}"
         method = method.upper()
@@ -174,7 +175,7 @@ class SynapseClient:
 
     def retrieve(self, query: str, max_tokens: int = 1500) -> QueryResult:
         data = self._request(
-            "POST", "/query", {"prompt": query, "maxTokens": max_tokens}, retry_safe=True
+            "POST", "/query", {"prompt": query, "maxTokens": max_tokens}
         )
         return QueryResult(
             fused_context=data.get("fused_context", ""),
