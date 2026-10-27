@@ -73,20 +73,40 @@ class LongMemEvalBenchmarkTests(unittest.TestCase):
         self.assertEqual(prepared[0]["relevant_ids"], {"s1"})
         self.assertEqual(stats["duplicate_session_entries_collapsed"], 1)
 
-    def test_conflicting_duplicate_sessions_fail_closed(self):
+    def test_conflicting_non_evidence_sessions_are_preserved_separately(self):
+        records = [
+            row(
+                "q1",
+                [],
+                ["s1", "s1"],
+                ["2023/05/20 (Sat) 02:21", "2023/05/21 (Sun) 02:21"],
+                [
+                    [{"role": "user", "content": "First distinct distractor."}],
+                    [{"role": "user", "content": "Second distinct distractor."}],
+                ],
+            )
+        ]
+        prepared, stats = MODULE._validate_source_records(records, expected_count=1)
+        documents = prepared[0]["documents"]
+        self.assertEqual(len(documents), 2)
+        self.assertEqual([doc["id"] for doc in documents], ["s1", "s1::duplicate-2"])
+        self.assertEqual({doc["source_session_id"] for doc in documents}, {"s1"})
+        self.assertEqual(stats["conflicting_duplicate_session_entries_preserved"], 1)
+
+    def test_conflicting_duplicate_sessions_fail_if_referenced_as_evidence(self):
         records = [
             row(
                 "q1",
                 ["s1"],
                 ["s1", "s1"],
-                ["2023/05/20 (Sat) 02:21", "2023/05/20 (Sat) 02:21"],
+                ["2023/05/20 (Sat) 02:21", "2023/05/21 (Sun) 02:21"],
                 [
-                    [{"role": "user", "content": "We released version 1.2.0."}],
-                    [{"role": "user", "content": "We released version 1.3.0."}],
+                    [{"role": "user", "content": "First possible evidence."}],
+                    [{"role": "user", "content": "Conflicting possible evidence."}],
                 ],
             )
         ]
-        with self.assertRaisesRegex(ValueError, "conflicting duplicate session ID"):
+        with self.assertRaisesRegex(ValueError, "referenced by reviewed evidence"):
             MODULE._validate_source_records(records, expected_count=1)
 
     def test_future_dated_gold_evidence_fails_closed(self):
