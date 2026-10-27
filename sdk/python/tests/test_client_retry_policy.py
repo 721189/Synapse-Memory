@@ -74,27 +74,21 @@ class TestClientRetryPolicy(unittest.TestCase):
         self.assertEqual(request.call_count, 1)
         self.assertEqual(caught.exception.status, 503)
 
-    def test_read_only_query_post_can_retry(self):
-        query_data = {
-            "fused_context": "The plan is annual.",
-            "injected_nodes_count": 1,
-            "injected_nodes": [],
-            "active_storage_backend": "pgvector",
-        }
+    def test_query_post_is_not_retried_without_idempotency_contract(self):
+        # Retrieval updates access_count and last_accessed_at in the engine, so
+        # a blind replay after a 503 is not strictly side-effect-free.
         with patch.object(
             self.client._session,
             "request",
-            side_effect=[
-                FakeResponse(503, text="temporarily unavailable"),
-                FakeResponse(200, {"success": True, "data": query_data}),
-            ],
-        ) as request, patch("synapse_memory.client.time.sleep"):
-            result = self.client.retrieve("which plan?")
+            return_value=FakeResponse(503, text="temporarily unavailable"),
+        ) as request:
+            with self.assertRaisesRegex(SynapseError, "automatic retry suppressed") as caught:
+                self.client.retrieve("which plan?")
 
-        self.assertEqual(result.fused_context, "The plan is annual.")
-        self.assertEqual(request.call_count, 2)
-        self.assertEqual(request.call_args_list[0].args[0], "POST")
-        self.assertTrue(request.call_args_list[0].args[1].endswith("/query"))
+        self.assertEqual(request.call_count, 1)
+        self.assertEqual(caught.exception.status, 503)
+        self.assertEqual(request.call_args.args[0], "POST")
+        self.assertTrue(request.call_args.args[1].endswith("/query"))
 
     def test_retry_after_header_is_respected_for_safe_request(self):
         with patch.object(
