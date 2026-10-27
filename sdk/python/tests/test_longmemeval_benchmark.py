@@ -46,7 +46,7 @@ class LongMemEvalBenchmarkTests(unittest.TestCase):
                 [[{"role": "user", "content": "Unrelated memory."}]],
             ),
         ]
-        prepared, stats = MODULE._validate_source_records(records)
+        prepared, stats = MODULE._validate_source_records(records, expected_count=2)
         q1 = next(item for item in prepared if item["id"] == "q1")
         self.assertEqual([doc["id"] for doc in q1["documents"]], ["s1"])
         self.assertEqual(q1["relevant_ids"], {"s1"})
@@ -65,7 +65,7 @@ class LongMemEvalBenchmarkTests(unittest.TestCase):
             )
         ]
         with self.assertRaisesRegex(ValueError, "missing or occurs after"):
-            MODULE._validate_source_records(records)
+            MODULE._validate_source_records(records, expected_count=1)
 
     def test_metric_values_match_session_relevance_labels(self):
         values = MODULE._metrics(["a", "b", "c"], {"b"})
