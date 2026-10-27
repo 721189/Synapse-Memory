@@ -329,6 +329,17 @@ def provision(dsn, runtime_role, admin_role, runtime_password, admin_password,
     advisories = []
     try:
         cur = conn.cursor()
+        caller_row = _fetchone(cur, "SELECT current_user;", ())
+        caller_role = caller_row[0] if caller_row else None
+        if not verify_only and caller_role == admin_role:
+            failures.append(
+                "Refusing to provision with the bootstrap connection and migration role "
+                + repr(admin_role) + " as the same PostgreSQL role. Use a separate "
+                "bootstrap/superuser DSN for --database-url and set "
+                "SYNAPSE_MIGRATION_DATABASE_URL to the non-superuser migration role DSN."
+            )
+            return failures, advisories
+
         admin_exists = bool(_fetchone(
             cur, "SELECT 1 FROM pg_roles WHERE rolname = %s;", (admin_role,)))
         runtime_exists = bool(_fetchone(
@@ -546,9 +557,10 @@ def main(argv=None):
     parser = argparse.ArgumentParser(
         description="Provision least-privilege SynapseMemory PostgreSQL roles (P0-5)")
     parser.add_argument("--database-url",
-                        default=os.environ.get("DATABASE_URL")
+                        default=os.environ.get("SYNAPSE_BOOTSTRAP_DATABASE_URL")
+                        or os.environ.get("DATABASE_URL")
                         or os.environ.get("SYNAPSE_ADMIN_DATABASE_URL") or "",
-                        help="Bootstrap/migration DSN (defaults to $DATABASE_URL)")
+                        help="Bootstrap/superuser DSN used only to install extensions and provision roles")
     parser.add_argument("--runtime-role",
                         default=os.environ.get("SYNAPSE_DB_RUNTIME_ROLE", "synapse_app"))
     parser.add_argument("--admin-role",
@@ -564,10 +576,9 @@ def main(argv=None):
     parser.add_argument("--skip-verify", action="store_true",
                         help="apply the plan but skip the post-provision check")
     parser.add_argument("--apply-migrations", action="store_true",
-                        help="after provisioning, apply the forward-only schema "
-                             "migrations using the admin/bootstrap DSN. Required for "
-                             "a clean database, because the DML-only runtime role cannot "
-                             "create the schema itself (F-04).")
+                        help="after provisioning, apply schema with "
+                             "$SYNAPSE_MIGRATION_DATABASE_URL as the non-superuser "
+                             "migration role; required for a clean database (F-04)")
     args = parser.parse_args(argv)
 
     try:
@@ -592,14 +603,29 @@ def main(argv=None):
         return 0
 
     if not args.database_url:
-        print("No DATABASE_URL configured; nothing to provision. "
-              "Set DATABASE_URL (bootstrap/migration DSN) and re-run.")
+        print("No bootstrap database URL configured; nothing to provision. "
+              "Set SYNAPSE_BOOTSTRAP_DATABASE_URL (or --database-url) and re-run.")
         return 2
     try:
         import psycopg2  # noqa: F401
     except ImportError:
         print("psycopg2 is not installed; cannot provision. "
               "Install with: pip install 'synapse-memory-engine[pgvector]'")
+        return 2
+
+    if not args.verify_only:
+        if not args.runtime_password:
+            print("FAIL SYNAPSE_APP_DB_PASSWORD / --runtime-password is required.")
+            return 2
+        if not args.admin_password:
+            print("FAIL SYNAPSE_ADMIN_DB_PASSWORD / --admin-password is required.")
+            return 2
+    if args.apply_migrations and not os.environ.get("SYNAPSE_MIGRATION_DATABASE_URL", "").strip():
+        print(
+            "FAIL SYNAPSE_MIGRATION_DATABASE_URL is required for --apply-migrations. "
+            "It must connect as the distinct non-superuser migration role; do not run "
+            "schema migrations through the bootstrap/superuser DSN."
+        )
         return 2
 
     print("== SynapseMemory DB role provisioning ==")
@@ -622,7 +648,8 @@ def main(argv=None):
         print("Provisioned and verified: " + args.runtime_role + " is a NON-owner, "
               "NOBYPASSRLS, NOSUPERUSER, DML-only role.")
         if args.apply_migrations:
-            rc = _apply_migrations(args.database_url, args.runtime_role, args.admin_role)
+            migration_dsn = os.environ["SYNAPSE_MIGRATION_DATABASE_URL"].strip()
+            rc = _apply_migrations(migration_dsn, args.runtime_role, args.admin_role)
             if rc != 0:
                 return rc
             # Re-apply the grants: migrations just created the tables AS THE
