@@ -8,18 +8,60 @@ import re
 import unittest
 from pathlib import Path
 
-try:
-    from synapse_memory.core.embedding_provider import GeminiEmbeddingProvider
-except ImportError:  # pragma: no cover
-    GeminiEmbeddingProvider = None
-
 ROOT = Path(__file__).resolve().parents[3]
+
+
+
+class TestConfiguredProviderOutputDimensions(unittest.TestCase):
+    def test_gemini_provider_sends_requested_output_dimensionality(self):
+        mock_response = MagicMock()
+        mock_response.__enter__.return_value.read.return_value = json.dumps(
+            {"embedding": {"values": [0.0] * 768}}
+        ).encode("utf-8")
+        with patch(
+            "synapse_memory.core.embedding_provider.urllib.request.urlopen",
+            return_value=mock_response,
+        ) as urlopen:
+            vector = GeminiEmbeddingProvider("test-key", dim=768).embed("test text")
+
+        request = urlopen.call_args.args[0]
+        payload = json.loads(request.data.decode("utf-8"))
+        self.assertEqual(payload["outputDimensionality"], 768)
+        self.assertEqual(len(vector), 768)
+
+    def test_openai_embedding_v3_sends_requested_dimensions(self):
+        mock_response = MagicMock()
+        mock_response.__enter__.return_value.read.return_value = json.dumps(
+            {"data": [{"embedding": [0.0] * 1024}]}
+        ).encode("utf-8")
+        with patch(
+            "synapse_memory.core.embedding_provider.urllib.request.urlopen",
+            return_value=mock_response,
+        ) as urlopen:
+            vector = OpenAIEmbeddingProvider("test-key", dim=1024).embed("test text")
+
+        request = urlopen.call_args.args[0]
+        payload = json.loads(request.data.decode("utf-8"))
+        self.assertEqual(payload["dimensions"], 1024)
+        self.assertEqual(len(vector), 1024)
+
+    def test_embedder_passes_explicit_dimension_to_gemini_provider(self):
+        with patch.dict(
+            os.environ,
+            {
+                "NODE_ENV": "production",
+                "SYNAPSE_EMBEDDING_PROVIDER": "gemini",
+                "GEMINI_API_KEY": "test-key",
+                "SYNAPSE_EMBEDDING_DIMENSION": "768",
+            },
+            clear=True,
+        ):
+            embedder = SynapseEmbedder()
+        self.assertEqual(embedder.dimension, 768)
 
 
 class TestDefaultProviderDimension(unittest.TestCase):
     def test_gemini_provider_defaults_to_3072_dimensions(self):
-        if GeminiEmbeddingProvider is None:
-            self.skipTest("Gemini provider not importable")
         defaults = GeminiEmbeddingProvider.__init__.__defaults__ or ()
         self.assertIn(3072, defaults)
 
