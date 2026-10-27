@@ -574,9 +574,9 @@ Single source of truth: [`deploy/.env.example`](deploy/.env.example) (compose) a
 
 | Variable | Default | Description |
 |---|---|---|
-| `SYNAPSE_EMBEDDING_PROVIDER` | `local` | `local` \| `gemini` \| `openai` \| `deterministic` |
-| `SYNAPSE_EMBEDDING_MODEL` | `all-MiniLM-L6-v2` | Model name |
-| `SYNAPSE_EMBEDDING_DIMENSION` | `384` | Vector dimension (schema/rows must match) |
+| `SYNAPSE_EMBEDDING_PROVIDER` | unset: dev deterministic; Compose/Helm: `gemini` | `gemini` \| `openai` \| `sentence-transformers`; deterministic/local/hash is development/test only |
+| `SYNAPSE_EMBEDDING_MODEL` | `all-MiniLM-L6-v2` | Sentence-transformers model name |
+| `SYNAPSE_EMBEDDING_DIMENSION` | provider-dependent | Gemini: 3072; OpenAI text-embedding-3-small: 1536; MiniLM: 384; deterministic: 128. Gemini/OpenAI can request supported output widths; schema and query vectors must match. |
 
 ### Database roles (migrate-then-run)
 
