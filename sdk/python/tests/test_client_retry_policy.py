@@ -5,7 +5,7 @@ not replay mutations when a timeout or 5xx leaves the operation outcome
 ambiguous.
 """
 import unittest
-from unittest.mock import call, patch
+from unittest.mock import patch
 
 import requests
 
