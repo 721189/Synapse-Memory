@@ -124,7 +124,7 @@ class TestEngineUrlDerivation(unittest.TestCase):
 class TestKubeletExpansionOrder(unittest.TestCase):
     """kubelet expands `$(VAR)` sequentially against ALREADY-DEFINED vars.
     A password variable declared AFTER its consumer ships the literal
-    `$(DB_PASSWORD)` into the DSN -> auth failure -> fail-closed crash loop."""
+    `$(SYNAPSE_APP_DB_PASSWORD)` into the DSN -> auth failure -> fail-closed crash loop."""
 
     def _assert_defines_before(self, text, first, second, label):
         i_def = text.find(f"- name: {first}")
@@ -138,9 +138,16 @@ class TestKubeletExpansionOrder(unittest.TestCase):
             f"env list, otherwise the literal placeholder ships to production.",
         )
 
-    def test_db_password_precedes_database_url(self):
-        self._assert_defines_before(engine_section(read(DEPLOYMENT)),
-                                    "DB_PASSWORD", "DATABASE_URL", "engine")
+    def test_runtime_db_password_precedes_database_url(self):
+        engine = engine_section(read(DEPLOYMENT))
+        self._assert_defines_before(
+            engine, "SYNAPSE_APP_DB_PASSWORD", "DATABASE_URL", "engine"
+        )
+        self.assertIn(
+            "postgresql://{{ .Values.config.dbUser }}:$(SYNAPSE_APP_DB_PASSWORD)",
+            engine,
+            "DATABASE_URL must use the runtime password rather than bootstrap credentials",
+        )
 
     def test_redis_password_precedes_redis_url(self):
         self._assert_defines_before(engine_section(read(DEPLOYMENT)),
@@ -161,8 +168,13 @@ class TestEngineEnvParityWithCompose(unittest.TestCase):
             self.assertIn(f"- name: {name}", self.engine, f"engine env missing {name}")
 
     def test_cors_and_embedder_env_present(self):
-        for name in ("ALLOWED_ORIGINS", "GEMINI_API_KEY"):
+        for name in ("ALLOWED_ORIGINS", "GEMINI_API_KEY", "OPENAI_API_KEY"):
             self.assertIn(f"- name: {name}", self.engine, f"engine env missing {name}")
+
+    def test_migration_role_is_explicit(self):
+        self.assertIn("- name: SYNAPSE_DB_ADMIN_ROLE", self.engine)
+        self.assertIn("SYNAPSE_DB_ADMIN_ROLE:", read(CONFIGMAP))
+        self.assertIn("config.dbAdminRole", read(VALUES))
 
     def test_migrate_then_run_env_present(self):
         self.assertIn("- name: SYNAPSE_APPLY_DB_SCHEMA", self.engine)
