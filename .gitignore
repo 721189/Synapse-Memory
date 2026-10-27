@@ -36,3 +36,4 @@ htmlcov/
 test_*.db
 bench_*.db
 retrieval-baseline-results.json
+packing-stress-results.json
