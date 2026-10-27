@@ -173,9 +173,8 @@ class GeminiEmbeddingProvider(EmbeddingProvider):
         headers = {"Content-Type": "application/json"}
         payload = {
             "content": {"parts": [{"text": text}]},
-            # gemini-embedding-001 supports output dimensionality; keep the
-            # provider response width aligned with the configured database.
-            "outputDimensionality": self._dim,
+            # Prefer EmbedContentConfig over the deprecated top-level field.
+            "embedContentConfig": {"outputDimensionality": self._dim},
         }
 
         req = urllib.request.Request(
