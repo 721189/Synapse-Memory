@@ -76,6 +76,7 @@ class TestRetrievalBaselineBenchmark(unittest.TestCase):
                     "ranked_fit",
                     "greedy_ratio",
                     "knapsack_dp",
+                    "rank_discount_dp",
                 },
             )
             for values in data["ranking"].values():
