@@ -439,7 +439,7 @@ jobs:
           python -m pip install --upgrade pip setuptools wheel
           python -m pip install -e sdk/python
 
-      - name: Run fixed offline retrieval benchmark
+      - name: Run fixed retrieval baseline
         run: |
           python sdk/python/benchmark/retrieval_baselines.py \
             --dataset sdk/python/benchmark/retrieval_dataset.json \
@@ -450,10 +450,23 @@ jobs:
             --candidate-k 10 \
             --token-budget 90
 
+      - name: Run paraphrase-heavy multi-fact packing stress fixture
+        run: |
+          python sdk/python/benchmark/retrieval_baselines.py \
+            --dataset sdk/python/benchmark/packing_stress_dataset.json \
+            --output packing-stress-results.json \
+            --repeats 5 \
+            --warmups 1 \
+            --top-k 5 \
+            --candidate-k 10 \
+            --token-budget 90
+
       - name: Upload raw benchmark results
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: retrieval-baseline-${{ github.sha }}
-          path: retrieval-baseline-results.json
+          name: retrieval-baselines-${{ github.sha }}
+          path: |
+            retrieval-baseline-results.json
+            packing-stress-results.json
           if-no-files-found: error
           retention-days: 30
