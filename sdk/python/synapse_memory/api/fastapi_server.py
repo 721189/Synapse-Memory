@@ -6,7 +6,7 @@ import hashlib
 import logging
 import threading
 from typing import List, Dict, Any, Optional, Tuple
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 import uvicorn
 from fastapi import FastAPI, HTTPException, status, Header, Request, Depends
 from fastapi.middleware.cors import CORSMiddleware
@@ -415,21 +415,32 @@ def envelope(data: Any, request: Optional[Request] = None) -> Dict[str, Any]:
 
 # --- PYDANTIC SCHEMAS ---
 
-class IngestRequest(BaseModel):
+class SynapseAPIModel(BaseModel):
+    """Request/response models accept canonical aliases and Python field names.
+
+    Clients in Python naturally serialize fields as snake_case (tenant_id,
+    max_token_budget), while the public JSON API also documents camelCase aliases
+    (tenantId, maxTokens). Pydantic otherwise silently ignores the snake_case key
+    when an alias is configured, which can silently change a request's tenant.
+    """
+    model_config = ConfigDict(populate_by_name=True)
+
+
+class IngestRequest(SynapseAPIModel):
     content: str = Field(..., min_length=1, max_length=32000, description="Raw text representation of the memory segment")
     category: str = Field("interaction", min_length=1, max_length=64, pattern=r"^[a-z0-9_\-]+$", description="Cognitive category (e.g., interaction, preference, system)")
     confidence: float = Field(0.95, ge=0.0, le=1.0, description="Confidence alignment coefficient")
     tenant_id: Optional[str] = Field(None, alias="tenantId", min_length=1, max_length=128, pattern=r"^[A-Za-z0-9_\-\.]+$", description="Target tenant ID for isolation")
 
 
-class IngestResponse(BaseModel):
+class IngestResponse(SynapseAPIModel):
     id: str
     status: str
     token_cost: int
     tenant_id: str
 
 
-class QueryRequest(BaseModel):
+class QueryRequest(SynapseAPIModel):
     prompt: Optional[str] = Field(None, min_length=1, max_length=8000, description="Active user prompt")
     query: Optional[str] = Field(None, min_length=1, max_length=8000, description="Alternative alias for prompt")
     max_token_budget: int = Field(1500, ge=50, le=8000, description="Max token window allowed for context packing", alias="maxTokens")
@@ -437,20 +448,20 @@ class QueryRequest(BaseModel):
     tenant_id: Optional[str] = Field(None, alias="tenantId", min_length=1, max_length=128, pattern=r"^[A-Za-z0-9_\-\.]+$", description="Target tenant ID")
 
 
-class QueryResponse(BaseModel):
+class QueryResponse(SynapseAPIModel):
     fused_context: str
     injected_nodes_count: int
     injected_nodes: List[Dict[str, Any]]
     active_storage_backend: str
 
 
-class FeedbackRequest(BaseModel):
+class FeedbackRequest(SynapseAPIModel):
     memory_id: str = Field(..., min_length=1, max_length=256, description="Memory node ID")
     feedback_type: str = Field(..., pattern=r"^(positive|negative)$", description="Must be either 'positive' (boost) or 'negative' (hallucination alert)")
     tenant_id: Optional[str] = Field(None, alias="tenantId", min_length=1, max_length=128, pattern=r"^[A-Za-z0-9_\-\.]+$")
 
 
-class CreateKeyRequest(BaseModel):
+class CreateKeyRequest(SynapseAPIModel):
     name: str = Field(..., min_length=1, max_length=128)
     organization_id: str = Field("org_default", min_length=1, max_length=128, pattern=r"^[A-Za-z0-9_\-\.]+$")
     project_id: str = Field("proj_default", min_length=1, max_length=128, pattern=r"^[A-Za-z0-9_\-\.]+$")
@@ -467,7 +478,7 @@ class CreateKeyRequest(BaseModel):
     ttl_days: Optional[int] = Field(365, ge=1, le=3650)
 
 
-class RevokeKeyRequest(BaseModel):
+class RevokeKeyRequest(SynapseAPIModel):
     key_id: str = Field(..., min_length=1, max_length=128)
 
 
@@ -1079,7 +1090,7 @@ def prune_audit_trail(
     return envelope({"deleted": deleted, "older_than_days": days}, request)
 
 
-class RotateKeyRequest(BaseModel):
+class RotateKeyRequest(SynapseAPIModel):
     key_id: str
 
 
@@ -1135,13 +1146,13 @@ def rotate_api_key(
     )
 
 
-class BulkIngestItem(BaseModel):
+class BulkIngestItem(SynapseAPIModel):
     content: str = Field(..., min_length=1, max_length=32000)
     category: str = Field("interaction", min_length=1, max_length=64, pattern=r"^[a-z0-9_\-]+$")
     confidence: float = Field(0.95, ge=0.0, le=1.0)
 
 
-class BulkIngestRequest(BaseModel):
+class BulkIngestRequest(SynapseAPIModel):
     items: List[BulkIngestItem] = Field(..., min_length=1, max_length=100)
     tenant_id: Optional[str] = Field(None, alias="tenantId", min_length=1, max_length=128, pattern=r"^[A-Za-z0-9_\-\.]+$")
 
