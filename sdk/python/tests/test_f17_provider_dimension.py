@@ -32,7 +32,7 @@ class TestConfiguredProviderOutputDimensions(unittest.TestCase):
 
         request = urlopen.call_args.args[0]
         payload = json.loads(request.data.decode("utf-8"))
-        self.assertEqual(payload["outputDimensionality"], 768)
+        self.assertEqual(payload["embedContentConfig"]["outputDimensionality"], 768)
         self.assertEqual(len(vector), 768)
 
     def test_openai_embedding_v3_sends_requested_dimensions(self):
