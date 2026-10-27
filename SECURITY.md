@@ -19,17 +19,19 @@ To help us triage and resolve the issue quickly, please include:
 - Any suggested mitigations or candidate patches.
 
 ### Response Timelines
-- **Initial Acknowledgment**: Within 24–48 hours.
+- **Initial Acknowledgment**: Within 24â€“48 hours.
 - **Triage & Severity Assessment**: Within 5 business days.
 - **Coordinated Patch & Public Advisory**: Target within 30 days of confirmed reproduction, following standard Coordinated Vulnerability Disclosure (CVD) practices.
 
 ## Supported Versions
 
-| Version | Supported | Security Updates |
+| Version | Status | Guidance |
 | :--- | :--- | :--- |
-| `1.2.x` (SDK + API v1 + chart app 1.2.0) | Yes | Active patches & immediate hotfixes |
-| `0.1.x` | Limited | Critical CVE fixes only |
-| `< 0.1.0` | No | End of Life (upgrade immediately) |
+| `1.3.1` (source release candidate) | Pending PyPI publication | The source candidate includes follow-up fixes. Install only after the `v1.3.1` tag workflow succeeds and PyPI lists the release. |
+| `1.3.0` (published SDK/API package) | Published; pre-production caveats remain | The published artifact predates the 3,072-dimensional HNSW and clean-deployment fixes; these changes are not retroactively included in 1.3.0. |
+| `1.2.x` | Legacy | No new feature work; upgrade only after checking the release notes and deployment prerequisites. |
+| `0.1.x` | Legacy | Critical fixes only where feasible. |
+| `< 0.1.0` | End of life | Upgrade after reviewing schema/data migration requirements. |
 
 ## Security Architecture & Best Practices
 
@@ -38,29 +40,37 @@ To help us triage and resolve the issue quickly, please include:
    - Use dedicated KMS/Vault providers (AWS KMS, GCP Cloud KMS, HashiCorp Vault) to inject 32-byte Fernet keys into containers at runtime.
    - Ensure secure file permissions (`chmod 600 .synapse_key`) when using local filesystem fallback keys.
    - Back up the key separately from data; key loss = unrecoverable ciphertext (see `docs/backup-recovery.md`).
-2. **Multi-Tenant Memory Isolation (PostgreSQL — proven, not assumed)**:
+2. **Multi-Tenant Memory Isolation (PostgreSQL â€” proven, not assumed)**:
    - In shared cluster deployments, always enforce tenant boundary verification in API gateways.
    - The engine applies `ENABLE` + `FORCE ROW LEVEL SECURITY` and a `tenant_isolation_policy`
      on `memories`. RLS is permissive-by-role: a query is filtered by
      `app.current_tenant`, and an empty context returns **zero rows** (fail closed).
-   - **Required production topology — "migrate-then-run":** create the roles once with
-     `scripts/provision_db_roles.py`, run the schema migration step as the migration role,
-     then run the engine as a DML-only runtime role:
+   - **Required production topology — migrate-then-run:** the bootstrap
+     superuser, schema-migration role, and runtime role must be distinct. Use the
+     bootstrap DSN only to install extensions and provision roles; use the
+     non-superuser migration DSN for DDL; use the DML-only runtime DSN for traffic.
      ```bash
-     # 1. Roles (run once, per cluster)
-     DATABASE_URL=postgresql://bootstrap@host/db \
-       python scripts/provision_db_roles.py \
-         --runtime-role synapse_app --admin-role synapse_admin \
-         --runtime-password "$SYNAPSE_APP_DB_PASSWORD" \
-         --admin-password "$SYNAPSE_ADMIN_DB_PASSWORD"
-     # 2. Schema + migrations, as the migration role
-     DATABASE_URL=postgresql://synapse_admin@host/db PYTHONPATH=sdk/python \
-       python -c "from synapse_memory.core.pgvector_db import PGVectorMemoryStore; \
-                  PGVectorMemoryStore(connection_string='$DATABASE_URL', fail_closed=True)"
-     # 3. Re-run the script so the runtime role is granted DML on the new tables
-     # 4. Fail the release if the invariant is broken
-     python scripts/provision_db_roles.py --verify-only
+     # Three distinct roles/passwords.
+     export SYNAPSE_BOOTSTRAP_DATABASE_URL="postgresql://postgres:<bootstrap-password>@host:5432/db"
+     export SYNAPSE_MIGRATION_DATABASE_URL="postgresql://synapse_admin:<migration-password>@host:5432/db"
+     export SYNAPSE_API_KEY="<generated-root-api-key>"
+     export SYNAPSE_ENCRYPTION_KEY="<generated-fernet-key>"
+     export SYNAPSE_ADMIN_DB_PASSWORD="<migration-password>"
+     export SYNAPSE_APP_DB_PASSWORD="<runtime-password>"
+     python scripts/provision_db_roles.py \
+       --runtime-role synapse_app --admin-role synapse_admin \
+       --runtime-password "$SYNAPSE_APP_DB_PASSWORD" \
+       --admin-password "$SYNAPSE_ADMIN_DB_PASSWORD" --apply-migrations
+
+     # The engine then uses only the runtime DSN:
+     export DATABASE_URL="postgresql://synapse_app:<runtime-password>@host:5432/db"
+     export SYNAPSE_APPLY_DB_SCHEMA=false
      ```
+     The script installs pgvector/pg_trgm using the bootstrap connection, creates
+     the roles, applies schema through SYNAPSE_MIGRATION_DATABASE_URL, creates
+     the auth schema/root key, then reapplies runtime DML grants. It rejects a
+     configuration where bootstrap and migration roles are the same.
+   
    - The runtime role is verified to be **NOT a superuser, NOT `BYPASSRLS`, NOT the table
      owner, has no schema `CREATE`/`TRUNCATE`/`REFERENCES`/`TRIGGER`**, and is **not a member
      of the migration role**. The script exits non-zero if any of that is untrue.
@@ -86,7 +96,7 @@ To help us triage and resolve the issue quickly, please include:
    | Storage | Fernet field-encrypted (AES-128-CBC + HMAC-SHA256) | Stored plaintext search projection (written alongside `content` at ingest; readable by design for lexical/FTS search) | Readable search derivative (tsvector built from `content_plain`; embedding vectors) | Full disk / managed-DB encryption |
    | Access | Requires key (KMS/Vault / local key file) | Always readable (search projection) | Always readable | Operator-enforced |
    | Use case | Regulated data at rest | Full-text & vector search only | Obfuscated retrieval | At-rest coverage |
-   | Notes | `content_plain` is stored plaintext — database dumps and backups expose it; protect with DB access controls + volume encryption, not field encryption | | | |
+   | Notes | `content_plain` is stored plaintext â€” database dumps and backups expose it; protect with DB access controls + volume encryption, not field encryption | | | |
    - Volume/database encryption must be enabled by the operator for at-rest coverage.
    - **Database dump exposure:** `pg_dump` / logical backups expose `content_plain`, `search_vector`, and `embedding` in readable form; only `content` is Fernet ciphertext. Treat dumps as regulated-data artifacts: encrypt at rest, restrict restore access, and never ship dumps to untrusted environments. Encryption keys must be backed up separately from data (key loss = unrecoverable ciphertext; see `docs/backup-recovery.md`).
 4. **Model & Ingestion Sanitization**:
@@ -94,12 +104,12 @@ To help us triage and resolve the issue quickly, please include:
 5. **Operational Security**:
    - Auth failures return generic messages (no internal reason leakage); audit log retains detail.
    - Rate limiting is in-process by default; set `REDIS_URL` for cluster-wide enforcement across replicas.
-   - Rotate API keys via create → migrate → revoke; revoke takes effect immediately.
+   - Rotate API keys via create â†’ migrate â†’ revoke; revoke takes effect immediately.
 
 
 ## Operational limits you must plan for
 
-These are deliberate, documented trade-offs � not bugs. Size your deployment
+These are deliberate, documented trade-offs — not bugs. Size your deployment
 against them.
 
 | Limit | Behaviour | How to tighten |
@@ -116,7 +126,7 @@ against them.
 - **Independent security review: not yet performed.** The threat model below is
   the maintainers' own; do not treat it as third-party assurance.
 - **Load and outage behaviour** is covered by `tests/test_load_resilience.py`
-  (parallel writers/readers, database interruption, restart durability) � these
+  (parallel writers/readers, database interruption, restart durability) — these
   run against SQLite and a live pgvector instance in CI.
 - **Backup/restore** is covered by `tests/test_backup_restore_drill.py`; rehearse
   it against YOUR storage before relying on it.

@@ -1,5 +1,7 @@
 # Production-Hardening Baseline Report
 
+> **Current-status correction — 2026-10-27:** this file began as a historical hardening log. Its earlier “all closed” and “main GREEN” entries are not a current release sign-off. The published SDK v1.3.0 exists, but the latest reviewed `main` CI run ([40322653869](https://github.com/721189/Synapse-Memory/actions/runs/40322653869), commit `0dc97c9`) failed the Compose deployment smoke and split-image Compose config validation. PR #18 (`fix/release-readiness-caveats`) contains those fixes and its prior source candidate passed the complete PR CI, including fresh Compose provisioning, 3,072-dimensional pgvector integration, runtime-role isolation, image builds/scans, and Python/Node/Helm checks. A follow-up commit now aligns source and deployment metadata to 1.3.1; it must pass CI again, followed by main-branch CI and the tagged PyPI release gate. Do not infer production readiness from PR CI alone.
+
 - Branch: `production-hardening`
 - Commits: `576f05b` (base) → `996dfc6` (P0) → `93e44c3` (P1/P2 batch)
 - Date (UTC): 2026-10-14
@@ -48,12 +50,12 @@
 | Searchable derivatives | `content_plain`, `search_vector` tsvector, `embedding` HNSW remain readable by design | Required for BM25 + vector search; do NOT claim "all stored data encrypted" |
 | Key loss | Reads raise `RuntimeError`, fail safe | Backup must include key custody; unrecoverable without key |
 
-## Remaining gaps → status (all closed)
+## Historical closure checklist (not a current production sign-off)
 1. ~~Live pgvector integration suite~~ → GREEN: `python-pgvector-integration-tests` CI job passes on `main` (run #42, commit `dfd073a` → `2f8f32a` on main). `query_candidates` added to `PGVectorMemoryStore`; `lexical_search` psycopg2 param order fixed; runtime-role RLS isolation tests pass through the real runtime DSN.
 2. ~~npm/docker/helm binary validation~~ → GREEN: npm `lint`/`build` pass locally; `docker build` (engine + gateway images) and `helm template`/lint pass in CI. CI-only binaries (no local daemon/helm) — covered by split-image + Helm CI jobs.
 3. ~~Migration idempotency + backup/restore drill~~ → DONE: v4 idempotency test + executable drill `scripts/backup_restore_drill.py` (SQLite verified locally); Postgres path gated on client tools.
 4. ~~Rate-limit distribution~~ → DONE: `core/rate_limiter.py` (Redis sorted-set sliding window + in-process fallback); `REDIS_URL` wired in compose/Helm/`.env.example`; `/metrics` exposes `synapse_rate_limit_backend`; 14 unit tests.
-5. ~~SDK publish + quickstart (P2-1)~~ → DONE (`SynapseClient`, versioned 1.2.0, quickstart doc).
+5. SDK publish + quickstart (P2-1) → SDK v1.3.0 was published on 2026-10-26; PR #18 contains a v1.3.1 source candidate with aligned client/engine release metadata. The fixes remain unpublished until the exact-main tag workflow succeeds.
 6. ~~Benchmark corpus (P2-2)~~ → DONE (`tests/test_retrieval_eval.py`, measured-only bench script).
 7. ~~Release artifacts (P2-4)~~ → DONE (CHANGELOG, version map, SECURITY update).
 8. ~~P0-5 runtime-role proof~~ → DONE (`scripts/provision_db_roles.py`, `test_db_role_provisioning.py` 19 offline contract tests, `TestRuntimeRoleIsolation` 7 live tests). **Fixed in v1.3.0:** RLS admin path is now role-gated via `current_user = '<admin_role>'` inside `tenant_isolation_policy`; settable `app.*` GUCs can no longer bypass RLS.
@@ -67,7 +69,7 @@
 - `docs/performance-baseline.md` — measured local baseline (SQLite) + 5-step process to set production SLOs; no hardcoded p95/p99 promises.
 - `CODEOWNERS` — `@721189` owns all paths; feeds CODEOWNERS review in branch protection.
 
-## CI status (as of finalization)
-- `production-hardening` → GREEN (run #42 at `dfd073a`).
-- `main` → GREEN at `2f8f32a` (all Phase P0–P2 fixes merged: `query_candidates`, SHA-pinned Actions, TruffleHog base/head, `lexical_search` param order, `lamaindex` role normalization, mypy Fernet typing).
+## Historical CI status
+
+The green results below refer to the historical finalization run from October 2026 and must not be used as a current badge. The latest main run reviewed on 2026-10-27 is recorded in the status correction at the top of this document. Current CI and a fresh-start deployment smoke are release gates.
 

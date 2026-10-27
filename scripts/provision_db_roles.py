@@ -318,6 +318,18 @@ def _fetchone(cur, sql, params):
     return cur.fetchone()
 
 
+def bootstrap_role_conflict(bootstrap_role, migration_role):
+    """Explain why the bootstrap credential must not be the migration role."""
+    if bootstrap_role and bootstrap_role == migration_role:
+        return (
+            "Refusing to provision with the bootstrap connection and migration role "
+            + repr(migration_role) + " as the same PostgreSQL role. Use a separate "
+            "bootstrap/superuser DSN for --database-url and set "
+            "SYNAPSE_MIGRATION_DATABASE_URL to the non-superuser migration role DSN."
+        )
+    return None
+
+
 def provision(dsn, runtime_role, admin_role, runtime_password, admin_password,
               verify_only=False, skip_verify=False):
     """Apply the plan, then verify the invariant.
@@ -329,6 +341,13 @@ def provision(dsn, runtime_role, admin_role, runtime_password, admin_password,
     advisories = []
     try:
         cur = conn.cursor()
+        caller_row = _fetchone(cur, "SELECT current_user;", ())
+        caller_role = caller_row[0] if caller_row else None
+        conflict = None if verify_only else bootstrap_role_conflict(caller_role, admin_role)
+        if conflict:
+            failures.append(conflict)
+            return failures, advisories
+
         admin_exists = bool(_fetchone(
             cur, "SELECT 1 FROM pg_roles WHERE rolname = %s;", (admin_role,)))
         runtime_exists = bool(_fetchone(
@@ -336,6 +355,43 @@ def provision(dsn, runtime_role, admin_role, runtime_password, admin_password,
         owner_row = _fetchone(cur, VERIFY_TABLE_OWNER_SQL, ())
         current_owner = owner_row[0] if owner_row else None
         has_table = current_owner is not None
+
+        # Install required extensions BEFORE applying the least-privilege role
+        # attributes below. On a clean Compose deployment, DATABASE_URL is the
+        # bootstrap superuser; the Synapse admin/migration role is deliberately
+        # demoted and cannot install pgvector afterward. On managed databases,
+        # operators must install these extensions as a DBA before provisioning.
+        if not verify_only:
+            role_row = _fetchone(
+                cur,
+                "SELECT rolsuper FROM pg_roles WHERE rolname = current_user;",
+                (),
+            )
+            caller_is_superuser = bool(role_row[0]) if role_row else False
+            for extension in ("vector", "pg_trgm"):
+                installed = _fetchone(
+                    cur, "SELECT 1 FROM pg_extension WHERE extname = %s;", (extension,)
+                )
+                if installed:
+                    continue
+                if not caller_is_superuser:
+                    failures.append(
+                        "required PostgreSQL extension '" + extension
+                        + "' is missing; install it as a database superuser/DBA "
+                        "before provisioning the non-superuser migration role"
+                    )
+                    continue
+                try:
+                    cur.execute("CREATE EXTENSION IF NOT EXISTS " + extension + ";")
+                    print("  [ok] installed PostgreSQL extension " + extension)
+                except Exception as exc:
+                    failures.append(
+                        "install PostgreSQL extension '" + extension + "': "
+                        + str(exc).strip()
+                    )
+            if failures:
+                return failures, advisories
+
         # Auth-table grants/verification only apply to relations that exist:
         # GRANT/REVOKE/has_table_privilege on a missing table is an error, and
         # the first provisioning run happens BEFORE the migration creates them.
@@ -404,86 +460,147 @@ def provision(dsn, runtime_role, admin_role, runtime_password, admin_password,
     return failures, advisories
 
 
-def _apply_migrations(dsn, runtime_role):
-    """Apply the forward-only schema migrations as the admin/bootstrap role.
+def _configured_embedding_dimension():
+    """Resolve the same vector width the engine will use, without calling a model API.
 
-    Run AFTER the runtime role exists: the runtime role is deliberately a
-    NON-owner with DML-only rights, so it can never create the schema itself.
-    Without this step a clean database has roles but no tables and the engine
-    (with SYNAPSE_APPLY_DB_SCHEMA=false) refuses to start.
+    Explicit SYNAPSE_EMBEDDING_DIMENSION wins. Otherwise use the supported
+    provider defaults. A custom sentence-transformer model must set the explicit
+    dimension if it is not 384-dimensional.
+    """
+    explicit = os.environ.get("SYNAPSE_EMBEDDING_DIMENSION", "").strip()
+    if explicit:
+        try:
+            dimension = int(explicit)
+        except ValueError as exc:
+            raise ValueError("SYNAPSE_EMBEDDING_DIMENSION must be an integer") from exc
+    else:
+        provider = os.environ.get("SYNAPSE_EMBEDDING_PROVIDER", "gemini").strip().lower()
+        model_name = os.environ.get("SYNAPSE_EMBEDDING_MODEL", "all-MiniLM-L6-v2")
+        defaults = {
+            "gemini": 3072,
+            "openai": 1536,
+            "sentence-transformers": 384,
+            "deterministic": 128,
+            "hash": 128,
+            "local": 128,
+        }
+        if provider == "sentence-transformers" and model_name != "all-MiniLM-L6-v2":
+            raise ValueError(
+                "A custom sentence-transformers model requires explicit "
+                "SYNAPSE_EMBEDDING_DIMENSION so schema provisioning matches the model output."
+            )
+        if provider not in defaults:
+            raise ValueError(
+                "Cannot infer vector width for embedding provider "
+                + repr(provider)
+                + "; set SYNAPSE_EMBEDDING_DIMENSION explicitly"
+            )
+        dimension = defaults[provider]
+    if not 1 <= dimension <= 4000:
+        raise ValueError(
+            "SYNAPSE_EMBEDDING_DIMENSION must be between 1 and 4000 "
+            "(pgvector vector/halfvec HNSW limits)"
+        )
+    return dimension
+
+
+def validate_migration_role(current_user, expected_role, is_superuser, bypass_rls):
+    """Require migrations to run as the dedicated non-superuser schema owner."""
+    if current_user != expected_role:
+        raise ValueError(
+            "Schema migrations must connect as the configured migration role "
+            + repr(expected_role) + "; received " + repr(current_user) + "."
+        )
+    if is_superuser:
+        raise ValueError(
+            "The schema-migration role must not be a PostgreSQL superuser. "
+            "Use the bootstrap DSN only for extensions and role provisioning."
+        )
+    if bypass_rls:
+        raise ValueError(
+            "The schema-migration role must not have BYPASSRLS. Use the bootstrap "
+            "DSN for privileged extension/role setup, not for schema migrations."
+        )
+
+
+def _verify_migration_role(dsn, expected_role):
+    """Verify the actual DSN identity before any schema DDL is issued."""
+    import psycopg2
+
+    with psycopg2.connect(dsn, connect_timeout=5) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT current_user, r.rolsuper, r.rolbypassrls "
+                "FROM pg_roles r WHERE r.rolname = current_user;"
+            )
+            row = cur.fetchone()
+    if not row:
+        raise RuntimeError("Could not verify the current PostgreSQL migration role.")
+    try:
+        validate_migration_role(row[0], expected_role, bool(row[1]), bool(row[2]))
+    except ValueError as exc:
+        raise RuntimeError(str(exc)) from exc
+
+
+def _apply_migrations(dsn, runtime_role, admin_role):
+    """Create/upgrade the complete schema as the migration/admin role.
+
+    This uses the engine's canonical schema initializer so a fresh database
+    receives the embedding column at the configured width, an HNSW index whose
+    operator class supports that width, full-text search columns/indexes,
+    row-level security, and all forward-only migrations. The DML-only runtime
+    role is never allowed to run DDL.
     """
     try:
-        import psycopg2
-    except ImportError:
-        print("FAIL psycopg2 is not installed; cannot apply migrations.")
-        return 2
-
-    try:
-        from synapse_memory.core.migrations import run_migrations
-    except ImportError:
-        # Allow running straight from a checkout without PYTHONPATH set.
         _sdk = os.path.join(
             os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
             "sdk", "python")
         if _sdk not in sys.path:
             sys.path.insert(0, _sdk)
-        try:
-            from synapse_memory.core.migrations import run_migrations
-        except ImportError as exc:
-            print("FAIL cannot import synapse_memory migrations: " + str(exc))
-            return 2
+        from synapse_memory.core.encryption import FernetEncryptionProvider
+        from synapse_memory.core.pgvector_db import PGVectorMemoryStore
+        from synapse_memory.core.auth import SecurityManager
+    except ImportError as exc:
+        print("FAIL cannot import Synapse schema initializer: " + str(exc))
+        return 2
 
-    def _connect():
-        return psycopg2.connect(dsn)
-
-    # Ensure the memories table exists before running migrations.
-    # The migration runner assumes the table is already present; on a fresh
-    # database (empty volume) it does not exist, causing ALTER TABLE to fail.
-    # This CREATE TABLE IF NOT EXISTS is idempotent and safe to re-run.
-    try:
-        conn = _connect()
-        cur = conn.cursor()
-        cur.execute("""
-            CREATE TABLE IF NOT EXISTS memories (
-                id VARCHAR(128) PRIMARY KEY,
-                tenant_id VARCHAR(128) NOT NULL DEFAULT 'default',
-                content TEXT NOT NULL,
-                category VARCHAR(64) NOT NULL,
-                confidence REAL NOT NULL,
-                created_at DOUBLE PRECISION NOT NULL,
-                last_accessed_at DOUBLE PRECISION NOT NULL,
-                access_count INTEGER NOT NULL DEFAULT 0,
-                token_cost INTEGER NOT NULL DEFAULT 0,
-                feedback_multiplier REAL NOT NULL DEFAULT 1.0,
-                supersedes VARCHAR(128),
-                superseded_by VARCHAR(128)
-            );
-        """)
-        conn.commit()
-        cur.close()
-        conn.close()
-        print("Ensured memories table exists (CREATE TABLE IF NOT EXISTS).")
-    except Exception as exc:
-        print("WARN failed to ensure memories table: " + str(exc))
-        # Continue anyway – the table may already exist or another issue occurred.
+    encryption_key = os.environ.get("SYNAPSE_ENCRYPTION_KEY", "")
+    if not encryption_key:
+        print("FAIL SYNAPSE_ENCRYPTION_KEY is required for schema provisioning.")
+        return 2
 
     try:
-        applied = run_migrations(_connect, is_postgres=True, fail_closed=True)
+        # Validate identity/privileges before connecting any schema initializer;
+        # a misconfigured migration DSN must never silently run DDL as postgres.
+        _verify_migration_role(dsn, admin_role)
+        dimension = _configured_embedding_dimension()
+        store = PGVectorMemoryStore(
+            connection_string=dsn,
+            dimension=dimension,
+            fail_closed=True,
+            apply_schema=True,
+            admin_role=admin_role,
+            runtime_role=runtime_role,
+            encryption_provider=FernetEncryptionProvider(encryption_key.encode("utf-8")),
+        )
+        if not store.is_connected:
+            print("FAIL PostgreSQL store did not connect after schema initialization.")
+            return 1
+        print(
+            "Engine schema initialized and migrations applied "
+            "(embedding dimension=" + str(dimension) + ")."
+        )
     except Exception as exc:
-        print("FAIL schema migration failed: " + str(exc))
+        print("FAIL engine schema initialization failed: " + str(exc))
         return 1
 
-    print("Applied " + str(applied) + " schema migration(s) as the admin role; "
-          "runtime role '" + runtime_role + "' remains a NON-owner.")
-
-    # The auth schema (api_keys / auth_audit_log) is created by SecurityManager,
-    # NOT by the memories migrations. With SYNAPSE_APPLY_DB_SCHEMA=false the
-    # engine only VALIDATES it, so it must be created here as the admin role —
-    # otherwise the engine fails closed at startup with
-    # "Auth table 'public.api_keys' is missing".
+    # Auth tables are owned by the migration/admin role and must exist before
+    # the engine starts with apply_schema=false and the runtime DML-only role.
     try:
-        from synapse_memory.core.auth import SecurityManager
-        SecurityManager(connection_string=dsn, fail_closed=True)
+        SecurityManager(
+            connection_string=dsn,
+            fail_closed=True,
+        )
     except Exception as exc:
         print("FAIL auth schema provisioning failed: " + str(exc))
         return 1
@@ -495,9 +612,10 @@ def main(argv=None):
     parser = argparse.ArgumentParser(
         description="Provision least-privilege SynapseMemory PostgreSQL roles (P0-5)")
     parser.add_argument("--database-url",
-                        default=os.environ.get("DATABASE_URL")
+                        default=os.environ.get("SYNAPSE_BOOTSTRAP_DATABASE_URL")
+                        or os.environ.get("DATABASE_URL")
                         or os.environ.get("SYNAPSE_ADMIN_DATABASE_URL") or "",
-                        help="Bootstrap/migration DSN (defaults to $DATABASE_URL)")
+                        help="Bootstrap/superuser DSN used only to install extensions and provision roles")
     parser.add_argument("--runtime-role",
                         default=os.environ.get("SYNAPSE_DB_RUNTIME_ROLE", "synapse_app"))
     parser.add_argument("--admin-role",
@@ -513,10 +631,9 @@ def main(argv=None):
     parser.add_argument("--skip-verify", action="store_true",
                         help="apply the plan but skip the post-provision check")
     parser.add_argument("--apply-migrations", action="store_true",
-                        help="after provisioning, apply the forward-only schema "
-                             "migrations using the admin/bootstrap DSN. Required for "
-                             "a clean database, because the DML-only runtime role cannot "
-                             "create the schema itself (F-04).")
+                        help="after provisioning, apply schema with "
+                             "$SYNAPSE_MIGRATION_DATABASE_URL as the non-superuser "
+                             "migration role; required for a clean database (F-04)")
     args = parser.parse_args(argv)
 
     try:
@@ -541,14 +658,29 @@ def main(argv=None):
         return 0
 
     if not args.database_url:
-        print("No DATABASE_URL configured; nothing to provision. "
-              "Set DATABASE_URL (bootstrap/migration DSN) and re-run.")
+        print("No bootstrap database URL configured; nothing to provision. "
+              "Set SYNAPSE_BOOTSTRAP_DATABASE_URL (or --database-url) and re-run.")
         return 2
     try:
         import psycopg2  # noqa: F401
     except ImportError:
         print("psycopg2 is not installed; cannot provision. "
               "Install with: pip install 'synapse-memory-engine[pgvector]'")
+        return 2
+
+    if not args.verify_only:
+        if not args.runtime_password:
+            print("FAIL SYNAPSE_APP_DB_PASSWORD / --runtime-password is required.")
+            return 2
+        if not args.admin_password:
+            print("FAIL SYNAPSE_ADMIN_DB_PASSWORD / --admin-password is required.")
+            return 2
+    if args.apply_migrations and not os.environ.get("SYNAPSE_MIGRATION_DATABASE_URL", "").strip():
+        print(
+            "FAIL SYNAPSE_MIGRATION_DATABASE_URL is required for --apply-migrations. "
+            "It must connect as the distinct non-superuser migration role; do not run "
+            "schema migrations through the bootstrap/superuser DSN."
+        )
         return 2
 
     print("== SynapseMemory DB role provisioning ==")
@@ -571,7 +703,8 @@ def main(argv=None):
         print("Provisioned and verified: " + args.runtime_role + " is a NON-owner, "
               "NOBYPASSRLS, NOSUPERUSER, DML-only role.")
         if args.apply_migrations:
-            rc = _apply_migrations(args.database_url, args.runtime_role)
+            migration_dsn = os.environ["SYNAPSE_MIGRATION_DATABASE_URL"].strip()
+            rc = _apply_migrations(migration_dsn, args.runtime_role, args.admin_role)
             if rc != 0:
                 return rc
             # Re-apply the grants: migrations just created the tables AS THE

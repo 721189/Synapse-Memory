@@ -2,8 +2,8 @@ apiVersion: v2
 name: synapse-memory
 description: Production-grade Helm chart for SynapseMemory Active RAG & Cognitive Substrate
 type: application
-version: 0.2.0
-appVersion: "1.3.0"
+version: 0.3.0
+appVersion: "1.3.1"
 maintainers:
   - name: Synapse Cognitive Systems
     email: singhshivam20009@gmail.com

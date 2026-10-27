@@ -4,7 +4,7 @@ replicaCount: 3
 image:
   repository: synapse-memory/gateway
   pullPolicy: IfNotPresent
-  tag: "v1.3.0"
+  tag: "v1.3.1"
 
 service:
   type: ClusterIP
@@ -47,13 +47,20 @@ autoscaling:
 # NEVER commit production plaintext credentials to source control.
 secrets:
   # Name of an existing Secret containing sensitive credentials
-  # Expected keys: GEMINI_API_KEY, SYNAPSE_ENCRYPTION_KEY, POSTGRES_PASSWORD, REDIS_PASSWORD
+  # Expected keys: SYNAPSE_API_KEY, SYNAPSE_ENCRYPTION_KEY,
+  # SYNAPSE_APP_DB_PASSWORD (password for config.dbUser), REDIS_PASSWORD,
+  # GEMINI_API_KEY and/or OPENAI_API_KEY. Bootstrap/migration credentials
+  # are used only by the operator's provisioning job, not stored in this Secret.
   existingSecret: "synapse-credentials"
   createSecret: false
   # If createSecret is true (e.g. dev/staging testing only):
   geminiApiKey: ""
+  openaiApiKey: ""
   encryptionKey: ""
   apiKey: ""
+  appDbPassword: ""
+  # Deprecated input alias for appDbPassword; this is NOT a PostgreSQL
+  # bootstrap/superuser password. Prefer appDbPassword in new values files.
   postgresPassword: ""
   redisPassword: ""
 
@@ -62,7 +69,7 @@ gateway:
   replicaCount: 2
   image:
     repository: synapse-memory/gateway
-    tag: "v1.3.0"
+    tag: "v1.3.1"
   resources:
     requests:
       cpu: 250m
@@ -75,7 +82,7 @@ engine:
   replicaCount: 2
   image:
     repository: synapse-memory/engine
-    tag: "v1.3.0"
+    tag: "v1.3.1"
   resources:
     requests:
       cpu: 500m
@@ -93,6 +100,7 @@ config:
   # DML-only runtime role, NOT the schema owner (F-04). Provisioned by
   # scripts/provision_db_roles.py; the schema must be migrated ahead of start-up.
   dbUser: "synapse_app"
+  dbAdminRole: "synapse_admin"
   dbName: "synapse_cognitive"
   redisHost: "synapse-redis-master.default.svc.cluster.local"
   redisPort: "6379"
@@ -133,8 +141,9 @@ config:
 #   1. Provision pgvector PostgreSQL (managed service or `pgvector/pgvector`)
 #      and point config.dbHost/dbPort/dbUser/dbName at it.
 #   2. Create the credentials Secret (secrets.existingSecret) with keys:
-#      SYNAPSE_API_KEY, SYNAPSE_ENCRYPTION_KEY, POSTGRES_PASSWORD,
-#      REDIS_PASSWORD (may be empty), GEMINI_API_KEY (optional).
+#      SYNAPSE_API_KEY, SYNAPSE_ENCRYPTION_KEY, SYNAPSE_APP_DB_PASSWORD,
+#      REDIS_PASSWORD (may be empty), GEMINI_API_KEY or OPENAI_API_KEY.
+#      Do NOT put bootstrap/superuser or migration-role credentials in the runtime Secret.
 #   3. Provision roles, apply schema as the migration role, then set
 #      config.applyDbSchema=false and config.dbUser=<runtime-role>.
 # `docker-compose` follows the same model: its `postgres-pgvector` service is

@@ -36,6 +36,18 @@ class TestApiValidationLimits(unittest.TestCase):
         r = self.client.post("/api/memories/add", json={"content": "ok", "tenantId": "evil tenant!!"}, headers=self.headers)
         self.assertEqual(r.status_code, 422)
 
+    def test_snake_case_tenant_id_is_not_silently_ignored(self):
+        # Python SDKs and internal gateways naturally send snake_case. If a model
+        # with alias="tenantId" silently ignores tenant_id, this cross-tenant
+        # request can be treated as a write into the caller's default tenant
+        # instead of being rejected.
+        r = self.client.post(
+            "/api/memories/add",
+            json={"content": "snake-case tenant selection regression", "tenant_id": "tenant_other"},
+            headers=self.headers,
+        )
+        self.assertEqual(r.status_code, 403, r.text)
+
     def test_bad_feedback_type_rejected(self):
         r = self.client.post("/feedback", json={"memory_id": "m1", "feedback_type": "meh"}, headers=self.headers)
         self.assertEqual(r.status_code, 422)

@@ -38,20 +38,24 @@ install commands as `pip install synapse-memory-engine[...]`.
    publish — no API token is ever created or stored. After the first release,
    PyPI shows it as a normal trusted publisher on the (now existing) project.
 2. **GitHub — `pypi` environment.** Repo → Settings → Environments → New
-   environment named `pypi`. Optionally require N reviewers for manual
-   protection of releases.
+   environment named `pypi`. Require reviewer approval for production releases
+   where possible. A tag-triggered package workflow validates/builds the SDK;
+   it is not a substitute for the full main-branch CI and deployment smoke test.
 
 ## Release procedure
 
 1. Bump the version in lockstep (see the compatibility matrix in the root
    `README.md`): `sdk/python/pyproject.toml`, `sdk/python/setup.py`,
    `sdk/python/synapse_memory/__init__.py`, and root `pyproject.toml`.
-2. Update `CHANGELOG.md`; merge to `main`; wait for the CI matrix to go green.
+2. Update `CHANGELOG.md`; merge to `main`; wait for the full CI matrix, the
+   3072-dimensional pgvector integration test, and deployment smoke test to pass.
+   Do not tag a release from a commit whose deployment checks are failing.
 3. Tag and push — the tag must equal `v<version>`:
 
    ```bash
-   git tag v1.2.1
-   git push origin v1.2.1
+   VERSION=1.3.2
+   git tag -s "v${VERSION}"
+   git push origin "v${VERSION}"
    ```
 
 4. The `publish-pypi.yml` workflow then: runs the full unit suite → builds
@@ -59,7 +63,8 @@ install commands as `pip install synapse-memory-engine[...]`.
    installs the wheel into a **fresh venv** and imports it (proving the
    published artifact is self-contained and owns the `synapse_memory` import)
    → publishes via OIDC.
-5. Post-release smoke (fresh environment, the guarantee from the workflow):
+5. Post-release smoke (the workflow proves wheel installation/import; a separate
+   disposable PostgreSQL/pgvector smoke is still required for deployment readiness):
 
    ```bash
    python -m venv /tmp/smoke && /tmp/smoke/bin/pip install "synapse-memory-engine==<version>"

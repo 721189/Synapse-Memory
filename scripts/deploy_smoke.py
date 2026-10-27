@@ -38,6 +38,7 @@ GENERATED = {
     "api_key": "syn_live_" + secrets.token_hex(24),
     "encryption_key": base64.urlsafe_b64encode(os.urandom(32)).decode(),
     "pg_password": secrets.token_urlsafe(24),
+    "admin_password": secrets.token_urlsafe(24),
     "app_password": secrets.token_urlsafe(24),
 }
 
@@ -45,6 +46,7 @@ ENV = {
     "SYNAPSE_API_KEY": os.environ.get("SYNAPSE_API_KEY", GENERATED["api_key"]),
     "SYNAPSE_ENCRYPTION_KEY": os.environ.get("SYNAPSE_ENCRYPTION_KEY", GENERATED["encryption_key"]),
     "POSTGRES_PASSWORD": os.environ.get("POSTGRES_PASSWORD", GENERATED["pg_password"]),
+    "SYNAPSE_ADMIN_DB_PASSWORD": os.environ.get("SYNAPSE_ADMIN_DB_PASSWORD", GENERATED["admin_password"]),
     "SYNAPSE_APP_DB_PASSWORD": os.environ.get("SYNAPSE_APP_DB_PASSWORD", GENERATED["app_password"]),
     # Wiring-only exception, see module docstring.
     "SYNAPSE_EMBEDDING_PROVIDER": "deterministic",
@@ -98,8 +100,11 @@ def main():
     auth = {"X-Synapse-API-Key": api_key, "X-Tenant-ID": "smoke_tenant"}
 
     log("building and starting the stack")
-    run(COMPOSE + ["up", "-d", "--build"])
     try:
+        # Include startup in the protected region: Compose may fail before the
+        # engine/gateway exist (especially db-provision), so diagnostics must
+        # run even when "up" itself returns a non-zero exit code.
+        run(COMPOSE + ["up", "-d", "--build"])
         wait_for_health()
 
         content = f"smoke memory {int(time.time())}"
@@ -127,9 +132,16 @@ def main():
 
         log("PASS")
         return 0
+    except subprocess.CalledProcessError as exc:
+        log(f"FAILED: command exited with status {exc.returncode}: {exc.cmd}")
+        log("dumping container state and service logs (including db-provision)")
+        run(COMPOSE + ["ps", "--all"], check=False)
+        run(COMPOSE + ["logs", "--no-color", "--tail", "300"], check=False)
+        return exc.returncode or 1
     except SystemExit as exc:
         log(f"FAILED: {exc}")
-        log("dumping service logs (provisioning + engine + gateway)")
+        log("dumping container state and service logs (including db-provision)")
+        run(COMPOSE + ["ps", "--all"], check=False)
         run(COMPOSE + ["logs", "--no-color", "--tail", "300"], check=False)
         raise
     finally:

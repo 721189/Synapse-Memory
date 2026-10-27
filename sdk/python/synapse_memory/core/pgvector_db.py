@@ -90,6 +90,11 @@ class PGVectorMemoryStore:
             logger.warning(
                 "Using insecure dev-only Postgres credentials. Set DATABASE_URL with a strong password for any shared deployment."
             )
+        if isinstance(dimension, bool) or not isinstance(dimension, int) or not 1 <= dimension <= 4000:
+            raise ValueError(
+                "HNSW embeddings must have 1–4000 dimensions: standard vector indexes "
+                "support up to 2000 dimensions and halfvec indexes support up to 4000."
+            )
         self.dimension = dimension
         self.m = m
         self.ef_construction = ef_construction
@@ -189,9 +194,100 @@ class PGVectorMemoryStore:
                 if not present:
                     raise RuntimeError(
                         "Schema not provisioned: table 'memories' is missing. Run the "
-                        "migration step (SQLite/Postgres DDL + migrations) before starting "
+                        "migration step (PostgreSQL DDL + migrations) before starting "
                         "the engine with apply_schema=False."
                     )
+
+                # A table existing is not enough: an incomplete bootstrap schema
+                # can accept startup and then fail every write/retrieval. Prove the
+                # columns, vector width, RLS policy and width-compatible HNSW index.
+                cur.execute(
+                    "SELECT column_name FROM information_schema.columns "
+                    "WHERE table_schema = 'public' AND table_name = 'memories';"
+                )
+                columns = {
+                    row[0] if isinstance(row, (tuple, list)) else row.get("column_name")
+                    for row in cur.fetchall()
+                }
+                required_columns = {
+                    "id", "tenant_id", "content", "content_plain", "category",
+                    "confidence", "created_at", "last_accessed_at", "access_count",
+                    "token_cost", "embedding", "search_vector", "supersedes", "superseded_by",
+                }
+                missing_columns = sorted(required_columns - columns)
+                if missing_columns:
+                    raise RuntimeError(
+                        "Schema incomplete: public.memories is missing required columns: "
+                        + ", ".join(missing_columns)
+                        + ". Re-run the schema migration before enabling traffic."
+                    )
+
+                cur.execute(
+                    "SELECT format_type(a.atttypid, a.atttypmod) "
+                    "FROM pg_attribute a "
+                    "WHERE a.attrelid = 'public.memories'::regclass "
+                    "AND a.attname = 'embedding' AND NOT a.attisdropped;"
+                )
+                type_row = cur.fetchone()
+                actual_vector_type = (
+                    type_row[0] if isinstance(type_row, (tuple, list))
+                    else (type_row.get("format_type") if type_row else None)
+                ) if type_row else None
+                expected_vector_type = f"vector({self.dimension})"
+                if actual_vector_type != expected_vector_type:
+                    raise RuntimeError(
+                        f"Schema embedding type mismatch: expected {expected_vector_type}, "
+                        f"found {actual_vector_type!r}. Re-embed and migrate intentionally "
+                        "before changing the configured model width."
+                    )
+
+                cur.execute(
+                    "SELECT indexdef FROM pg_indexes "
+                    "WHERE schemaname = 'public' AND indexname = 'idx_memories_hnsw';"
+                )
+                index_row = cur.fetchone()
+                index_def = (
+                    index_row[0] if isinstance(index_row, (tuple, list))
+                    else (index_row.get("indexdef") if index_row else None)
+                ) if index_row else None
+                expected_opclass = (
+                    "halfvec_cosine_ops" if self.dimension > 2000 else "vector_cosine_ops"
+                )
+                expected_expression = (
+                    f"halfvec({self.dimension})"
+                    if self.dimension > 2000
+                    else "vector_cosine_ops"
+                )
+                if (
+                    not index_def
+                    or expected_opclass not in index_def
+                    or expected_expression not in index_def
+                ):
+                    raise RuntimeError(
+                        "Schema HNSW index is missing or incompatible with "
+                        f"{self.dimension}-dimensional embeddings (expected {expected_opclass}). "
+                        "Rebuild the HNSW index before enabling traffic."
+                    )
+
+                cur.execute(
+                    "SELECT c.relrowsecurity, c.relforcerowsecurity "
+                    "FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace "
+                    "WHERE n.nspname = 'public' AND c.relname = 'memories';"
+                )
+                rls_row = cur.fetchone()
+                if not rls_row or not bool(rls_row[0]) or not bool(rls_row[1]):
+                    raise RuntimeError(
+                        "Security violation: public.memories must have ENABLE and FORCE ROW LEVEL SECURITY."
+                    )
+                cur.execute(
+                    "SELECT 1 FROM pg_policies WHERE schemaname = 'public' "
+                    "AND tablename = 'memories' AND policyname = 'tenant_isolation_policy';"
+                )
+                if not cur.fetchone():
+                    raise RuntimeError(
+                        "Security violation: tenant_isolation_policy is missing from public.memories."
+                    )
+
                 cur.execute(
                     """
                     SELECT r.rolsuper, r.rolbypassrls, t.tableowner, current_user
@@ -259,6 +355,33 @@ class PGVectorMemoryStore:
         END $$;
         """
         cur.execute(rls_sql)
+
+    def _vector_distance_sql(self, placeholder: str = "%s") -> str:
+        """Return cosine-distance SQL that matches the configured HNSW index.
+
+        pgvector's standard ``vector`` HNSW operator class supports at most
+        2,000 dimensions. For wider embeddings, both the index and query use an
+        explicit half-precision expression; returned stored vectors remain full
+        precision and can still be used for reranking when desired.
+        """
+        if self.dimension > 2000:
+            return (
+                f"(embedding::halfvec({self.dimension})) <=> "
+                f"({placeholder})::halfvec({self.dimension})"
+            )
+        return f"embedding <=> {placeholder}::vector"
+
+    def _hnsw_index_sql(self) -> str:
+        """DDL for an HNSW index supported by the configured vector width."""
+        if self.dimension > 2000:
+            expression = f"(embedding::halfvec({self.dimension})) halfvec_cosine_ops"
+        else:
+            expression = "embedding vector_cosine_ops"
+        return (
+            "CREATE INDEX IF NOT EXISTS idx_memories_hnsw "
+            f"ON memories USING hnsw ({expression}) "
+            f"WITH (m = {self.m}, ef_construction = {self.ef_construction});"
+        )
 
     def _initialize_database(self) -> None:
         if not self._connected or not HAS_PSYCOPG2:
@@ -332,30 +455,70 @@ class PGVectorMemoryStore:
                     END $$;
                 """)
 
-                # 3b. Vector dimension migration if column dimension differs from configured target
-                try:
-                    cur.execute("""
-                        SELECT atttypmod FROM pg_attribute
-                        WHERE attrelid = 'memories'::regclass AND attname = 'embedding';
-                    """)
-                    row = cur.fetchone()
-                    if row:
-                        current_dim = row[0] if isinstance(row, (tuple, list)) else row.get("atttypmod")
-                        if current_dim and current_dim > 0 and current_dim != self.dimension:
-                            logger.warning(
-                                f"Migrating PostgreSQL 'memories.embedding' column dimension from {current_dim} to {self.dimension}..."
-                            )
-                            cur.execute("DROP INDEX IF EXISTS idx_memories_hnsw;")
-                            cur.execute(f"ALTER TABLE memories ALTER COLUMN embedding TYPE vector({self.dimension});")
-                except Exception as mig_err:
-                    logger.warning(f"Vector dimension check/migration skipped: {mig_err}")
+                # 3b. Refuse an implicit model-width migration. PostgreSQL's
+                # atttypmod for pgvector includes an internal offset; compare the
+                # actual formatted type (vector(3072)), never the raw catalog value.
+                cur.execute(
+                    "SELECT format_type(a.atttypid, a.atttypmod) "
+                    "FROM pg_attribute a "
+                    "WHERE a.attrelid = 'memories'::regclass "
+                    "AND a.attname = 'embedding' AND NOT a.attisdropped;"
+                )
+                type_row = cur.fetchone()
+                type_name = (
+                    type_row[0] if isinstance(type_row, (tuple, list))
+                    else (type_row.get("format_type") if type_row else None)
+                ) if type_row else None
+                type_match = re.fullmatch(r"vector(?:\((\d+)\))?", str(type_name or ""))
+                if not type_match:
+                    raise RuntimeError(
+                        "Unsupported PostgreSQL memories.embedding type "
+                        + repr(type_name)
+                        + "; expected vector or vector(N)."
+                    )
+                current_dim = int(type_match.group(1)) if type_match.group(1) else None
+                if current_dim != self.dimension:
+                    cur.execute(
+                        "SELECT COUNT(*) FROM memories WHERE embedding IS NOT NULL "
+                        "AND vector_dims(embedding) <> %s;",
+                        (self.dimension,),
+                    )
+                    incompatible = int(cur.fetchone()[0])
+                    if incompatible:
+                        raise RuntimeError(
+                            f"Embedding dimension migration blocked: the column is {type_name}, "
+                            f"the configured provider is {self.dimension}-d, and {incompatible} rows "
+                            "still contain vectors of a different width. Do not cast old embeddings; "
+                            "run a deliberate re-embedding migration before switching providers."
+                        )
+                    cur.execute("DROP INDEX IF EXISTS idx_memories_hnsw;")
+                    cur.execute(
+                        f"ALTER TABLE memories ALTER COLUMN embedding TYPE vector({self.dimension});"
+                    )
 
-                # 4. HNSW vector index
-                cur.execute(f"""
-                    CREATE INDEX IF NOT EXISTS idx_memories_hnsw
-                    ON memories USING hnsw (embedding vector_cosine_ops)
-                    WITH (m = {self.m}, ef_construction = {self.ef_construction});
-                """)
+                # 4. HNSW vector index. Rebuild only if its operator class no longer
+                # matches the configured dimension (vector <= 2000; halfvec <= 4000).
+                cur.execute(
+                    "SELECT indexdef FROM pg_indexes "
+                    "WHERE schemaname = 'public' AND indexname = 'idx_memories_hnsw';"
+                )
+                index_row = cur.fetchone()
+                existing_index = None
+                if index_row:
+                    existing_index = index_row[0] if isinstance(index_row, (tuple, list)) else index_row.get("indexdef")
+                expected_halfvec = self.dimension > 2000
+                existing_halfvec = bool(existing_index and "halfvec_cosine_ops" in existing_index)
+                expected_index_expression = (
+                    f"halfvec({self.dimension})" if expected_halfvec else "vector_cosine_ops"
+                )
+                if existing_index and (
+                    existing_halfvec != expected_halfvec
+                    or expected_index_expression not in existing_index
+                ):
+                    cur.execute("DROP INDEX IF EXISTS idx_memories_hnsw;")
+                    existing_index = None
+                if not existing_index:
+                    cur.execute(self._hnsw_index_sql())
 
                 # 5. Relational and tenant indexes
                 cur.execute("CREATE INDEX IF NOT EXISTS idx_memories_tenant ON memories(tenant_id);")
@@ -805,13 +968,14 @@ class PGVectorMemoryStore:
                 where_clause = ("WHERE " + " AND ".join(conditions)) if conditions else ""
                 params.extend([emb_str, top_k])
 
+                distance_sql = self._vector_distance_sql("%s")
                 query = f"""
                     SELECT id, tenant_id, content, category, confidence, created_at,
                            last_accessed_at, access_count, token_cost, feedback_multiplier,
-                           1 - (embedding <=> %s::vector) AS cosine_similarity
+                           1 - ({distance_sql}) AS cosine_similarity
                     FROM memories
                     {where_clause}
-                    ORDER BY embedding <=> %s::vector
+                    ORDER BY {distance_sql}
                     LIMIT %s
                 """
                 cur.execute(query, tuple(params))
@@ -940,6 +1104,7 @@ class PGVectorMemoryStore:
                 if category:
                     cat_clause = "AND category = %s"
                     params.append(category)
+                distance_sql = self._vector_distance_sql("%s")
                 params.extend([emb_str, candidate_pool, query, query])
                 if category:
                     params.append(category)
@@ -948,12 +1113,12 @@ class PGVectorMemoryStore:
                 sql = f"""
                 WITH dense AS (
                     SELECT id,
-                           ROW_NUMBER() OVER (ORDER BY embedding <=> %s::vector) AS rank
+                           ROW_NUMBER() OVER (ORDER BY {distance_sql}) AS rank
                     FROM memories
                     WHERE tenant_id = NULLIF(current_setting('app.current_tenant', true), '')
                       AND superseded_by IS NULL
                       {cat_clause}
-                    ORDER BY embedding <=> %s::vector
+                    ORDER BY {distance_sql}
                     LIMIT %s
                 ),
                 lexical AS (

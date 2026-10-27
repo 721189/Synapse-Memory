@@ -171,7 +171,11 @@ class GeminiEmbeddingProvider(EmbeddingProvider):
             f"gemini-embedding-001:embedContent?key={self.api_key}"
         )
         headers = {"Content-Type": "application/json"}
-        payload = {"content": {"parts": [{"text": text}]}}
+        payload = {
+            "content": {"parts": [{"text": text}]},
+            # Prefer EmbedContentConfig over the deprecated top-level field.
+            "embedContentConfig": {"outputDimensionality": self._dim},
+        }
 
         req = urllib.request.Request(
             url,
@@ -208,10 +212,14 @@ class OpenAIEmbeddingProvider(EmbeddingProvider):
             "Content-Type": "application/json",
             "Authorization": f"Bearer {self.api_key}"
         }
-        payload = {
+        payload: dict[str, object] = {
             "input": text,
             "model": self.model
         }
+        # text-embedding-3 models support an explicit output width. Older model
+        # families do not accept the dimensions field and keep their native size.
+        if self.model.startswith("text-embedding-3"):
+            payload["dimensions"] = self._dim
         req = urllib.request.Request(
             url,
             data=json.dumps(payload).encode("utf-8"),

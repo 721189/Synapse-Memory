@@ -1,21 +1,13 @@
 name: Publish Python SDK to PyPI
 
-# Builds the SDK distribution from sdk/python, gates it on the unit suite,
-# verifies the wheel installs into a FRESH virtualenv (this is the
-# "a fresh environment can install the right project" guarantee), then
-# publishes to PyPI as `synapse-memory-engine` via OIDC trusted publishing.
-#
-# Tag pushes (v*) additionally check tag == package version and actually
-# upload; workflow_dispatch runs the same pipeline as a dry run (no upload).
-#
-# One-time setup (see docs/publishing.md):
-#   1. PyPI: create a PENDING TRUSTED PUBLISHER for project `synapse-memory-engine`
-#      bound to repo 721189/Synapse-Memory, workflow publish-pypi.yml, env `pypi`.
-#   2. GitHub: create the `pypi` environment (optional required reviewers).
+# Build and verify the SDK on manual runs. Publish only from a v* tag that
+# points exactly to the current main commit and whose main-branch CI is green.
+# Publishing uses PyPI trusted publishing (GitHub OIDC); no long-lived token.
 
 on:
   push:
-    tags: ['v*']
+    tags:
+      - 'v*'
   workflow_dispatch:
 
 concurrency:
@@ -29,30 +21,32 @@ jobs:
   publish:
     name: Build, verify, publish
     runs-on: ubuntu-latest
-    # OIDC token is minted for this job only; no long-lived PyPI credentials anywhere.
     permissions:
+      actions: read
       contents: read
       id-token: write
     environment: pypi
 
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          fetch-depth: 0
 
       - name: Set up Python 3.12
         uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
         with:
           python-version: '3.12'
-          cache: 'pip'
+          cache: pip
 
-      - name: Install system dependencies (libpq for psycopg2/pgvector)
+      - name: Install system dependencies
         run: sudo apt-get update && sudo apt-get install -y libpq-dev
 
-      - name: Install build tooling and the SDK (dev gate)
+      - name: Install build tooling and SDK with test dependencies
         run: |
           python -m pip install --upgrade pip setuptools wheel build twine
           pip install -e "sdk/python[pgvector,langchain,llamaindex,dev]"
 
-      - name: Gate — unit test suite must be green
+      - name: Test SDK
         env:
           SYNAPSE_ENCRYPTION_KEY: "2N53Wk7u2V5bK1wU_1F5Y9mZ7zN53Wk7u2V5bK1wU_0="
           SYNAPSE_API_KEY: "syn_live_ci_test_key"
@@ -61,18 +55,40 @@ jobs:
       - name: Build sdist and wheel
         run: python -m build --sdist --wheel --outdir dist sdk/python
 
-      - name: Metadata check (twine)
+      - name: Validate package metadata
         run: python -m twine check --strict dist/*
 
-      - name: "Tag must match package version"
+      - name: Tag must match package version
         if: startsWith(github.ref, 'refs/tags/')
         run: |
           TAG="${GITHUB_REF_NAME#v}"
-          PKG_VER=$(python -c "import pathlib,re; t=pathlib.Path('sdk/python/pyproject.toml').read_text(); print(re.search(r'^version = \"(.+)\"', t, re.M).group(1))")
+          PKG_VER=$(python -c "import tomllib; print(tomllib.load(open('sdk/python/pyproject.toml', 'rb'))['project']['version'])")
           echo "tag=$TAG package=$PKG_VER"
           test "$TAG" = "$PKG_VER"
 
-      - name: Fresh-environment install verification
+      - name: Require tag to equal main and main CI to be green
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          TAG_SHA="$(git rev-list -n 1 "$GITHUB_REF_NAME")"
+          MAIN_SHA="$(git ls-remote origin refs/heads/main | awk '{print $1}')"
+          echo "tag=$TAG_SHA main=$MAIN_SHA"
+          test -n "$MAIN_SHA"
+          test "$TAG_SHA" = "$MAIN_SHA" || {
+            echo "::error::Refusing release: tag must point to the exact current main commit."
+            exit 1
+          }
+          CI_JSON="$(gh api "/repos/$GITHUB_REPOSITORY/actions/workflows/ci.yml/runs?branch=main&event=push&per_page=50")"
+          GREEN_RUNS="$(printf '%s' "$CI_JSON" | jq --arg sha "$MAIN_SHA" '[.workflow_runs[] | select(.head_sha == $sha and .conclusion == "success")] | length')"
+          echo "successful_main_CI_runs_for_tagged_sha=$GREEN_RUNS"
+          test "$GREEN_RUNS" -gt 0 || {
+            echo "::error::Refusing release: no successful main CI run exists for the exact tagged commit."
+            exit 1
+          }
+
+      - name: Verify fresh-environment wheel installation
         run: |
           python -m venv /tmp/fresh-env
           /tmp/fresh-env/bin/python -m pip install --quiet dist/*.whl
@@ -85,13 +101,11 @@ jobs:
           assert installed == synapse_memory.__version__, (
               f"metadata version {installed} != __version__ {synapse_memory.__version__}"
           )
-          # The import package must NOT collide with the unrelated PyPI project
-          # `synapse-memory` — prove the installed dist owns the import.
           origin = md.distribution(dist_name).locate_file("")
           print(f"fresh install OK: {dist_name}=={installed} (import synapse_memory from {origin})")
           PY
 
-      - name: Publish to PyPI (trusted publishing, no tokens)
+      - name: Publish to PyPI using trusted publishing
         if: startsWith(github.ref, 'refs/tags/')
         uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # v1.14.2
         with:

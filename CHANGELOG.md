@@ -1,9 +1,33 @@
 # Changelog
 
-## 1.3.0 � unreleased
-- **Security audit F-01…F-09 remediation.**
+## Unreleased
+
+## 1.3.1 — release candidate 2026-10-27
+
+- **Post-release correctness fixes (pending PyPI publication):** support the shipped
+  3,072-dimensional embedding width using a pgvector-supported halfvec HNSW
+  expression index and matching query expression; refuse implicit model-width
+  changes when existing embeddings have not been re-embedded; add an isolated,
+  synthetic-vector live integration test.
+- **SDK retry safety:** retry idempotent GET/HEAD/OPTIONS requests and honour
+  `Retry-After`; do not automatically replay POST requests (including retrieval,
+  which updates access metadata) after ambiguous network failures or transient
+  5xx responses without a proven idempotency contract.
+- **Deployment diagnostics:** capture Compose logs and container state even when
+  initial stack startup fails; provide semantic embedding-provider values in
+  config-validation CI.
+- **Release metadata:** align the client, legacy setup metadata and OpenAPI
+  version with the package and expand the version-consistency gate.
+- **Least-privilege migration guard:** verify the migration DSN actually uses the
+  designated non-superuser role rather than the bootstrap credential.
+- **Tenant input compatibility:** accept snake_case and documented camelCase
+  aliases so tenant selections are not silently ignored.
+- **Gateway data hygiene:** prevent production demo-memory fallbacks and duplicate
+  plaintext in the gateway process-local store.
+## 1.3.0 — released 2026-10-26
+- **Security audit F-01â€¦F-09 remediation.**
   - **F-01 (P0, privilege escalation):** all authorization now runs through one
-    canonical effective-role path (`normalize_role` → `effective_role`). A stored
+    canonical effective-role path (`normalize_role` â†’ `effective_role`). A stored
     `admin` role or the `admin` scope no longer implies cross-tenant access:
     `tenant_selection_allowed()` requires `platform_admin`, and `scope_satisfied()`
     treats `admin` as a memory-domain superuser only (never `auth:keys:*` or
@@ -54,15 +78,15 @@
   **Reference (single measured run: corpus 1,000 / needles 5 / top_k 10 / queries
   50 / seed 42, deterministic shared embedder, mem0 2.2.1):**
   synapse ingest p50 115.2 / p95 438.7 / p99 1196.1 ms (1,005 inserts; SQLite +
-  Fernet encryption incl.) · synapse query p50 360.4 ms · mem0 ingest p50 12.4 /
-  p95 38.4 / p99 237.5 ms (mean inflated by lazy warm-up; measured-only) · recall
-  @10 78 % · MRR 0.744 · cross-tenant leaks 0 (both engines) · knapsack tokens
+  Fernet encryption incl.) Â· synapse query p50 360.4 ms Â· mem0 ingest p50 12.4 /
+  p95 38.4 / p99 237.5 ms (mean inflated by lazy warm-up; measured-only) Â· recall
+  @10 78 % Â· MRR 0.744 Â· cross-tenant leaks 0 (both engines) Â· knapsack tokens
   saved 71.1 mean. Full record: `sdk/python/benchmark/benchmark_results.json`
   (`mem0_head_to_head` key). Honest by design: no LLM API keys, no projections,
   identical shared embeddings, no apples-to-oranges comparison (see
   `sdk/python/benchmark/README.md`).
 
-- **Example:** complete `examples/project_aware_coding_assistant/` FastAPI app —
+- **Example:** complete `examples/project_aware_coding_assistant/` FastAPI app â€”
   project-scoped coding-assistant backend where every project is a Synapse-Memory
   tenant. Documents, snippets, and cross-project links live in app-owned SQLite
   tables; semantic memories go through `MemoryManager.ingest_with_deduplication`
@@ -75,7 +99,7 @@
   `sdk/python`. New tag-triggered publish workflow builds, fresh-venv-verifies
   and trusted-publishes the wheel (see `docs/publishing.md`).
 
-## 1.2.0 — Production-hardening release (2026-10-15)
+## 1.2.0 â€” Production-hardening release (2026-10-15)
 - NULL-safe hybrid RRF (`COALESCE` per channel) + lexical param-count fix.
 - Combined-protection field encryption (`content` ciphertext + `content_plain`
   search projection); v4 migration backfills legacy rows only.
@@ -88,10 +112,10 @@
   `PYTHON_ENGINE_URL` is derived from the release fullname (the hardcoded
   `synapse-memory-engine` hostname did not match the Service that `helm install synapse`
   actually renders); kubelet `$(VAR)` expansion ordering fixed (`DB_PASSWORD`/`REDIS_PASSWORD`
-  now precede their consumers — previously the literal `$(DB_PASSWORD)` shipped as the DSN
+  now precede their consumers â€” previously the literal `$(DB_PASSWORD)` shipped as the DSN
   password and fail-closed startup crash-looped); engine env parity with Compose
   (`REDIS_URL`, `RATE_LIMIT_PER_MIN`, `ALLOWED_ORIGINS`, `GEMINI_API_KEY`,
-  `SYNAPSE_APPLY_DB_SCHEMA` — distributed rate limiting actually activates in k8s now);
+  `SYNAPSE_APPLY_DB_SCHEMA` â€” distributed rate limiting actually activates in k8s now);
   ports/URL track `config.pythonPort`; operator `NOTES.txt` checklist. 18 offline
   contract tests (`tests/test_helm_chart.py`).
 - Phase 7.3 load & resilience suite (`tests/test_load_resilience.py`, 17 offline tests):
@@ -100,7 +124,7 @@
   latency without retry storms and repeated queries hit the embed cache; worker
   crash-restart preserves every row with idempotent migrations and `integrity_check ok`;
   1000-row corpus + tenant/category matrix keep search quality and isolation; HTTP
-  read/write bursts, 100-item bulk (auto-prune bound ≤ 50 per tenant), and a full store
+  read/write bursts, 100-item bulk (auto-prune bound â‰¤ 50 per tenant), and a full store
   outage on the real gateway (ingest 500s fail-closed, `/liveness` stays DB-independent,
   instant recovery).
 - Strict API validation limits; generic auth-failure messages.
@@ -120,7 +144,7 @@
 | Python SDK (`synapse-memory-engine`) | 1.2.0 | `SynapseClient`, `__version__ = "1.2.0"` |
 | HTTP API compat | v1 | canonical `{success, data, request_id}` envelope; `/api/*` aliases stable |
 | Engine / gateway images | 1.2.0 pair | must deploy matching tags |
-| Helm chart | 0.1.0 (app 1.2.0) | chart version ≠ app version; see Chart.yaml |
+| Helm chart | 0.1.0 (app 1.2.0) | chart version â‰  app version; see Chart.yaml |
 | Schema | v4 ledger | forward-only; v4 adds `content_plain` |
 
 ### Known limitations
@@ -129,5 +153,5 @@
 - Embeddings + tsvector are readable derivatives (field encryption covers `content`).
 - Benchmarks in `bench_suite.py` include projections; `test_retrieval_eval.py` is measured-only.
 
-## 0.1.0 — Initial prototype
+## 0.1.0 â€” Initial prototype
 - Pre-hardening baseline; do not use for production.

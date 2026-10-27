@@ -158,6 +158,24 @@ jobs:
           python -m pip install --upgrade pip setuptools wheel
           pip install -e "sdk/python[pgvector,dev]"
 
+      - name: Create isolated database for 3072-dimensional pgvector test
+        env:
+          PGPASSWORD: synapse_test
+        run: |
+          createdb -h localhost -U synapse_test synapse_test_3072
+          psql -h localhost -U synapse_test -d synapse_test_3072 -v ON_ERROR_STOP=1 \
+            -c "CREATE EXTENSION IF NOT EXISTS vector;" \
+            -c "CREATE EXTENSION IF NOT EXISTS pg_trgm;"
+
+      - name: Verify 3072-dimensional halfvec HNSW path with synthetic data
+        env:
+          PYTHONPATH: sdk/python
+          DATABASE_URL: postgresql://synapse_test:synapse_test@localhost:5432/synapse_test_3072
+          SYNAPSE_LIVE_PGVECTOR_3072: "1"
+          SYNAPSE_ENCRYPTION_KEY: "2N53Wk7u2V5bK1wU_1F5Y9mZ7zN53Wk7u2V5bK1wU_0="
+          SYNAPSE_API_KEY: "syn_live_ci_test_key"
+        run: pytest sdk/python/tests/test_f18_pgvector_3072.py -v
+
       - name: Provision least-privilege roles (P0-5)
         env:
           DATABASE_URL: postgresql://synapse_test:synapse_test@localhost:5432/synapse_test
@@ -224,6 +242,13 @@ jobs:
           SYNAPSE_ALLOW_DB_FALLBACK: "false"
           SYNAPSE_ENCRYPTION_KEY: "2N53Wk7u2V5bK1wU_1F5Y9mZ7zN53Wk7u2V5bK1wU_0="
           SYNAPSE_API_KEY: "syn_live_ci_test_key"
+          NODE_ENV: production
+          # This is a wiring/readiness smoke, not a semantic retrieval benchmark.
+          # Match the pre-migrated 384-d schema with a deterministic test embedder;
+          # the separate production-startup guard verifies it is refused without opt-in.
+          SYNAPSE_EMBEDDING_PROVIDER: deterministic
+          SYNAPSE_EMBEDDING_DIMENSION: "384"
+          SYNAPSE_ALLOW_DETERMINISTIC_EMBEDDING: "true"
         run: |
           python -m uvicorn synapse_memory.api.fastapi_server:app --host 127.0.0.1 --port 8009 &
           ENGINE_PID=$!
@@ -261,7 +286,10 @@ jobs:
           SYNAPSE_API_KEY: ci-dummy-key
           SYNAPSE_ENCRYPTION_KEY: 2N53Wk7u2V5bK1wU_1F5Y9mZ7zN53Wk7u2V5bK1wU_0=
           POSTGRES_PASSWORD: ci-dummy-postgres
+          SYNAPSE_ADMIN_DB_PASSWORD: ci-dummy-admin-password
           SYNAPSE_APP_DB_PASSWORD: ci-dummy-app-password
+          SYNAPSE_EMBEDDING_PROVIDER: gemini
+          GEMINI_API_KEY: ci-placeholder
         run: docker compose -f deploy/docker-compose.yml config
 
       - name: Scan engine image
@@ -363,6 +391,7 @@ jobs:
           SYNAPSE_API_KEY: ci-placeholder
           SYNAPSE_ENCRYPTION_KEY: ci-placeholder
           SYNAPSE_APP_DB_PASSWORD: ci-placeholder
+          SYNAPSE_ADMIN_DB_PASSWORD: ci-placeholder
           POSTGRES_PASSWORD: ci-placeholder
           SYNAPSE_EMBEDDING_PROVIDER: gemini
           GEMINI_API_KEY: ci-placeholder
