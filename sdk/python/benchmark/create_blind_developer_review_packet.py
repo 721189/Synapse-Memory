@@ -16,10 +16,27 @@ def build_packet(dataset_path: Path, result_paths: List[Path], max_queries: int 
     queries = {str(item["id"]): item for item in dataset["queries"]}
     results = [json.loads(path.read_text(encoding="utf-8")) for path in result_paths]
 
-    selected_ids = sorted(
-        queries,
-        key=lambda query_id: hashlib.sha256(query_id.encode("utf-8")).hexdigest(),
-    )[:max_queries]
+    grouped: Dict[str, List[str]] = {}
+    for query_id, query in queries.items():
+        grouped.setdefault(str(query.get("tenant_id", "unknown")), []).append(query_id)
+    for tenant_id in grouped:
+        grouped[tenant_id].sort(
+            key=lambda query_id: hashlib.sha256(query_id.encode("utf-8")).hexdigest()
+        )
+    # Round-robin across tenants so a small blind packet does not accidentally
+    # overrepresent one product area (e.g. platform, support, or sales).
+    selected_ids: List[str] = []
+    depth = 0
+    tenant_order = sorted(grouped)
+    while len(selected_ids) < min(max_queries, len(queries)):
+        progressed = False
+        for tenant_id in tenant_order:
+            if depth < len(grouped[tenant_id]) and len(selected_ids) < max_queries:
+                selected_ids.append(grouped[tenant_id][depth])
+                progressed = True
+        if not progressed:
+            break
+        depth += 1
     rng = random.Random(seed)
     packet = []
     mapping = []
