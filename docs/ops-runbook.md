@@ -49,12 +49,10 @@ Envelope: successes `{success: true, data, request_id}`; failures
    the runtime Secret contains only the API key, encryption key, runtime DB
    password, optional Redis password and selected provider key. Never put
    bootstrap/migration credentials in the app Secret.
-POSTGRES_USER=postgres as bootstrap, `SYNAPSE_DB_ADMIN_ROLE=synapse_admin`
-for schema migration, and `SYNAPSE_DB_RUNTIME_ROLE=synapse_app` for requests. For 3,072-dimensional Gemini embeddings,
-the PostgreSQL `vector` extension must be **0.7.0 or newer** for halfvec HNSW support; verify
-with `SELECT extversion FROM pg_extension WHERE extname = 'vector';`.
+2. **Database.** Provision pgvector PostgreSQL (managed service or `pgvector/pgvector:pg16`) and enable volume encryption at rest. Compose uses `POSTGRES_USER=postgres` as bootstrap, `SYNAPSE_DB_ADMIN_ROLE=synapse_admin` for schema migration, and `SYNAPSE_DB_RUNTIME_ROLE=synapse_app` for requests.
+   For 3,072-dimensional Gemini embeddings, the PostgreSQL `vector` extension must be **0.7.0 or newer** for halfvec HNSW support; verify with `SELECT extversion FROM pg_extension WHERE extname = 'vector';`.
 
-**Existing Compose volumes from before v1.3.1:** do not delete or recreate the PostgreSQL volume to make new defaults work. Older Compose defaults initialized the bootstrap superuser as `synapse_admin`; fresh installs now default to `postgres`. PostgreSQL only applies `POSTGRES_USER` during first-time volume initialization, so changing it does not create a new superuser. Preserve the original bootstrap username/password explicitly (for the old default, set `POSTGRES_USER=synapse_admin`), set `SYNAPSE_DB_ADMIN_ROLE=synapse_migrator` to a distinct migration role, provide a separate `SYNAPSE_ADMIN_DB_PASSWORD`, and back up both the database and `SYNAPSE_ENCRYPTION_KEY` before provisioning. Bootstrap and migration role names must differ.
+   **Existing Compose volumes from before v1.3.1:** do not delete or recreate the PostgreSQL volume to make new defaults work. Older Compose defaults initialized the bootstrap superuser as `synapse_admin`; fresh installs now default to `postgres`. PostgreSQL only applies `POSTGRES_USER` during first-time volume initialization, so changing it does not create a new superuser. Preserve the original bootstrap username/password explicitly (for the old default, set `POSTGRES_USER=synapse_admin`), set `SYNAPSE_DB_ADMIN_ROLE=synapse_migrator` to a distinct migration role, provide a separate `SYNAPSE_ADMIN_DB_PASSWORD`, and back up both the database and `SYNAPSE_ENCRYPTION_KEY` before provisioning. Bootstrap and migration role names must differ.
 3. **Roles — migrate-then-run (once per cluster):**
    ```bash
    export SYNAPSE_BOOTSTRAP_DATABASE_URL="postgresql://postgres:<bootstrap-password>@<host>/<db>"
