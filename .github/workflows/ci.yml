@@ -543,6 +543,8 @@ jobs:
           assert baseline["dataset"]["query_count"] == 24
           assert len(baseline["dataset"]["queries"]) == len(neural["dataset"]["queries"]) == 24
           assert baseline["environment"]["embedding_is_semantic"] is False
+          assert baseline["environment"]["embedding_model"] is None
+          assert baseline["environment"]["embedding_model_revision"] is None
           assert neural["environment"]["embedding_is_semantic"] is True, (
               "Neural run did not load a real semantic model."
           )
