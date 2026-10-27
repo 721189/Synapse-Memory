@@ -25,7 +25,7 @@ isolation probes, and a verified deletion check.
 ## How to interpret packing results
 
 The packer optimizes the sum of each candidate's numeric relevance_score under
-the token budget. The benchmark's judged relevance_memory_ids are a separate
+the token budget. The benchmark's judged relevant memory IDs are a separate
 quality signal; they are not guaranteed to be proportional to those scores.
 The benchmark therefore records three distinct stages:
 
