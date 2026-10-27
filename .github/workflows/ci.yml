@@ -279,6 +279,7 @@ jobs:
           SYNAPSE_API_KEY: ci-dummy-key
           SYNAPSE_ENCRYPTION_KEY: 2N53Wk7u2V5bK1wU_1F5Y9mZ7zN53Wk7u2V5bK1wU_0=
           POSTGRES_PASSWORD: ci-dummy-postgres
+          SYNAPSE_ADMIN_DB_PASSWORD: ci-dummy-admin-password
           SYNAPSE_APP_DB_PASSWORD: ci-dummy-app-password
           SYNAPSE_EMBEDDING_PROVIDER: gemini
           GEMINI_API_KEY: ci-placeholder
@@ -383,6 +384,7 @@ jobs:
           SYNAPSE_API_KEY: ci-placeholder
           SYNAPSE_ENCRYPTION_KEY: ci-placeholder
           SYNAPSE_APP_DB_PASSWORD: ci-placeholder
+          SYNAPSE_ADMIN_DB_PASSWORD: ci-placeholder
           POSTGRES_PASSWORD: ci-placeholder
           SYNAPSE_EMBEDDING_PROVIDER: gemini
           GEMINI_API_KEY: ci-placeholder
