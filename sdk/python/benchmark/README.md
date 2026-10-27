@@ -57,6 +57,52 @@ the comparison isolates the effect of embedding choice on this fixture; it does
 not prove general production quality or better LLM answers. Do not switch the
 production packer objective based on this small set alone.
 
+## External validation with reviewed LongMemEval evidence sessions
+
+The dedicated semantic CI job also runs `longmemeval_external_eval.py` against
+the corrected ReMe Cleaned-S release of LongMemEval. The adapter verifies the
+downloaded JSON's SHA-256 before evaluating it, uses the published corrected
+`answer_session_ids` evidence labels, and excludes every history session later
+than the question timestamp. The subset is deterministic and stratified across
+the six published question types (up to 20 per type); no dataset file is
+committed to this repository.
+
+The external evaluator compares BM25, pinned neural dense retrieval, and RRF
+hybrid ranking at Recall@5, Precision@5, MRR@5, and nDCG@5. It measures retrieval
+of evidence sessions, not answer-generation accuracy. LongMemEval is a general
+long-term conversational-memory benchmark, not a developer-only benchmark.
+
+Run it locally after installing the pinned semantic dependencies:
+
+```bash
+python -m pip install -e sdk/python
+python -m pip install --index-url https://download.pytorch.org/whl/cpu torch==2.14.1+cpu
+python -m pip install -r sdk/python/benchmark/requirements-semantic.txt
+python sdk/python/benchmark/longmemeval_external_eval.py \
+  --output longmemeval-external-results.json \
+  --max-per-type 20 --top-k 5
+```
+
+The dataset is fetched from
+[the corrected ReMe Cleaned-S dataset card](https://huggingface.co/datasets/agentscope-ai/ReMe_longmemeval_clean_s_v2)
+and must match SHA-256
+`f8b308cc2d184d029dd2226e0c0a88eeac298e6318706d588e015beb1b83fc7d`.
+The dataset card documents corrections to answer and evidence-session labels,
+including future-evidence leakage. Do not redistribute the downloaded data
+without checking the dataset's applicable license and terms.
+
+## Developer-specific relevance review (human step required)
+
+The same CI job creates a blinded packet from the top-ranked developer-memory
+candidates across deterministic and neural runs. Reviewers score candidate
+evidence from 0 (irrelevant), 1 (related but insufficient), to 2 (directly
+useful evidence). The packet and its mapping key are uploaded as separate
+artifacts; send only the packet to two reviewers and keep the key private until
+both reviews are complete. The packet is explicitly marked
+`awaiting_independent_human_review`: CI cannot manufacture independent labels.
+Resolve disagreements and then calculate nDCG/MRR from adjudicated labels
+before using this developer-specific evaluation to support product claims.
+
 ## How to interpret packing results
 
 The packer optimizes the sum of each candidate's numeric relevance_score under
