@@ -602,7 +602,7 @@ jobs:
               repo_id="agentscope-ai/ReMe_longmemeval_clean_s_v2",
               filename="longmemeval_s_reme_cleaned.json",
               repo_type="dataset",
-              revision="main",
+              revision="f8bd08fd19ef175c99c7065c322191e16c69f0ea",
           )
           print("path=" + path)
           PY
@@ -635,7 +635,9 @@ jobs:
           from pathlib import Path
 
           result = json.loads(Path("longmemeval-external-results.json").read_text())
-          assert result["source"]["dataset_sha256"] == "f8b308cc2d184d029dd2226e0c0a88eeac298e6318706d588e015beb1b83fc7d"
+          assert result["source"]["dataset_sha256"] == "57ed3225673015880c42eaf764406e656d9ac3fc4821337e3ec3c28ac8259823"
+          assert result["source"]["dataset_revision"] == "f8bd08fd19ef175c99c7065c322191e16c69f0ea"
+          assert result["source"]["dataset_card_sha256_mismatch"] is True
           assert result["source"]["question_count"] == 500
           assert result["source"]["positive_evidence_question_count"] > 0
           assert result["source"]["label_validation"].startswith("passed:")
