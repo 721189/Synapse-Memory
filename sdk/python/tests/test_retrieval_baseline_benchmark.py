@@ -153,6 +153,47 @@ class TestRetrievalBaselineBenchmark(unittest.TestCase):
             self.assertEqual(data["deletion"]["status"], "passed")
 
 
+    def test_semantic_evaluation_fixture_is_complete_and_tenant_scoped(self):
+        semantic_dataset = SDK_ROOT / "benchmark" / "semantic_packing_eval_dataset.json"
+        data = json.loads(semantic_dataset.read_text(encoding="utf-8"))
+        documents = {item["id"]: item for item in data["documents"]}
+        queries = data["queries"]
+
+        self.assertEqual(data["name"], "synapse-semantic-packing-eval-v1")
+        self.assertEqual(len(documents), 96)
+        self.assertEqual(len(queries), 24)
+        self.assertEqual({item["tenant_id"] for item in documents.values()}, {
+            "tenant-alpha", "tenant-beta", "tenant-gamma"
+        })
+        self.assertEqual(len({item["query"] for item in queries}), len(queries))
+
+        for query in queries:
+            self.assertEqual(len(query["relevant_memory_ids"]), 2)
+            self.assertEqual(len(set(query["relevant_memory_ids"])), 2)
+            for memory_id in query["relevant_memory_ids"]:
+                self.assertIn(memory_id, documents)
+                self.assertEqual(
+                    documents[memory_id]["tenant_id"], query["tenant_id"]
+                )
+
+        self.assertIn("not user-derived", data["purpose"])
+        self.assertIn("independently reviewed", data["purpose"])
+
+    def test_semantic_model_missing_dependency_fails_without_fallback(self):
+        # This is a lightweight contract check; model downloads belong in the
+        # dedicated semantic CI job, not the ordinary offline unit-test suite.
+        sys.path.insert(0, str(SDK_ROOT / "benchmark"))
+        from retrieval_baselines import _SentenceTransformerBenchmarkEmbedder
+
+        import unittest.mock as mock
+
+        with mock.patch.dict(sys.modules, {"sentence_transformers": None}):
+            with self.assertRaisesRegex(RuntimeError, "optional local-models extra"):
+                _SentenceTransformerBenchmarkEmbedder(
+                    "sentence-transformers/all-MiniLM-L6-v2",
+                    "1110a243fdf4706b3f48f1d95db1a4f5529b4d41",
+                )
+
     def test_hybrid_ranking_is_independent_of_input_row_order(self):
         # BM25 and cosine ties are common in the deterministic fixture. They
         # must not inherit whatever order SQLite happened to return.
