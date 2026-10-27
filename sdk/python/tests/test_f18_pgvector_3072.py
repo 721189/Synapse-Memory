@@ -92,6 +92,18 @@ class TestProductionDimension(unittest.TestCase):
                     row = cur.fetchone()
             self.assertIsNotNone(row, "HNSW index was not created")
             self.assertIn("halfvec_cosine_ops", row[0])
+            self.assertIn("halfvec(3072)", row[0])
+
+            # The hybrid SQL path uses the same expression/operator, not just
+            # the direct vector_search implementation.
+            hybrid = store.hybrid_search_sql(
+                query="synthetic 3072 dimensional index compatibility probe",
+                query_vec=vector,
+                top_k=1,
+                tenant_id=tenant,
+            )
+            self.assertTrue(hybrid, "3072-dimensional hybrid_search_sql returned no records")
+            self.assertEqual(hybrid[0]["id"], memory_id)
         finally:
             store.delete_memory(memory_id, tenant_id=tenant)
 
