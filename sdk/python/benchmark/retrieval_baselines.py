@@ -195,11 +195,15 @@ def _rank_documents(
         return ranked
 
     if method == "hybrid_rrf":
+        # HybridSearch uses stable sort for component ranks, so its tie order
+        # follows input order. Sort IDs before fusion to make component ranks,
+        # RRF scores, and downstream packing independent of database row order.
+        ordered_documents = sorted(documents, key=lambda item: str(item["id"]))
         ranked = searcher.fused_search(
             query=query_text,
-            documents=documents,
+            documents=ordered_documents,
             query_vector=query_vector,
-            top_k=len(documents),
+            top_k=len(ordered_documents),
         )
         ranked.sort(
             key=lambda item: (-float(item.get("relevance_score", 0.0)), str(item["id"]))
