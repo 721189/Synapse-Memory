@@ -4,13 +4,13 @@
 
 <div align="center">
 
-**Enterprise-grade, multi-tenant cognitive memory substrate for LLM applications.**
+**Self-hostable, tenant-aware memory infrastructure for AI applications.**
 
-Field-level encryption on `content` at rest (the `content_plain` search projection is plaintext â€” see [SECURITY.md](SECURITY.md)) Â· Hybrid retrieval (BM25 + pgvector HNSW + RRF) Â· Optimal token packing (0/1 Knapsack DP)
-Database-level tenant isolation (PostgreSQL RLS) Â· Fail-closed paths are covered by tests Â· Pre-production readiness work ongoing
+Field-level encryption on `content` at rest (the `content_plain` search projection is plaintext â€” see [SECURITY.md](SECURITY.md)) Â· Hybrid retrieval (BM25 + pgvector HNSW + RRF) Â· Token-budgeted context packing (0/1 Knapsack DP)
+Database-level tenant isolation (PostgreSQL RLS) Â· Fail-closed paths are covered by tests Â· v1.3.1 published; production validation remains open
 
 [![CI/CD Pipeline](https://github.com/721189/Synapse-Memory/actions/workflows/ci.yml/badge.svg)](https://github.com/721189/Synapse-Memory/actions/workflows/ci.yml)
-[![Version](https://img.shields.io/badge/version-1.3.1--rc-orange.svg)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/pypi-v-synapse-memory-engine-brightgreen)](CHANGELOG.md)
 [![Python](https://img.shields.io/badge/python-3.10%20%7C%203.11%20%7C%203.12-blue.svg)](https://www.python.org/)
 [![Node.js](https://img.shields.io/badge/node-20.19%2B-green.svg)](https://nodejs.org/)
 [![PostgreSQL](https://img.shields.io/badge/postgres-16%20%2B%20pgvector%20HNSW-336791.svg)](https://github.com/pgvector/pgvector)
@@ -54,7 +54,7 @@ Database-level tenant isolation (PostgreSQL RLS) Â· Fail-closed paths are cove
 
 ## 1. Executive Summary
 
-**Synapse Memory** (v1.3.1 release candidate) is a persistent, encrypted, multi-tenant memory layer that solves the
+**Synapse Memory** (v1.3.1) is a persistent, encrypted, multi-tenant memory layer that solves the
 statelessness of LLM APIs. It ingests text, embeds it, deduplicates it, stores it encrypted, and later
 returns **only the most relevant context that fits a finite token budget** â€” fused across lexical and
 dense retrieval, decayed by recency and usage, and packed by dynamic programming instead of naive
@@ -62,8 +62,8 @@ truncation.
 
 | | |
 |---|---|
-| **Status** | Source release candidate v1.3.1 (not yet published). PR #18's prior source candidate passed full CI; the current release-version bump must also pass CI, followed by main-branch CI before tagging. Published 1.3.0 predates these fixes and is not a production sign-off. |
-| **Surfaces** | HTTP engine (FastAPI, `:8008`) Â· Node gateway + React dashboard (`:3000`) Â· Python SDK (`synapse-memory-engine` 1.3.1 release candidate; PyPI publication pending) |
+| **Status** | Python SDK v1.3.1 is published on PyPI after the release workflow's build, metadata, install, and trusted-publishing checks passed. This is not independent production sign-off: workload-specific validation, an independent security review, and customer usage remain outstanding. |
+| **Surfaces** | HTTP engine (FastAPI, `:8008`) Â· Node gateway + React dashboard (`:3000`) Â· Python SDK (`synapse-memory-engine` 1.3.1; [published on PyPI](https://pypi.org/project/synapse-memory-engine/1.3.1/)) |
 | **Storage** | PostgreSQL 16 + pgvector HNSW (production) Â· SQLite (single-node dev) â€” both with Fernet field encryption |
 | **Integrations** | LangChain Â· LlamaIndex Â· raw HTTP (any language) |
 | **Deployment** | Docker Compose (4 services) Â· Kubernetes Helm chart (split engine/gateway + HPA) Â· bare `uvicorn` |
@@ -952,6 +952,7 @@ Synapse-Memory/
 
 | Version | Date | Highlights |
 |---|---|---|
+| **1.3.1** | 2026-10-27 | Correctness and release hardening: pgvector halfvec HNSW compatibility for shipped 3,072-dimensional embeddings; guard against implicit embedding-width changes; safer SDK retry semantics; Compose failure diagnostics; aligned version metadata; least-privilege migration-role validation; tenant aliases; production gateway data hygiene. Python SDK published to PyPI. |
 | **1.2.0** | 2026-10-15 | Production-hardening release: NULL-safe RRF, combined-protection encryption (`content` + `content_plain`), `S = R Ã— D` decay composition, fail-closed gateway, thread-safe pooling, Helm split workloads (18 contract tests), load/resilience suite (17 tests), `/metrics`, distributed rate limiting, least-privilege roles, `SynapseClient`, retrieval-eval corpus |
 | 1.2.0 (hardening) | 2026-10-16/17 | P0â€“P2 roadmap closed: RLS live proof with runtime role, SHA-pinned CI, TruffleHog base/head fix, `query_candidates` tenant-scoped PG path, final docs batch (api-reference, security-review, branch-protection, performance-baseline, CODEOWNERS) |
 | 0.1.0 | â€” | Pre-hardening prototype â€” **do not use in production** |
