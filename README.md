@@ -10,7 +10,7 @@ Field-level encryption on `content` at rest (the `content_plain` search projecti
 Database-level tenant isolation (PostgreSQL RLS) Â· Fail-closed paths are covered by tests Â· Pre-production readiness work ongoing
 
 [![CI/CD Pipeline](https://github.com/721189/Synapse-Memory/actions/workflows/ci.yml/badge.svg)](https://github.com/721189/Synapse-Memory/actions/workflows/ci.yml)
-[![Version](https://img.shields.io/badge/version-1.3.0-blue.svg)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-1.3.1--rc-orange.svg)](CHANGELOG.md)
 [![Python](https://img.shields.io/badge/python-3.10%20%7C%203.11%20%7C%203.12-blue.svg)](https://www.python.org/)
 [![Node.js](https://img.shields.io/badge/node-20.19%2B-green.svg)](https://nodejs.org/)
 [![PostgreSQL](https://img.shields.io/badge/postgres-16%20%2B%20pgvector%20HNSW-336791.svg)](https://github.com/pgvector/pgvector)
@@ -54,7 +54,7 @@ Database-level tenant isolation (PostgreSQL RLS) Â· Fail-closed paths are cove
 
 ## 1. Executive Summary
 
-**Synapse Memory** (v1.3.0) is a persistent, encrypted, multi-tenant memory layer that solves the
+**Synapse Memory** (v1.3.1 release candidate) is a persistent, encrypted, multi-tenant memory layer that solves the
 statelessness of LLM APIs. It ingests text, embeds it, deduplicates it, stores it encrypted, and later
 returns **only the most relevant context that fits a finite token budget** â€” fused across lexical and
 dense retrieval, decayed by recency and usage, and packed by dynamic programming instead of naive
@@ -62,8 +62,8 @@ truncation.
 
 | | |
 |---|---|
-| **Status** | Pre-production release. Automated checks cover core behavior and PostgreSQL role isolation, but the latest main CI has deployment failures; review the current Actions status and documented limitations before deployment. The published 1.3.0 artifact predates follow-up fixes being developed on a branch. |
-| **Surfaces** | HTTP engine (FastAPI, `:8008`) Â· Node gateway + React dashboard (`:3000`) Â· Python SDK (`synapse-memory-engine` 1.3.0) |
+| **Status** | Source release candidate v1.3.1 (not yet published). PR #18's prior source candidate passed full CI; the current release-version bump must also pass CI, followed by main-branch CI before tagging. Published 1.3.0 predates these fixes and is not a production sign-off. |
+| **Surfaces** | HTTP engine (FastAPI, `:8008`) Â· Node gateway + React dashboard (`:3000`) Â· Python SDK (`synapse-memory-engine` 1.3.1 release candidate; PyPI publication pending) |
 | **Storage** | PostgreSQL 16 + pgvector HNSW (production) Â· SQLite (single-node dev) â€” both with Fernet field encryption |
 | **Integrations** | LangChain Â· LlamaIndex Â· raw HTTP (any language) |
 | **Deployment** | Docker Compose (4 services) Â· Kubernetes Helm chart (split engine/gateway + HPA) Â· bare `uvicorn` |
@@ -477,7 +477,7 @@ helm install synapse deploy/helm-chart \
 | HPA | `minReplicas 3` / `maxReplicas 15`, CPU+memory 80% |
 | Ingress | optional; TLS termination at ingress recommended |
 | Secrets | via existing Secret â€” **never** ConfigMap; kubelet `$(VAR)` expansion ordering guarded |
-| Chart version | `0.1.0` (app 1.3.0) â€” chart version â‰  app version, see `Chart.yaml` |
+| Chart version | `0.3.0` (app 1.3.1 release candidate) â€” chart version â‰  app version, see `Chart.yaml` |
 
 ### 7.3 Migrate-then-run: least-privilege database roles
 
@@ -512,10 +512,10 @@ python scripts/provision_db_roles.py --verify-only   # must exit 0
 
 | Component | Version | Notes |
 |---|---|---|
-| Python SDK (`synapse-memory-engine`) | **1.3.0** | `SynapseClient`, `__version__ = "1.3.0"` |
+| Python SDK (`synapse-memory-engine`) | **1.3.1 candidate** | `SynapseClient`, `__version__ = "1.3.1"`; publication pending |
 | HTTP API compat | **v1** | canonical `{success, data, request_id}` envelope; `/api/*` aliases stable |
-| Engine / gateway images | **1.3.0 pair** | must deploy matching tags |
-| Helm chart | **0.2.0** (app 1.3.0) | chart version â‰  app version; see `Chart.yaml` |
+| Engine / gateway images | **1.3.1 target pair** | build/push both matching tags before deployment |
+| Helm chart | **0.3.0** (app 1.3.1 candidate) | chart version â‰  app version; see `Chart.yaml` |
 | Schema | **v4 ledger** | forward-only; v4 adds `content_plain` |
 | Python | 3.10 / 3.11 / 3.12 | CI-tested matrix |
 | Node.js | â‰¥ 20.19 (20.x, 22.x in CI) | gateway build matrix |

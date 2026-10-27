@@ -53,8 +53,9 @@ install commands as `pip install synapse-memory-engine[...]`.
 3. Tag and push — the tag must equal `v<version>`:
 
    ```bash
-   git tag v1.3.1
-   git push origin v1.3.1
+   VERSION=1.3.2
+   git tag -s "v${VERSION}"
+   git push origin "v${VERSION}"
    ```
 
 4. The `publish-pypi.yml` workflow then: runs the full unit suite → builds

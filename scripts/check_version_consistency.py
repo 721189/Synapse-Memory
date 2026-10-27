@@ -8,7 +8,8 @@ Checked surfaces:
   * sdk/python/synapse_memory/api/fastapi_server.py -> OpenAPI version
   * sdk/python/setup.py                   -> legacy version metadata
   * pyproject.toml (root)                -> project.version
-  * package.json                         -> version
+  * package.json / package-lock.json     -> version
+  * README.md                            -> version badge
   * deploy/helm-chart/Chart.yaml         -> appVersion
   * deploy/docker-compose.yml            -> GATEWAY_VERSION fallback
   * deploy/.env.example                  -> GATEWAY_VERSION
@@ -54,11 +55,21 @@ def main() -> int:
         "FastAPI OpenAPI version",
     )
     changelog_heading = find(
-        "CHANGELOG.md", r"^## 1\.3\.0 — (.+)$", "1.3.0 release heading"
+        "CHANGELOG.md",
+        rf"^## {re.escape(sdk_version)} — (.+)$",
+        f"{sdk_version} changelog heading",
     )
     if "unreleased" in changelog_heading.lower():
-        raise SystemExit("FAIL CHANGELOG.md still labels published version 1.3.0 as unreleased")
+        raise SystemExit(f"FAIL CHANGELOG.md still labels current version {sdk_version} as unreleased")
     pkg_version = json.loads(read("package.json"))["version"]
+    package_lock = json.loads(read("package-lock.json"))
+    lock_version = package_lock.get("version", "")
+    lock_root_version = package_lock.get("packages", {}).get("", {}).get("version", "")
+    readme_version = find(
+        "README.md",
+        r"!\[Version\]\(https://img\.shields\.io/badge/version-([0-9]+\.[0-9]+\.[0-9]+)(?:--rc)?-",
+        "README version badge",
+    )
     chart_app = find(r"deploy/helm-chart/Chart.yaml", r'^appVersion: "([^"]+)"', "appVersion")
 
     compose_tags = set(re.findall(r"GATEWAY_VERSION:-v([0-9]+\.[0-9]+\.[0-9]+)", read("deploy/docker-compose.yml")))
@@ -74,6 +85,9 @@ def main() -> int:
         "FastAPI OpenAPI version": api_version,
         "pyproject.toml (root) version": root_version,
         "package.json version": pkg_version,
+        "package-lock root version": lock_version,
+        "package-lock package root version": lock_root_version,
+        "README version badge": readme_version,
         "deploy/helm-chart/Chart.yaml appVersion": chart_app,
         "deploy/.env.example GATEWAY_VERSION": env_version,
     }

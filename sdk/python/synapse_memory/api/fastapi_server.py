@@ -233,7 +233,7 @@ def _rate_limit_principal(request: Request) -> str:
 app = FastAPI(
     title="SynapseMemory Enterprise Cognitive Gateway",
     description="Sovereign Active Long-Term Memory & Context Budgeting REST API with Multi-Tenancy and Database-Level RLS.",
-    version="1.3.0"
+    version="1.3.1"
 )
 
 

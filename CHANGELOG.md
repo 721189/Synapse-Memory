@@ -2,7 +2,9 @@
 
 ## Unreleased
 
-- **Post-release correctness fixes (not yet published):** support the shipped
+## 1.3.1 — release candidate 2026-10-27
+
+- **Post-release correctness fixes (pending PyPI publication):** support the shipped
   3,072-dimensional embedding width using a pgvector-supported halfvec HNSW
   expression index and matching query expression; refuse implicit model-width
   changes when existing embeddings have not been re-embedded; add an isolated,
@@ -12,11 +14,16 @@
   which updates access metadata) after ambiguous network failures or transient
   5xx responses without a proven idempotency contract.
 - **Deployment diagnostics:** capture Compose logs and container state even when
-  initial stack startup fails; provide the semantic embedding-provider values in
+  initial stack startup fails; provide semantic embedding-provider values in
   config-validation CI.
 - **Release metadata:** align the client, legacy setup metadata and OpenAPI
-  version with the published distribution; expand the version-consistency gate.
-
+  version with the package and expand the version-consistency gate.
+- **Least-privilege migration guard:** verify the migration DSN actually uses the
+  designated non-superuser role rather than the bootstrap credential.
+- **Tenant input compatibility:** accept snake_case and documented camelCase
+  aliases so tenant selections are not silently ignored.
+- **Gateway data hygiene:** prevent production demo-memory fallbacks and duplicate
+  plaintext in the gateway process-local store.
 ## 1.3.0 — released 2026-10-26
 - **Security audit F-01â€¦F-09 remediation.**
   - **F-01 (P0, privilege escalation):** all authorization now runs through one

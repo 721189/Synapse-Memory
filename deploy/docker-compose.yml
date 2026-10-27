@@ -10,7 +10,7 @@ services:
     build:
       context: ..
       dockerfile: Dockerfile.engine
-    image: synapse-memory/engine:${GATEWAY_VERSION:-v1.3.0}
+    image: synapse-memory/engine:${GATEWAY_VERSION:-v1.3.1}
     container_name: synapse-engine
     restart: unless-stopped
     environment:
@@ -67,7 +67,7 @@ services:
     build:
       context: ..
       dockerfile: Dockerfile.engine
-    image: synapse-memory/engine:${GATEWAY_VERSION:-v1.3.0}
+    image: synapse-memory/engine:${GATEWAY_VERSION:-v1.3.1}
     container_name: synapse-db-provision
     restart: "no"
     environment:
@@ -97,7 +97,7 @@ services:
     build:
       context: ..
       dockerfile: Dockerfile.gateway
-    image: synapse-memory/gateway:${GATEWAY_VERSION:-v1.3.0}
+    image: synapse-memory/gateway:${GATEWAY_VERSION:-v1.3.1}
     container_name: synapse-gateway
     restart: unless-stopped
     ports:
