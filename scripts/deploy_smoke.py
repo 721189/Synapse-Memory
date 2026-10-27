@@ -38,6 +38,7 @@ GENERATED = {
     "api_key": "syn_live_" + secrets.token_hex(24),
     "encryption_key": base64.urlsafe_b64encode(os.urandom(32)).decode(),
     "pg_password": secrets.token_urlsafe(24),
+    "admin_password": secrets.token_urlsafe(24),
     "app_password": secrets.token_urlsafe(24),
 }
 
@@ -45,6 +46,7 @@ ENV = {
     "SYNAPSE_API_KEY": os.environ.get("SYNAPSE_API_KEY", GENERATED["api_key"]),
     "SYNAPSE_ENCRYPTION_KEY": os.environ.get("SYNAPSE_ENCRYPTION_KEY", GENERATED["encryption_key"]),
     "POSTGRES_PASSWORD": os.environ.get("POSTGRES_PASSWORD", GENERATED["pg_password"]),
+    "SYNAPSE_ADMIN_DB_PASSWORD": os.environ.get("SYNAPSE_ADMIN_DB_PASSWORD", GENERATED["admin_password"]),
     "SYNAPSE_APP_DB_PASSWORD": os.environ.get("SYNAPSE_APP_DB_PASSWORD", GENERATED["app_password"]),
     # Wiring-only exception, see module docstring.
     "SYNAPSE_EMBEDDING_PROVIDER": "deterministic",
