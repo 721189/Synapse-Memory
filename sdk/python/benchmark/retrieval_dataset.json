@@ -1,0 +1,259 @@
+{
+  "schema_version": 1,
+  "name": "synapse-retrieval-baseline-v1",
+  "purpose": "Small, transparent synthetic corpus for repeatable offline retrieval ablations. It is not a representative production workload.",
+  "documents": [
+    {
+      "id": "mem_deploy_trigger",
+      "tenant_id": "team_platform",
+      "category": "fact",
+      "content": "The deployment pipeline runs only when a version tag is pushed; commits to ordinary branches do not publish a release."
+    },
+    {
+      "id": "mem_deploy_schedule",
+      "tenant_id": "team_platform",
+      "category": "fact",
+      "content": "Scheduled nightly integration tests run at 02:15 UTC from the main branch."
+    },
+    {
+      "id": "mem_cache_ttl",
+      "tenant_id": "team_platform",
+      "category": "fact",
+      "content": "The stale cache TTL is 3600 seconds before entries are refreshed."
+    },
+    {
+      "id": "mem_rate_limit",
+      "tenant_id": "team_platform",
+      "category": "fact",
+      "content": "HTTP 429 means rate limit exceeded; clients should back off and follow the Retry-After header."
+    },
+    {
+      "id": "mem_backup_key",
+      "tenant_id": "team_platform",
+      "category": "fact",
+      "content": "Encrypted PostgreSQL backups must be restored with the same SYNAPSE_ENCRYPTION_KEY used when data was written."
+    },
+    {
+      "id": "mem_tenant_rls",
+      "tenant_id": "team_platform",
+      "category": "fact",
+      "content": "PostgreSQL row-level security and the tenant_id predicate prevent one tenant from reading another tenant's memories."
+    },
+    {
+      "id": "mem_local_sqlite",
+      "tenant_id": "team_platform",
+      "category": "fact",
+      "content": "Local development supports SQLite with deterministic hash embeddings; those vectors are not semantic embeddings."
+    },
+    {
+      "id": "mem_embedding_migration",
+      "tenant_id": "team_platform",
+      "category": "fact",
+      "content": "Changing embedding models or vector dimensions requires re-embedding existing memories before querying the new vector space."
+    },
+    {
+      "id": "mem_pgvector_dim",
+      "tenant_id": "team_platform",
+      "category": "fact",
+      "content": "The 3072-dimensional pgvector HNSW path uses a halfvec-compatible expression index."
+    },
+    {
+      "id": "mem_context_budget",
+      "tenant_id": "team_platform",
+      "category": "fact",
+      "content": "The context packer chooses memory items that fit within the requested token budget."
+    },
+    {
+      "id": "mem_delete",
+      "tenant_id": "team_platform",
+      "category": "fact",
+      "content": "Deleting a memory should remove it from the active result set; related projections and indexes must also be cleaned up."
+    },
+    {
+      "id": "mem_key_rotation",
+      "tenant_id": "team_platform",
+      "category": "fact",
+      "content": "Encryption key rotation keeps old keys available until data has been re-encrypted and verified."
+    },
+    {
+      "id": "mem_pref_old",
+      "tenant_id": "team_support",
+      "category": "preference",
+      "content": "Earlier user note from 2026-08-14: prefers Python for backend work. This is an old preference entry."
+    },
+    {
+      "id": "mem_pref_current",
+      "tenant_id": "team_support",
+      "category": "preference",
+      "content": "Current preference updated on 2026-10-22: the user prefers TypeScript for new backend services; this supersedes the earlier Python preference."
+    },
+    {
+      "id": "mem_refund_old",
+      "tenant_id": "team_support",
+      "category": "policy",
+      "content": "Legacy support policy allowed eligible refunds within 14 days of purchase; this policy has expired."
+    },
+    {
+      "id": "mem_refund_current",
+      "tenant_id": "team_support",
+      "category": "policy",
+      "content": "Current refund policy allows eligible requests within 30 calendar days of purchase when a receipt is available, replacing the old 14-day window."
+    },
+    {
+      "id": "mem_support_escalation",
+      "tenant_id": "team_support",
+      "category": "procedure",
+      "content": "Escalate a payments outage to the on-call engineer after confirming the service health alert."
+    },
+    {
+      "id": "mem_support_sla",
+      "tenant_id": "team_support",
+      "category": "policy",
+      "content": "Priority-one support tickets have an initial response target of 15 minutes during staffed hours."
+    },
+    {
+      "id": "mem_sales_pipeline",
+      "tenant_id": "team_sales",
+      "category": "fact",
+      "content": "The quarterly sales review is scheduled for Friday at 14:00 UTC."
+    },
+    {
+      "id": "mem_sales_retention",
+      "tenant_id": "team_sales",
+      "category": "policy",
+      "content": "Sales account notes should be retained for 24 months after account closure."
+    },
+    {
+      "id": "mem_sales_region",
+      "tenant_id": "team_sales",
+      "category": "fact",
+      "content": "The sales team groups EMEA opportunities by country and expected close quarter."
+    },
+    {
+      "id": "mem_ops_redis",
+      "tenant_id": "team_platform",
+      "category": "fact",
+      "content": "Redis-backed rate limiting shares request counters across multiple engine replicas."
+    },
+    {
+      "id": "mem_ops_key",
+      "tenant_id": "team_platform",
+      "category": "security",
+      "content": "The root API key and encryption key are distinct secrets and must never be committed to source control."
+    }
+  ],
+  "queries": [
+    {
+      "id": "q_release_trigger",
+      "tenant_id": "team_platform",
+      "query": "What action causes a new release to publish?",
+      "relevant_memory_ids": [
+        "mem_deploy_trigger"
+      ]
+    },
+    {
+      "id": "q_cache_expiry",
+      "tenant_id": "team_platform",
+      "query": "How long before a stale cache entry expires?",
+      "relevant_memory_ids": [
+        "mem_cache_ttl"
+      ]
+    },
+    {
+      "id": "q_rate_limit",
+      "tenant_id": "team_platform",
+      "query": "How should a client react after receiving HTTP 429?",
+      "relevant_memory_ids": [
+        "mem_rate_limit"
+      ]
+    },
+    {
+      "id": "q_backup_restore",
+      "tenant_id": "team_platform",
+      "query": "Which secret is needed to read the encrypted database backup?",
+      "relevant_memory_ids": [
+        "mem_backup_key"
+      ]
+    },
+    {
+      "id": "q_tenant_isolation",
+      "tenant_id": "team_platform",
+      "query": "What prevents a customer from reading another tenant's memory?",
+      "relevant_memory_ids": [
+        "mem_tenant_rls"
+      ]
+    },
+    {
+      "id": "q_local_backend",
+      "tenant_id": "team_platform",
+      "query": "Which storage backend can I use for an offline local demo?",
+      "relevant_memory_ids": [
+        "mem_local_sqlite"
+      ]
+    },
+    {
+      "id": "q_embedding_change",
+      "tenant_id": "team_platform",
+      "query": "What must happen before switching the embedding model?",
+      "relevant_memory_ids": [
+        "mem_embedding_migration"
+      ]
+    },
+    {
+      "id": "q_vector_width",
+      "tenant_id": "team_platform",
+      "query": "How is the 3072 dimensional pgvector HNSW index supported?",
+      "relevant_memory_ids": [
+        "mem_pgvector_dim"
+      ]
+    },
+    {
+      "id": "q_context_budget",
+      "tenant_id": "team_platform",
+      "query": "How does the system keep retrieved context within a token limit?",
+      "relevant_memory_ids": [
+        "mem_context_budget"
+      ]
+    },
+    {
+      "id": "q_delete_memory",
+      "tenant_id": "team_platform",
+      "query": "What should be cleaned up after a memory is deleted?",
+      "relevant_memory_ids": [
+        "mem_delete"
+      ]
+    },
+    {
+      "id": "q_current_preference",
+      "tenant_id": "team_support",
+      "query": "What language should new backend services use now?",
+      "relevant_memory_ids": [
+        "mem_pref_current"
+      ]
+    },
+    {
+      "id": "q_current_refund_policy",
+      "tenant_id": "team_support",
+      "query": "What is the current refund eligibility window?",
+      "relevant_memory_ids": [
+        "mem_refund_current"
+      ]
+    },
+    {
+      "id": "q_escalation",
+      "tenant_id": "team_support",
+      "query": "Who should be contacted for a confirmed payments outage?",
+      "relevant_memory_ids": [
+        "mem_support_escalation"
+      ]
+    },
+    {
+      "id": "q_sales_review",
+      "tenant_id": "team_sales",
+      "query": "At what time is the quarterly sales review?",
+      "relevant_memory_ids": [
+        "mem_sales_pipeline"
+      ]
+    }
+  ]
+}
