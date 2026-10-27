@@ -30,18 +30,18 @@ spec:
               value: {{ .Values.config.nodeEnv | quote }}
             - name: SYNAPSE_STORAGE_BACKEND
               value: {{ .Values.config.storageBackend | quote }}
-            # Kubelet `$(VAR)` expansion only sees variables defined EARLIER in
-            # this same env list. DB_PASSWORD must therefore be declared BEFORE
-            # DATABASE_URL — otherwise the pod boots with the literal string
-            # "$(DB_PASSWORD)" as the password, auth fails, and fail-closed
-            # startup crash-loops the engine.
-            - name: DB_PASSWORD
+            - name: SYNAPSE_DB_ADMIN_ROLE
+              value: {{ .Values.config.dbAdminRole | quote }}
+            # Kubelet expands only previously declared variables in env values.
+            # The application credential is for config.dbUser (normally synapse_app),
+            # never the database bootstrap/superuser credential.
+            - name: SYNAPSE_APP_DB_PASSWORD
               valueFrom:
                 secretKeyRef:
                   name: {{ .Values.secrets.existingSecret | default (printf "%s-secret" (include "synapse-memory.fullname" .)) }}
-                  key: POSTGRES_PASSWORD
+                  key: SYNAPSE_APP_DB_PASSWORD
             - name: DATABASE_URL
-              value: "postgresql://{{ .Values.config.dbUser }}:$(DB_PASSWORD)@{{ .Values.config.dbHost }}:{{ .Values.config.dbPort }}/{{ .Values.config.dbName }}"
+              value: "postgresql://{{ .Values.config.dbUser }}:$(SYNAPSE_APP_DB_PASSWORD)@{{ .Values.config.dbHost }}:{{ .Values.config.dbPort }}/{{ .Values.config.dbName }}"
             # "false" = migrate-then-run: schema was applied ahead of start-up by
             # the migration role; the engine connects as the DML-only runtime
             # role (config.dbUser) which cannot execute DDL. See SECURITY.md.
@@ -69,6 +69,12 @@ spec:
                 secretKeyRef:
                   name: {{ .Values.secrets.existingSecret | default (printf "%s-secret" (include "synapse-memory.fullname" .)) }}
                   key: GEMINI_API_KEY
+                  optional: true
+            - name: OPENAI_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.secrets.existingSecret | default (printf "%s-secret" (include "synapse-memory.fullname" .)) }}
+                  key: OPENAI_API_KEY
                   optional: true
             - name: SYNAPSE_ENCRYPTION_KEY
               valueFrom:
@@ -152,11 +158,6 @@ spec:
                 secretKeyRef:
                   name: {{ .Values.secrets.existingSecret | default (printf "%s-secret" (include "synapse-memory.fullname" .)) }}
                   key: SYNAPSE_API_KEY
-            - name: DB_PASSWORD
-              valueFrom:
-                secretKeyRef:
-                  name: {{ .Values.secrets.existingSecret | default (printf "%s-secret" (include "synapse-memory.fullname" .)) }}
-                  key: POSTGRES_PASSWORD
             - name: REDIS_PASSWORD
               valueFrom:
                 secretKeyRef:
