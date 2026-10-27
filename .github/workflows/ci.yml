@@ -593,6 +593,15 @@ jobs:
               )
           PY
 
+      - name: Generate blinded developer-query relevance review packet
+        run: |
+          python sdk/python/benchmark/create_blind_developer_review_packet.py \
+            --dataset sdk/python/benchmark/semantic_packing_eval_dataset.json \
+            --results semantic-eval-hash-baseline.json semantic-eval-neural.json \
+            --packet-output developer-relevance-review-packet.json \
+            --mapping-output developer-relevance-review-key.json \
+            --max-queries 12
+
       - name: Download and checksum-pin corrected LongMemEval-S data
         id: longmemeval-data
         run: |
@@ -619,22 +628,17 @@ jobs:
             --candidate-k 10 \
             --token-budget 512
 
-      - name: Generate blinded developer-query relevance review packet
-        run: |
-          python sdk/python/benchmark/create_blind_developer_review_packet.py \
-            --dataset sdk/python/benchmark/semantic_packing_eval_dataset.json \
-            --results semantic-eval-hash-baseline.json semantic-eval-neural.json \
-            --packet-output developer-relevance-review-packet.json \
-            --mapping-output developer-relevance-review-key.json \
-            --max-queries 12
-
       - name: Validate external benchmark provenance and output
+        if: always()
         run: |
           python - <<'PY'
           import json
           from pathlib import Path
 
-          result = json.loads(Path("longmemeval-external-results.json").read_text())
+          result_path = Path("longmemeval-external-results.json")
+          if not result_path.is_file():
+              raise SystemExit("LongMemEval result file is missing because the evaluation step did not complete.")
+          result = json.loads(result_path.read_text())
           assert result["source"]["dataset_sha256"] == "57ed3225673015880c42eaf764406e656d9ac3fc4821337e3ec3c28ac8259823"
           assert result["source"]["dataset_revision"] == "f8bd08fd19ef175c99c7065c322191e16c69f0ea"
           assert result["source"]["dataset_card_sha256_mismatch"] is True
@@ -663,6 +667,7 @@ jobs:
           PY
 
       - name: Upload semantic and external benchmark results
+        if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: semantic-packing-evaluation-${{ github.sha }}
@@ -670,14 +675,15 @@ jobs:
             semantic-eval-hash-baseline.json
             semantic-eval-neural.json
             longmemeval-external-results.json
-          if-no-files-found: error
+          if-no-files-found: ignore
           retention-days: 30
 
       - name: Upload blinded developer relevance review packet
+        if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: developer-relevance-review-packet-${{ github.sha }}
           path: developer-relevance-review-packet.json
-          if-no-files-found: error
+          if-no-files-found: ignore
           retention-days: 30
 
