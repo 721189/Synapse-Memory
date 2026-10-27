@@ -255,3 +255,45 @@ engine code, not benchmark noise.
 - Live PostgreSQL tables (`test_pgvector_integration.py`, 20/20 passing) are
   gated behind a running PG and skipped when absent — no daemon required to run
   the harness itself.
+
+
+## Recording independent developer-query relevance judgments
+
+The CI job produces a blinded JSON packet, but it cannot create independent
+human labels. Download the packet artifact from the
+[latest successful semantic CI run](https://github.com/721189/Synapse-Memory/actions/workflows/ci.yml)
+and give each reviewer their own separate copy. Do not let reviewers edit the
+same file or see each other's scores before submitting. Keep the mapping key
+and raw benchmark results private until both reviews are complete.
+
+Each reviewer grades every candidate from 0 (irrelevant), 1 (related but
+insufficient), to 2 (directly useful evidence). Merge the two returned copies
+into one packet by filling `reviewer_a.relevance` and
+`reviewer_b.relevance`. For every disagreement, add
+`adjudicated_relevance` (0/1/2) and a non-empty `adjudication_note` after
+discussion. Equal labels are accepted without adjudication. Do not alter
+candidate IDs, case IDs, or query/candidate content.
+
+After extracting the private mapping key and the raw
+`retrieval-baselines-<commit>` artifact, install the SDK and run:
+
+```bash
+python -m pip install -e sdk/python
+python sdk/python/benchmark/score_developer_relevance_reviews.py \
+  --packet reviewed-developer-relevance.json \
+  --mapping-key developer-relevance-review-key.json \
+  --results semantic-eval-hash-baseline.json semantic-eval-neural.json \
+  --output developer-relevance-scored.json
+```
+
+The scorer fails closed on missing labels, invalid grades, unresolved
+disagreements, missing mappings, or unjudged ranked candidates. It reports
+reviewer agreement, nominal and quadratic-weighted Cohen's kappa, adjudicated
+nDCG@5, MRR@5, precision@5, and recall within the reviewed candidate pool.
+The recall metric is **not full-corpus recall**. Because this is a small sample
+of curated developer-memory queries, treat results as exploratory evidence,
+not a general product claim. Do not publish the mapping key or raw conversation
+dataset.
+
+A durable record of the current LongMemEval-S run and its limitations is
+available in [the dated evaluation report](reports/longmemeval-2026-10-27.md).
