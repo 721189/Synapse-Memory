@@ -242,6 +242,13 @@ jobs:
           SYNAPSE_ALLOW_DB_FALLBACK: "false"
           SYNAPSE_ENCRYPTION_KEY: "2N53Wk7u2V5bK1wU_1F5Y9mZ7zN53Wk7u2V5bK1wU_0="
           SYNAPSE_API_KEY: "syn_live_ci_test_key"
+          NODE_ENV: production
+          # This is a wiring/readiness smoke, not a semantic retrieval benchmark.
+          # Match the pre-migrated 384-d schema with a deterministic test embedder;
+          # the separate production-startup guard verifies it is refused without opt-in.
+          SYNAPSE_EMBEDDING_PROVIDER: deterministic
+          SYNAPSE_EMBEDDING_DIMENSION: "384"
+          SYNAPSE_ALLOW_DETERMINISTIC_EMBEDDING: "true"
         run: |
           python -m uvicorn synapse_memory.api.fastapi_server:app --host 127.0.0.1 --port 8009 &
           ENGINE_PID=$!
