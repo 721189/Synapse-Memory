@@ -62,7 +62,7 @@ jobs:
         if: startsWith(github.ref, 'refs/tags/')
         run: |
           TAG="${GITHUB_REF_NAME#v}"
-          PKG_VER=$(python -c "import pathlib,re; t=pathlib.Path('sdk/python/pyproject.toml').read_text(); print(re.search(r'^version = \\"(.+)\\"', t, re.M).group(1))")
+          PKG_VER=$(python -c "import tomllib; print(tomllib.load(open('sdk/python/pyproject.toml', 'rb'))['project']['version'])")
           echo "tag=$TAG package=$PKG_VER"
           test "$TAG" = "$PKG_VER"
 
