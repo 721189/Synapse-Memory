@@ -4,9 +4,15 @@ The engine refuses a dimension mismatch at write time, so defaults must agree:
 Helm and Compose must name a semantic provider (gemini = 3072-d) and never the
 deterministic 128-d provider, which production refuses outright.
 """
+import json
+import os
 import re
 import unittest
 from pathlib import Path
+from unittest.mock import MagicMock, patch
+
+from synapse_memory.core.embedding_provider import GeminiEmbeddingProvider, OpenAIEmbeddingProvider
+from synapse_memory.core.embedder import SynapseEmbedder
 
 ROOT = Path(__file__).resolve().parents[3]
 
