@@ -347,7 +347,12 @@ async function callPythonBackend(
 async function getActiveMemories(req: express.Request, tenantId?: string): Promise<MemoryNode[]> {
   const queryParam = tenantId ? `?tenant_id=${encodeURIComponent(tenantId)}` : '';
   const pyData = await callPythonBackend(req, `/api/memories/list${queryParam}`);
-  if (pyData?.memories && Array.isArray(pyData.memories) && pyData.memories.length > 0) {
+  if (pyData?.memories && Array.isArray(pyData.memories)) {
+    // An empty production tenant is a real empty result, not a reason to display
+    // demo memories. Never merge synthetic examples into production responses.
+    if (pyData.memories.length === 0 && process.env.NODE_ENV === "production") {
+      return [];
+    }
     return pyData.memories.map((m: any) => ({
       id: m.id,
       category: m.category || 'fact',
@@ -360,7 +365,8 @@ async function getActiveMemories(req: express.Request, tenantId?: string): Promi
       tenantId: m.tenant_id || tenantId || 'default'
     }));
   }
-  return INITIAL_DEMO_MEMORIES;
+  // Backend unavailable or empty: use examples only during local development.
+  return process.env.NODE_ENV === "production" ? [] : INITIAL_DEMO_MEMORIES;
 }
 
 // API Routes
@@ -498,7 +504,11 @@ app.post(["/api/memories/add", "/api/memories/create"], async (req, res) => {
       status: 'active',
       tenantId: pyIngest?.tenant_id || effectiveTenant
     };
-    localMemoryStore.unshift(newNode);
+    // The database is canonical in production. Do not retain an extra plaintext
+    // copy in the gateway's process-local demo store after a successful write.
+    if (process.env.NODE_ENV !== "production") {
+      localMemoryStore.unshift(newNode);
+    }
   }
 
   res.status(201).json({ success: true, memory: newNode, ingestion_result: pyIngest || { status: "stored_locally" } });
