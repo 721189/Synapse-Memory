@@ -446,34 +446,46 @@ class PGVectorMemoryStore:
                     END $$;
                 """)
 
-                # 3b. Refuse an implicit model-width migration. Existing embeddings
-                # must be regenerated with the target provider before changing the
-                # column typmod; ALTER TYPE alone cannot transform their semantics.
-                cur.execute("""
-                    SELECT atttypmod FROM pg_attribute
-                    WHERE attrelid = 'memories'::regclass AND attname = 'embedding';
-                """)
-                row = cur.fetchone()
-                if row:
-                    current_dim = row[0] if isinstance(row, (tuple, list)) else row.get("atttypmod")
-                    if current_dim and current_dim > 0 and current_dim != self.dimension:
-                        cur.execute(
-                            "SELECT COUNT(*) FROM memories WHERE embedding IS NOT NULL "
-                            "AND vector_dims(embedding) <> %s;",
-                            (self.dimension,),
+                # 3b. Refuse an implicit model-width migration. PostgreSQL's
+                # atttypmod for pgvector includes an internal offset; compare the
+                # actual formatted type (vector(3072)), never the raw catalog value.
+                cur.execute(
+                    "SELECT format_type(a.atttypid, a.atttypmod) "
+                    "FROM pg_attribute a "
+                    "WHERE a.attrelid = 'memories'::regclass "
+                    "AND a.attname = 'embedding' AND NOT a.attisdropped;"
+                )
+                type_row = cur.fetchone()
+                type_name = (
+                    type_row[0] if isinstance(type_row, (tuple, list))
+                    else (type_row.get("format_type") if type_row else None)
+                ) if type_row else None
+                type_match = re.fullmatch(r"vector(?:\((\d+)\))?", str(type_name or ""))
+                if not type_match:
+                    raise RuntimeError(
+                        "Unsupported PostgreSQL memories.embedding type "
+                        + repr(type_name)
+                        + "; expected vector or vector(N)."
+                    )
+                current_dim = int(type_match.group(1)) if type_match.group(1) else None
+                if current_dim != self.dimension:
+                    cur.execute(
+                        "SELECT COUNT(*) FROM memories WHERE embedding IS NOT NULL "
+                        "AND vector_dims(embedding) <> %s;",
+                        (self.dimension,),
+                    )
+                    incompatible = int(cur.fetchone()[0])
+                    if incompatible:
+                        raise RuntimeError(
+                            f"Embedding dimension migration blocked: the column is {type_name}, "
+                            f"the configured provider is {self.dimension}-d, and {incompatible} rows "
+                            "still contain vectors of a different width. Do not cast old embeddings; "
+                            "run a deliberate re-embedding migration before switching providers."
                         )
-                        incompatible = int(cur.fetchone()[0])
-                        if incompatible:
-                            raise RuntimeError(
-                                f"Embedding dimension migration blocked: the column is {current_dim}-d, "
-                                f"the configured provider is {self.dimension}-d, and {incompatible} rows "
-                                "still contain vectors of a different width. Do not cast old embeddings; "
-                                "run a deliberate re-embedding migration before switching providers."
-                            )
-                        cur.execute("DROP INDEX IF EXISTS idx_memories_hnsw;")
-                        cur.execute(
-                            f"ALTER TABLE memories ALTER COLUMN embedding TYPE vector({self.dimension});"
-                        )
+                    cur.execute("DROP INDEX IF EXISTS idx_memories_hnsw;")
+                    cur.execute(
+                        f"ALTER TABLE memories ALTER COLUMN embedding TYPE vector({self.dimension});"
+                    )
 
                 # 4. HNSW vector index. Rebuild only if its operator class no longer
                 # matches the configured dimension (vector <= 2000; halfvec <= 4000).
