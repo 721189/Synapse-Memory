@@ -274,10 +274,23 @@ into one packet by filling `reviewer_a.relevance` and
 discussion. Equal labels are accepted without adjudication. Do not alter
 candidate IDs, case IDs, or query/candidate content.
 
-After extracting the private mapping key from the workflow workspace or a
-privately retained copy, and extracting `semantic-eval-hash-baseline.json` and
-`semantic-eval-neural.json` from the
-[`semantic-packing-evaluation` artifact](https://github.com/721189/Synapse-Memory/actions/runs/40542907118/artifacts/12752493391), install the SDK and run:
+Download the latest successful run's `semantic-packing-evaluation` artifact from
+[GitHub Actions](https://github.com/721189/Synapse-Memory/actions/workflows/ci.yml)
+and extract `semantic-eval-hash-baseline.json` and `semantic-eval-neural.json`.
+The mapping key is intentionally not uploaded. Regenerate it deterministically
+from the version-controlled fixture and the exact result files (this also writes
+a regenerated blind packet; compare it to the packet reviewed by the humans):
+
+```bash
+python sdk/python/benchmark/create_blind_developer_review_packet.py \\
+  --dataset sdk/python/benchmark/semantic_packing_eval_dataset.json \\
+  --results semantic-eval-hash-baseline.json semantic-eval-neural.json \\
+  --packet-output regenerated-developer-review-packet.json \\
+  --mapping-output developer-relevance-review-key.json \\
+  --max-queries 12
+```
+
+Then install the SDK and run the scorer:
 
 ```bash
 python -m pip install -e sdk/python
