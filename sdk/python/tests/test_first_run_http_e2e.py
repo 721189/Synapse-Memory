@@ -41,9 +41,19 @@ class TestFirstRunHttpE2E(unittest.TestCase):
                 "SYNAPSE_ENCRYPTION_KEY_B64_FILE",
                 "NODE_ENV",
                 "REDIS_URL",
+                "SYNAPSE_EMBEDDING_PROVIDER",
+                "SYNAPSE_EMBEDDING_MODEL",
+                "SYNAPSE_EMBEDDING_DIMENSION",
+                "SYNAPSE_ALLOW_DETERMINISTIC_EMBEDDING",
+                "GEMINI_API_KEY",
+                "GOOGLE_API_KEY",
+                "OPENAI_API_KEY",
             ):
                 env.pop(name, None)
 
+            # Pin a deterministic, offline embedder so this smoke test never
+            # inherits a developer's paid/external semantic provider settings.
+            env["SYNAPSE_EMBEDDING_PROVIDER"] = "deterministic"
             env["SYNAPSE_STORAGE_BACKEND"] = "sqlite"
             env["SYNAPSE_SQLITE_DB_PATH"] = str(temp_path / "synapse_memory.db")
             env["SYNAPSE_ENCRYPTION_KEY"] = Fernet.generate_key().decode("ascii")
