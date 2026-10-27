@@ -1,0 +1,5 @@
+# CPU-only semantic benchmark runtime, kept separate from the core SDK.
+# Model weights are independently pinned by --model-revision in the benchmark.
+sentence-transformers==6.2.0
+transformers==5.20.2
+huggingface-hub==2.3.0

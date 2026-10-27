@@ -22,6 +22,41 @@ The JSON output includes dataset SHA-256, source revision, environment and
 configuration, raw latency samples, per-query results, token usage, tenant
 isolation probes, and a verified deletion check.
 
+## Real semantic embedding evaluation
+
+The dedicated **Semantic Retrieval + Packing Evaluation** CI job compares the
+deterministic baseline with a CPU neural embedding model on the same 96-memory,
+24-query, three-tenant fixture. The model is
+`sentence-transformers/all-MiniLM-L6-v2`, pinned to Hugging Face revision
+`1110a243fdf4706b3f48f1d95db1a4f5529b4d41`. The workflow pins the inference
+runtime in `requirements-semantic.txt`, caches model files by revision, records
+the dataset SHA-256 and installed runtime versions, and uploads both raw JSON
+results as an artifact. If the neural model cannot load, the run fails rather
+than falling back to deterministic embeddings.
+
+To reproduce the neural run from the repository root:
+
+```bash
+python -m pip install -e sdk/python
+python -m pip install --index-url https://download.pytorch.org/whl/cpu torch==2.14.1+cpu
+python -m pip install -r sdk/python/benchmark/requirements-semantic.txt
+python sdk/python/benchmark/retrieval_baselines.py \
+  --dataset sdk/python/benchmark/semantic_packing_eval_dataset.json \
+  --output semantic-eval-neural.json \
+  --embedding-provider sentence-transformers \
+  --model-name sentence-transformers/all-MiniLM-L6-v2 \
+  --model-revision 1110a243fdf4706b3f48f1d95db1a4f5529b4d41 \
+  --repeats 5 --warmups 1 --top-k 5 --candidate-k 10 --token-budget 90
+```
+
+This is a **curated semantic evaluation**, not a standardized benchmark: its
+96 documents, 24 paraphrased queries, and two relevant IDs per query are
+hand-authored. They are not live user traffic and have not been independently
+judged. The deterministic and neural runs use the exact same dataset SHA, so
+the comparison isolates the effect of embedding choice on this fixture; it does
+not prove general production quality or better LLM answers. Do not switch the
+production packer objective based on this small set alone.
+
 ## How to interpret packing results
 
 The packer optimizes the sum of each candidate's numeric relevance_score under

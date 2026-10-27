@@ -74,6 +74,49 @@ def _estimate_tokens(text: str) -> int:
     return max(15, int(len(text.split()) * 1.3) + 8)
 
 
+def _distribution_version(name: str) -> Optional[str]:
+    """Return installed distribution versions for experiment reproducibility."""
+    try:
+        return importlib.metadata.version(name)
+    except importlib.metadata.PackageNotFoundError:
+        return None
+
+
+class _SentenceTransformerBenchmarkEmbedder:
+    """CPU-only, revision-pinned neural embedder used only by the benchmark."""
+
+    def __init__(self, model_name: str, model_revision: str) -> None:
+        try:
+            from sentence_transformers import SentenceTransformer
+        except ImportError as exc:
+            raise RuntimeError(
+                "Semantic evaluation requires the optional local-models extra: "
+                "install with pip install -e 'sdk/python[local-models]'."
+            ) from exc
+
+        # Pin both model revision and CPU execution. Do not allow a deterministic
+        # fallback: if the neural model cannot load, this benchmark must fail.
+        self.model_name = model_name
+        self.model_revision = model_revision
+        self.provider_name = "sentence-transformers"
+        self._model = SentenceTransformer(
+            model_name,
+            revision=model_revision,
+            device="cpu",
+        )
+        self.dimension = int(self._model.get_sentence_embedding_dimension())
+        self.is_semantic = True
+
+    def embed_query(self, text: str) -> List[float]:
+        vector = self._model.encode(
+            text,
+            normalize_embeddings=True,
+            convert_to_numpy=True,
+            show_progress_bar=False,
+        )
+        return vector.tolist()
+
+
 def _validate_dataset(dataset: Dict[str, Any]) -> None:
     documents = dataset.get("documents")
     queries = dataset.get("queries")
@@ -118,12 +161,18 @@ def _validate_dataset(dataset: Dict[str, Any]) -> None:
 
 
 @contextmanager
-def _pinned_offline_environment(key_file: Path) -> Iterator[None]:
-    """Pin deterministic 128-d embeddings and temporary encryption for this run."""
+def _pinned_benchmark_environment(
+    key_file: Path,
+    embedding_provider: str,
+    model_name: str,
+    model_revision: str,
+) -> Iterator[None]:
+    """Pin benchmark configuration and a temporary encryption key."""
     names = (
         "SYNAPSE_EMBEDDING_PROVIDER",
         "SYNAPSE_EMBEDDING_DIMENSION",
         "SYNAPSE_EMBEDDING_MODEL",
+        "SYNAPSE_EMBEDDING_MODEL_REVISION",
         "SYNAPSE_ALLOW_DETERMINISTIC_EMBEDDING",
         "GEMINI_API_KEY",
         "GOOGLE_API_KEY",
@@ -139,8 +188,12 @@ def _pinned_offline_environment(key_file: Path) -> Iterator[None]:
     try:
         for name in names:
             os.environ.pop(name, None)
-        os.environ["SYNAPSE_EMBEDDING_PROVIDER"] = "deterministic"
-        os.environ["SYNAPSE_EMBEDDING_DIMENSION"] = "128"
+        os.environ["SYNAPSE_EMBEDDING_PROVIDER"] = embedding_provider
+        if embedding_provider == "deterministic":
+            os.environ["SYNAPSE_EMBEDDING_DIMENSION"] = "128"
+        else:
+            os.environ["SYNAPSE_EMBEDDING_MODEL"] = model_name
+            os.environ["SYNAPSE_EMBEDDING_MODEL_REVISION"] = model_revision
         os.environ["SYNAPSE_ENCRYPTION_KEY"] = Fernet.generate_key().decode("ascii")
         os.environ["SYNAPSE_KEY_FILE"] = str(key_file)
         os.environ["SYNAPSE_STORAGE_BACKEND"] = "sqlite"
@@ -311,6 +364,9 @@ def run_benchmark(
     top_k: int = 5,
     candidate_k: int = 10,
     token_budget: int = 90,
+    embedding_provider: str = "deterministic",
+    model_name: str = "sentence-transformers/all-MiniLM-L6-v2",
+    model_revision: str = "1110a243fdf4706b3f48f1d95db1a4f5529b4d41",
 ) -> Dict[str, Any]:
     if repeats < 1:
         raise ValueError("--repeats must be at least 1.")
@@ -322,6 +378,16 @@ def run_benchmark(
         raise ValueError("--candidate-k must be greater than or equal to --top-k.")
     if token_budget < 1:
         raise ValueError("--token-budget must be at least 1.")
+    if embedding_provider not in ("deterministic", "sentence-transformers"):
+        raise ValueError(
+            "--embedding-provider must be deterministic or sentence-transformers."
+        )
+    if embedding_provider == "sentence-transformers" and (
+        not model_name.strip() or not model_revision.strip()
+    ):
+        raise ValueError(
+            "Semantic evaluation requires both --model-name and a pinned --model-revision."
+        )
 
     dataset_bytes = dataset_path.read_bytes()
     dataset = json.loads(dataset_bytes.decode("utf-8"))
@@ -339,8 +405,19 @@ def run_benchmark(
 
     with tempfile.TemporaryDirectory(prefix="synapse-retrieval-bench-") as temp_dir:
         temp_path = Path(temp_dir)
-        with _pinned_offline_environment(temp_path / ".synapse_key"):
-            embedder = SynapseEmbedder(provider="deterministic")
+        with _pinned_benchmark_environment(
+            temp_path / ".synapse_key",
+            embedding_provider,
+            model_name,
+            model_revision,
+        ):
+            if embedding_provider == "deterministic":
+                embedder = SynapseEmbedder(provider="deterministic")
+            else:
+                embedder = _SentenceTransformerBenchmarkEmbedder(
+                    model_name=model_name,
+                    model_revision=model_revision,
+                )
             searcher = HybridSearch()
             packer = KnapsackPacker(token_budget=token_budget)
             store = SQLiteMemoryStore(db_path=str(temp_path / "corpus.sqlite3"))
@@ -690,6 +767,7 @@ def run_benchmark(
                         "name": dataset.get("name", dataset_path.stem),
                         "path": str(dataset_path),
                         "sha256": hashlib.sha256(dataset_bytes).hexdigest(),
+                        "evaluation_notes": dataset.get("evaluation_notes", {}),
                         "document_count": len(document_specs),
                         "query_count": len(query_specs),
                         "tenant_count": len(tenants),
@@ -709,8 +787,29 @@ def run_benchmark(
                         "platform": platform.platform(),
                         "synapse_memory_engine": sdk_version,
                         "embedding_provider": embedder.provider_name,
+                        "embedding_model": (
+                            model_name if embedding_provider == "sentence-transformers"
+                            else None
+                        ),
+                        "embedding_model_revision": (
+                            model_revision if embedding_provider == "sentence-transformers"
+                            else None
+                        ),
+                        "embedding_device": (
+                            "cpu" if embedding_provider == "sentence-transformers"
+                            else "not-applicable"
+                        ),
                         "embedding_dimension": embedder.dimension,
                         "embedding_is_semantic": embedder.is_semantic,
+                        "embedding_runtime_versions": {
+                            name: _distribution_version(name)
+                            for name in (
+                                "sentence-transformers",
+                                "torch",
+                                "transformers",
+                                "huggingface-hub",
+                            )
+                        },
                         "storage": "SQLite encrypted store; corpus preloaded before rank-only timings",
                     },
                     "configuration": {
@@ -725,7 +824,7 @@ def run_benchmark(
                     "methodology": {
                         "ranking_methods": {
                             "lexical_bm25": "BM25 lexical scores only; zero-score documents remain in the ranked list.",
-                            "dense_cosine": "Exact cosine ranking using deterministic 128-d hash vectors.",
+                            "dense_cosine": "Exact cosine ranking over vectors from the configured embedding provider.",
                             "hybrid_rrf": "Synapse HybridSearch reciprocal-rank fusion on the same preloaded tenant corpus.",
                         },
                         "packing_methods": {
@@ -737,7 +836,7 @@ def run_benchmark(
                         },
                         "objective_vs_quality": "The packer optimizes the numeric relevance_score sum; hand-authored relevant_memory_ids define evaluation quality. Candidate recall and retention of relevant candidates are reported separately so retrieval misses are not blamed on packing.",
                         "latency_scope": "Ranker latency excludes query embedding, disk reads, process startup, and network latency; query embedding, write/embed, SQLite insertion, and packing timings are reported separately.",
-                        "write_scope": "Per document: deterministic embedding plus encrypted SQLite insert; deduplication is not included.",
+                        "write_scope": "Per document: configured embedding provider plus encrypted SQLite insert; deduplication is not included.",
                     },
                     "write_cost_ms": {
                         "embedding": _latency_summary(write_embed_ms),
@@ -778,10 +877,14 @@ def run_benchmark(
                     },
                     "per_query": per_query,
                     "limitations": [
-                        "The fixture is small and synthetic; it does not estimate production workload quality.",
-                        "The deterministic hash embedder is not semantic. Relevance scores do not demonstrate natural-language semantic understanding.",
+                        "The corpus and queries are curated evaluation examples, not a sample of live user traffic; relevance labels need independent human review before product claims.",
+                        *(
+                            ["The deterministic hash embedder is not semantic; lexical-like embeddings do not demonstrate natural-language semantic understanding."]
+                            if embedding_provider == "deterministic" else
+                            ["The pinned sentence-transformer is a real neural semantic model, but one model does not represent all production embedding choices."]
+                        ),
                         "SQLite ranking uses an exact in-memory scan after one corpus load; results do not characterize pgvector HNSW or network/database latency.",
-                        "The relevance labels are hand-authored judgments for this fixed dataset, not user-derived labels.",
+                        "The relevance labels are curated hand-authored judgments for this fixed dataset, not user-derived labels.",
                         "Latency values depend on the machine, Python build, filesystem, and process load. Compare only runs with recorded configuration and environment.",
                         "This benchmark compares retrieval and context-packing strategies; it does not benchmark LLM answer quality, contradiction resolution, or multi-turn memory extraction.",
                     ],
@@ -811,6 +914,22 @@ def main() -> int:
     parser.add_argument("--top-k", type=int, default=5)
     parser.add_argument("--candidate-k", type=int, default=10)
     parser.add_argument("--token-budget", type=int, default=90)
+    parser.add_argument(
+        "--embedding-provider",
+        choices=("deterministic", "sentence-transformers"),
+        default="deterministic",
+        help="Use deterministic hashes for offline baselines or a real neural model.",
+    )
+    parser.add_argument(
+        "--model-name",
+        default="sentence-transformers/all-MiniLM-L6-v2",
+        help="Sentence-transformer model repository (semantic mode only).",
+    )
+    parser.add_argument(
+        "--model-revision",
+        default="1110a243fdf4706b3f48f1d95db1a4f5529b4d41",
+        help="Pinned Hugging Face commit SHA (semantic mode only).",
+    )
     args = parser.parse_args()
 
     try:
@@ -821,6 +940,9 @@ def main() -> int:
             top_k=args.top_k,
             candidate_k=args.candidate_k,
             token_budget=args.token_budget,
+            embedding_provider=args.embedding_provider,
+            model_name=args.model_name,
+            model_revision=args.model_revision,
         )
         output_path = args.output.resolve()
         output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -841,6 +963,13 @@ def main() -> int:
             result["environment"]["embedding_is_semantic"],
         )
     )
+    if result["environment"]["embedding_is_semantic"]:
+        print(
+            "Semantic model: {0} @ {1}".format(
+                result["environment"]["embedding_model"],
+                result["environment"]["embedding_model_revision"],
+            )
+        )
     print("\nRanking metrics (mean per-query):")
     for method, values in result["ranking"].items():
         print(
