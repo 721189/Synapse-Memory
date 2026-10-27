@@ -787,9 +787,13 @@ def run_benchmark(
                         "platform": platform.platform(),
                         "synapse_memory_engine": sdk_version,
                         "embedding_provider": embedder.provider_name,
-                        "embedding_model": getattr(embedder, "model_name", None),
-                        "embedding_model_revision": getattr(
-                            embedder, "model_revision", None
+                        "embedding_model": (
+                            model_name if embedding_provider == "sentence-transformers"
+                            else None
+                        ),
+                        "embedding_model_revision": (
+                            model_revision if embedding_provider == "sentence-transformers"
+                            else None
                         ),
                         "embedding_device": (
                             "cpu" if embedding_provider == "sentence-transformers"
