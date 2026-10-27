@@ -475,6 +475,7 @@ def _configured_embedding_dimension():
             raise ValueError("SYNAPSE_EMBEDDING_DIMENSION must be an integer") from exc
     else:
         provider = os.environ.get("SYNAPSE_EMBEDDING_PROVIDER", "gemini").strip().lower()
+        model_name = os.environ.get("SYNAPSE_EMBEDDING_MODEL", "all-MiniLM-L6-v2")
         defaults = {
             "gemini": 3072,
             "openai": 1536,
@@ -483,6 +484,11 @@ def _configured_embedding_dimension():
             "hash": 128,
             "local": 128,
         }
+        if provider == "sentence-transformers" and model_name != "all-MiniLM-L6-v2":
+            raise ValueError(
+                "A custom sentence-transformers model requires explicit "
+                "SYNAPSE_EMBEDDING_DIMENSION so schema provisioning matches the model output."
+            )
         if provider not in defaults:
             raise ValueError(
                 "Cannot infer vector width for embedding provider "
