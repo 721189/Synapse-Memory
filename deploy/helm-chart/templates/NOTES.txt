@@ -29,8 +29,9 @@ Do not send bootstrap or migration credentials to the application pods.
        --admin-password "$SYNAPSE_ADMIN_DB_PASSWORD" --apply-migrations
 
    Set config.dbUser to the provisioned DML-only runtime role and
-   config.dbAdminRole to the non-superuser migration role. Keep bootstrap and
-   migration credentials out of the runtime Secret. Details: SECURITY.md.
+   config.dbAdminRole to the non-superuser migration role, and keep
+   config.applyDbSchema=false for runtime pods. Keep bootstrap and migration
+   credentials out of the runtime Secret. Details: SECURITY.md.
 
 4. Health:
      kubectl get pods -l app.kubernetes.io/name={{ include "synapse-memory.name" . }}
