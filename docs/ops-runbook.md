@@ -41,30 +41,35 @@ Envelope: successes `{success: true, data, request_id}`; failures
 
 ## 3. Deploy checklist (first install + every release)
 
-1. **Secrets.** Secret keys: `SYNAPSE_API_KEY`,
-   `SYNAPSE_ENCRYPTION_KEY` (32-byte urlsafe-base64 Fernet key — generate:
-   `python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"`),
-   `POSTGRES_PASSWORD`, `REDIS_PASSWORD` (may be empty), `GEMINI_API_KEY`
-   (optional). Never commit plaintext credentials.
+1. **Secrets.** Compose requires separate root `SYNAPSE_API_KEY`,
+   `SYNAPSE_ENCRYPTION_KEY`, bootstrap-superuser `POSTGRES_PASSWORD`,
+   migration-role `SYNAPSE_ADMIN_DB_PASSWORD`, and runtime-role
+   `SYNAPSE_APP_DB_PASSWORD`. Supply the API key for the selected provider
+   (`GEMINI_API_KEY` for gemini or `OPENAI_API_KEY` for openai). In Kubernetes,
+   the runtime Secret contains only the API key, encryption key, runtime DB
+   password, optional Redis password and selected provider key. Never put
+   bootstrap/migration credentials in the app Secret.
 2. **Database.** Provision pgvector PostgreSQL (managed service or
-   `pgvector/pgvector:pg16`) + volume encryption at rest. Point
-   `config.dbHost/dbPort/dbUser/dbName` (Helm) or `POSTGRES_*` (compose) at it.
+   `pgvector/pgvector:pg16`) + volume encryption at rest. Compose uses
+   `POSTGRES_USER=postgres` as bootstrap, `SYNAPSE_DB_ADMIN_ROLE=synapse_admin`
+   for schema migration, and `SYNAPSE_DB_RUNTIME_ROLE=synapse_app` for requests.
 3. **Roles — migrate-then-run (once per cluster):**
    ```bash
-   DATABASE_URL=postgresql://<bootstrap-admin>@<host>/<db> \
-     python scripts/provision_db_roles.py \
-       --runtime-role synapse_app --admin-role synapse_admin \
-       --runtime-password "$SYNAPSE_APP_DB_PASSWORD" \
-       --admin-password   "$SYNAPSE_ADMIN_DB_PASSWORD"
-   DATABASE_URL=postgresql://synapse_admin:***@<host>/<db> PYTHONPATH=sdk/python \
-     python -c "from synapse_memory.core.pgvector_db import PGVectorMemoryStore; \
-                PGVectorMemoryStore(connection_string='$DATABASE_URL', fail_closed=True)"
-   python scripts/provision_db_roles.py --verify-only   # must exit 0
+   export SYNAPSE_BOOTSTRAP_DATABASE_URL="postgresql://postgres:<bootstrap-password>@<host>/<db>"
+   export SYNAPSE_MIGRATION_DATABASE_URL="postgresql://synapse_admin:<migration-password>@<host>/<db>"
+   export SYNAPSE_API_KEY="<generated-root-api-key>"
+   export SYNAPSE_ENCRYPTION_KEY="<generated-fernet-key>"
+   export SYNAPSE_ADMIN_DB_PASSWORD="<migration-password>"
+   export SYNAPSE_APP_DB_PASSWORD="<runtime-password>"
+   python scripts/provision_db_roles.py \
+     --runtime-role synapse_app --admin-role synapse_admin \
+     --runtime-password "$SYNAPSE_APP_DB_PASSWORD" \
+     --admin-password "$SYNAPSE_ADMIN_DB_PASSWORD" --apply-migrations
+   python scripts/provision_db_roles.py --verify-only
    ```
-   Start the engine with `SYNAPSE_APPLY_DB_SCHEMA=false` and a `DATABASE_URL`
-   built from the **runtime** role (`synapse_app`: NON-owner / NOBYPASSRLS /
-   NOSUPERUSER / DML-only; script exits non-zero if broken).
-   `applyDbSchema=true` = engine owns DDL — dev/single-role only.
+   The bootstrap connection installs extensions and creates roles, schema DDL
+   runs as the non-superuser migration role, and only `synapse_app` serves API
+   traffic. Set `SYNAPSE_APPLY_DB_SCHEMA=false` for runtime traffic.
 4. **Env parity.** Production must set: `NODE_ENV=production`,
    `SYNAPSE_STORAGE_BACKEND=pgvector`, `SYNAPSE_ALLOW_DB_FALLBACK=false`,
    `ENABLE_DEMO_ROUTES=false`, `REDIS_URL` (cross-replica limits),
