@@ -288,7 +288,10 @@ async function callPythonBackend(
   const tenantId =
     req.header("X-Tenant-ID");
 
-  if (process.env.NODE_ENV === "production" && !apiKey) {
+  // Readiness probes are intentionally anonymous: /api/ready is a
+  // non-tenant-scoped health endpoint that only checks the engine's /health.
+  // All data-bearing endpoints must still supply caller credentials in production.
+  if (process.env.NODE_ENV === "production" && !apiKey && endpoint !== "/health") {
     const authErr: any = new Error("Missing caller authentication");
     authErr.status = 401;
     throw authErr;
