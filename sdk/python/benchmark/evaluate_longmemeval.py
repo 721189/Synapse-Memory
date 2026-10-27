@@ -182,6 +182,7 @@ def _validate_source_records(
     evidence_session_count = 0
     candidate_session_count = 0
     duplicate_session_entries_collapsed = 0
+    conflicting_duplicate_session_entries_preserved = 0
 
     for row in records:
         question_id = str(row["question_id"])
@@ -198,12 +199,11 @@ def _validate_source_records(
                     question_id
                 )
             )
-        # Some corrected source records repeat the same session entry. Collapse
-        # only exact duplicates (same ID, normalized timestamp, and full turn
-        # content). Conflicting copies remain a hard error: silently choosing
-        # one could change the evidence labels or leak future information.
+        relevant_source_ids = set(str(x) for x in row.get("answer_session_ids", []))
         unique_entries = []
-        seen_sessions: Dict[str, Tuple[datetime, str]] = {}
+        seen_sessions: Dict[str, List[Tuple[datetime, str, str]]] = {}
+        document_ids = set()
+        source_ids_with_conflicts = set()
         for session_id, raw_date, session in zip(session_ids, session_dates, sessions):
             session_id = str(session_id)
             session_time = _parse_timestamp(raw_date)
@@ -213,23 +213,48 @@ def _validate_source_records(
                 ensure_ascii=False,
                 separators=(",", ":"),
             )
-            prior = seen_sessions.get(session_id)
-            if prior is not None:
-                if prior != (session_time, session_signature):
+            prior_entries = seen_sessions.setdefault(session_id, [])
+            matching_entry = next(
+                (entry for entry in prior_entries
+                 if entry[0] == session_time and entry[1] == session_signature),
+                None,
+            )
+            if matching_entry is not None:
+                duplicate_session_entries_collapsed += 1
+                continue
+
+            if prior_entries:
+                if session_id in relevant_source_ids:
                     raise ValueError(
-                        "Question {0} contains conflicting duplicate session ID {1}; "
-                        "refusing to choose between different dates or contents.".format(
+                        "Question {0} contains conflicting duplicate session ID {1} "
+                        "referenced by reviewed evidence; relevance is ambiguous.".format(
                             question_id, session_id
                         )
                     )
-                duplicate_session_entries_collapsed += 1
-                continue
-            seen_sessions[session_id] = (session_time, session_signature)
-            unique_entries.append((session_id, raw_date, session, session_time))
+                source_ids_with_conflicts.add(session_id)
+                conflicting_duplicate_session_entries_preserved += 1
+                document_id = "{0}::duplicate-{1}".format(
+                    session_id, len(prior_entries) + 1
+                )
+            else:
+                document_id = session_id
+            if document_id in document_ids:
+                raise ValueError(
+                    "Question {0} has a generated duplicate document-ID collision: {1}.".format(
+                        question_id, document_id
+                    )
+                )
+            document_ids.add(document_id)
+            prior_entries.append((session_time, session_signature, document_id))
+            unique_entries.append(
+                (session_id, document_id, raw_date, session, session_time)
+            )
 
         query_time = _parse_timestamp(row["question_date"])
         documents: List[Dict[str, Any]] = []
-        for session_id, raw_date, session, session_time in unique_entries:
+        available_source_ids = set()
+        source_to_document_id: Dict[str, str] = {}
+        for source_session_id, document_id, raw_date, session, session_time in unique_entries:
             if session_time > query_time:
                 future_sessions_excluded += 1
                 continue
@@ -238,7 +263,8 @@ def _validate_source_records(
                 continue
             documents.append(
                 {
-                    "id": session_id,
+                    "id": document_id,
+                    "source_session_id": source_session_id,
                     "tenant_id": question_id,
                     "content": text,
                     "token_cost": _estimate_tokens(text),
@@ -246,15 +272,16 @@ def _validate_source_records(
                     "created_at": session_time.timestamp(),
                 }
             )
+            available_source_ids.add(source_session_id)
+            source_to_document_id[source_session_id] = document_id
 
-        relevant_ids = set(str(x) for x in row.get("answer_session_ids", []))
-        available_ids = {str(doc["id"]) for doc in documents}
-        missing = relevant_ids - available_ids
+        missing = relevant_source_ids - available_source_ids
         if missing:
             raise ValueError(
                 "Reviewed evidence for question {0} is missing or occurs after the "
                 "question timestamp: {1}".format(question_id, sorted(missing))
             )
+        relevant_ids = {source_to_document_id[source_id] for source_id in relevant_source_ids}
 
         question_type = str(row.get("question_type", "unknown"))
         type_counts[question_type] += 1
@@ -287,6 +314,7 @@ def _validate_source_records(
         "reviewed_evidence_session_reference_count": evidence_session_count,
         "future_sessions_excluded_before_query_time": future_sessions_excluded,
         "duplicate_session_entries_collapsed": duplicate_session_entries_collapsed,
+        "conflicting_duplicate_session_entries_preserved": conflicting_duplicate_session_entries_preserved,
         "label_validation": (
             "passed: every reviewed evidence session is present in the question's "
             "pre-question candidate history"
