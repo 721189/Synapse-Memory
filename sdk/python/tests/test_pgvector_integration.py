@@ -276,6 +276,9 @@ class TestHybridSearchSQLPlaceholderOrder(unittest.TestCase):
 
     def _make_store_with_mock(self, captured: Dict[str, Any]) -> Any:
         store = PGVectorMemoryStore.__new__(PGVectorMemoryStore)
+        # The SQL builder now selects the vector operator from configured width.
+        # The query vectors in this placeholder-order test are four-dimensional.
+        store.dimension = 4
         store._connected = True
         store._pool = None
         store._fallback_cache = {}
