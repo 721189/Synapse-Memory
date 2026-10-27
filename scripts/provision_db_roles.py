@@ -504,6 +504,44 @@ def _configured_embedding_dimension():
     return dimension
 
 
+def validate_migration_role(current_user, expected_role, is_superuser, bypass_rls):
+    """Require migrations to run as the dedicated non-superuser schema owner."""
+    if current_user != expected_role:
+        raise ValueError(
+            "Schema migrations must connect as the configured migration role "
+            + repr(expected_role) + "; received " + repr(current_user) + "."
+        )
+    if is_superuser:
+        raise ValueError(
+            "The schema-migration role must not be a PostgreSQL superuser. "
+            "Use the bootstrap DSN only for extensions and role provisioning."
+        )
+    if bypass_rls:
+        raise ValueError(
+            "The schema-migration role must not have BYPASSRLS. Use the bootstrap "
+            "DSN for privileged extension/role setup, not for schema migrations."
+        )
+
+
+def _verify_migration_role(dsn, expected_role):
+    """Verify the actual DSN identity before any schema DDL is issued."""
+    import psycopg2
+
+    with psycopg2.connect(dsn, connect_timeout=5) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT current_user, r.rolsuper, r.rolbypassrls "
+                "FROM pg_roles r WHERE r.rolname = current_user;"
+            )
+            row = cur.fetchone()
+    if not row:
+        raise RuntimeError("Could not verify the current PostgreSQL migration role.")
+    try:
+        validate_migration_role(row[0], expected_role, bool(row[1]), bool(row[2]))
+    except ValueError as exc:
+        raise RuntimeError(str(exc)) from exc
+
+
 def _apply_migrations(dsn, runtime_role, admin_role):
     """Create/upgrade the complete schema as the migration/admin role.
 
@@ -532,6 +570,9 @@ def _apply_migrations(dsn, runtime_role, admin_role):
         return 2
 
     try:
+        # Validate identity/privileges before connecting any schema initializer;
+        # a misconfigured migration DSN must never silently run DDL as postgres.
+        _verify_migration_role(dsn, admin_role)
         dimension = _configured_embedding_dimension()
         store = PGVectorMemoryStore(
             connection_string=dsn,
