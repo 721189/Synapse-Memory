@@ -55,6 +55,40 @@ class LongMemEvalBenchmarkTests(unittest.TestCase):
         self.assertEqual(stats["no_evidence_question_count"], 1)
         self.assertNotIn("has_answer", q1["documents"][0]["content"])
 
+    def test_exact_duplicate_sessions_are_collapsed_and_counted(self):
+        records = [
+            row(
+                "q1",
+                ["s1"],
+                ["s1", "s1"],
+                ["2023/05/20 (Sat) 02:21", "2023/05/20 (Sat) 02:21"],
+                [
+                    [{"role": "user", "content": "We released version 1.2.0."}],
+                    [{"content": "We released version 1.2.0.", "role": "user"}],
+                ],
+            )
+        ]
+        prepared, stats = MODULE._validate_source_records(records, expected_count=1)
+        self.assertEqual(len(prepared[0]["documents"]), 1)
+        self.assertEqual(prepared[0]["relevant_ids"], {"s1"})
+        self.assertEqual(stats["duplicate_session_entries_collapsed"], 1)
+
+    def test_conflicting_duplicate_sessions_fail_closed(self):
+        records = [
+            row(
+                "q1",
+                ["s1"],
+                ["s1", "s1"],
+                ["2023/05/20 (Sat) 02:21", "2023/05/20 (Sat) 02:21"],
+                [
+                    [{"role": "user", "content": "We released version 1.2.0."}],
+                    [{"role": "user", "content": "We released version 1.3.0."}],
+                ],
+            )
+        ]
+        with self.assertRaisesRegex(ValueError, "conflicting duplicate session ID"):
+            MODULE._validate_source_records(records, expected_count=1)
+
     def test_future_dated_gold_evidence_fails_closed(self):
         records = [
             row(
