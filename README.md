@@ -7,7 +7,7 @@
 **Enterprise-grade, multi-tenant cognitive memory substrate for LLM applications.**
 
 Field-level encryption on `content` at rest (the `content_plain` search projection is plaintext â€” see [SECURITY.md](SECURITY.md)) Â· Hybrid retrieval (BM25 + pgvector HNSW + RRF) Â· Optimal token packing (0/1 Knapsack DP)
-Database-level tenant isolation (PostgreSQL RLS) Â· Fail-closed by design Â· Production-hardened (P0â€“P2)
+Database-level tenant isolation (PostgreSQL RLS) Â· Fail-closed paths are covered by tests Â· Pre-production readiness work ongoing
 
 [![CI/CD Pipeline](https://github.com/721189/Synapse-Memory/actions/workflows/ci.yml/badge.svg)](https://github.com/721189/Synapse-Memory/actions/workflows/ci.yml)
 [![Version](https://img.shields.io/badge/version-1.3.0-blue.svg)](CHANGELOG.md)
@@ -939,8 +939,7 @@ Synapse-Memory/
 | 1.2.0 (hardening) | 2026-10-16/17 | P0â€“P2 roadmap closed: RLS live proof with runtime role, SHA-pinned CI, TruffleHog base/head fix, `query_candidates` tenant-scoped PG path, final docs batch (api-reference, security-review, branch-protection, performance-baseline, CODEOWNERS) |
 | 0.1.0 | â€” | Pre-hardening prototype â€” **do not use in production** |
 
-Tracked residual work (open to follow-up issues): role-gated RLS admin path (needs live PG),
-production p95/p99 SLO targets (needs prod measurement per baseline doc).
+Open production-readiness work: validate a fresh PostgreSQL/pgvector Compose deployment; measure p95/p99 SLOs on intended hardware and workloads; complete independent security review; and validate real customer usage. See [the current hardening status](docs/production-hardening-baseline.md) and [SECURITY.md](SECURITY.md).
 
 ---
 
@@ -968,13 +967,13 @@ flowchart LR
 
 ## 20. License
 
-Proprietary â€” see [`LICENSE`](LICENSE).
+Proprietary â€” see [`LICENSE`](LICENSE). Publishing this repository or the PyPI package does **not** grant unrestricted use, deployment, modification, redistribution or hosted-service rights. Obtain written permission or a commercial licence before external use. Licensing contact: `singhshivam20009@gmail.com`.
 
 ---
 
 <div align="center">
 
-**Synapse Memory** â€” *give your agents a memory you can trust in production.*
+**Synapse Memory** â€” *memory infrastructure for persistent, tenant-aware AI applications.*
 
 [Documentation](docs/README.md) Â· [API Reference](docs/api-reference.md) Â· [Security](SECURITY.md) Â·
 [Runbook](docs/ops-runbook.md) Â· [Changelog](CHANGELOG.md) Â·
