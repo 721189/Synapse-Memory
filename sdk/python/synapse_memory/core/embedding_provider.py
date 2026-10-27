@@ -212,7 +212,7 @@ class OpenAIEmbeddingProvider(EmbeddingProvider):
             "Content-Type": "application/json",
             "Authorization": f"Bearer {self.api_key}"
         }
-        payload = {
+        payload: dict[str, object] = {
             "input": text,
             "model": self.model
         }
