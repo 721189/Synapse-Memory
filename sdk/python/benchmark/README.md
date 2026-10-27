@@ -92,14 +92,18 @@ python sdk/python/benchmark/evaluate_longmemeval.py \
 ```
 
 The source is
-[the corrected ReMe Cleaned-S dataset card](https://huggingface.co/datasets/agentscope-ai/ReMe_longmemeval_clean_s_v2).
-Its published SHA-256 is
-`f8b308cc2d184d029dd2226e0c0a88eeac298e6318706d588e015beb1b83fc7d`.
-The dataset card documents corrections to answer and evidence-session labels,
-including future-evidence leakage. This is a third-party corrected benchmark
-label set, not a blind annotation study conducted specifically for Synapse.
-Do not redistribute the downloaded data without checking the dataset's
-applicable license and terms.
+[the corrected ReMe Cleaned-S dataset card](https://huggingface.co/datasets/agentscope-ai/ReMe_longmemeval_clean_s_v2),
+pinned to snapshot `f8bd08fd19ef175c99c7065c322191e16c69f0ea`. The card reports
+SHA-256 `f8b308cc2d184d029dd2226e0c0a88eeac298e6318706d588e015beb1b83fc7d`,
+but the file retrieved from that exact snapshot hashes to
+`57ed3225673015880c42eaf764406e656d9ac3fc4821337e3ec3c28ac8259823`.
+CI records this discrepancy explicitly and validates the actual bytes, all 500
+records, and every reviewed evidence timestamp before scoring. The dataset card
+documents corrections to answer and evidence-session labels, including
+future-evidence leakage. This is a third-party corrected benchmark label set,
+not a blind annotation study conducted specifically for Synapse. Do not
+redistribute the downloaded data without checking the dataset's applicable
+license and terms.
 
 ## Developer-specific relevance review (human step required)
 
