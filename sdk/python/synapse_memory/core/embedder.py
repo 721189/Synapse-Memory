@@ -66,7 +66,8 @@ class SynapseEmbedder:
                     "(gemini, openai, sentence-transformers) or opt in with "
                     "SYNAPSE_ALLOW_DETERMINISTIC_EMBEDDING=true."
                 )
-            dim = int(os.getenv("SYNAPSE_EMBEDDING_DIMENSION", "128"))
+            raw_dimension = os.getenv("SYNAPSE_EMBEDDING_DIMENSION", "").strip()
+            dim = int(raw_dimension) if raw_dimension else 128
             return LocalEmbeddingProvider(dim=dim)
         elif self.provider_name == "gemini":
             if not self.gemini_key:
@@ -74,13 +75,15 @@ class SynapseEmbedder:
                     logger.warning(
                         "GEMINI_API_KEY not set; falling back to deterministic hash provider."
                     )
-                    dim = int(os.getenv("SYNAPSE_EMBEDDING_DIMENSION", "128"))
+                    raw_dimension = os.getenv("SYNAPSE_EMBEDDING_DIMENSION", "").strip()
+                    dim = int(raw_dimension) if raw_dimension else 128
                     return LocalEmbeddingProvider(dim=dim)
                 raise RuntimeError(
                     "SYNAPSE_EMBEDDING_PROVIDER=gemini but GEMINI_API_KEY is not set. "
                     "Set GEMINI_API_KEY or switch to provider=deterministic."
                 )
-            dimension = int(os.getenv("SYNAPSE_EMBEDDING_DIMENSION", "3072"))
+            raw_dimension = os.getenv("SYNAPSE_EMBEDDING_DIMENSION", "").strip()
+            dimension = int(raw_dimension) if raw_dimension else 3072
             return GeminiEmbeddingProvider(self.gemini_key, dim=dimension)
         elif self.provider_name == "openai":
             if not self.openai_key:
@@ -88,13 +91,15 @@ class SynapseEmbedder:
                     logger.warning(
                         "OPENAI_API_KEY not set; falling back to deterministic hash provider."
                     )
-                    dim = int(os.getenv("SYNAPSE_EMBEDDING_DIMENSION", "128"))
+                    raw_dimension = os.getenv("SYNAPSE_EMBEDDING_DIMENSION", "").strip()
+                    dim = int(raw_dimension) if raw_dimension else 128
                     return LocalEmbeddingProvider(dim=dim)
                 raise RuntimeError(
                     "SYNAPSE_EMBEDDING_PROVIDER=openai but OPENAI_API_KEY is not set. "
                     "Set OPENAI_API_KEY or switch to provider=deterministic."
                 )
-            dimension = int(os.getenv("SYNAPSE_EMBEDDING_DIMENSION", "1536"))
+            raw_dimension = os.getenv("SYNAPSE_EMBEDDING_DIMENSION", "").strip()
+            dimension = int(raw_dimension) if raw_dimension else 1536
             return OpenAIEmbeddingProvider(self.openai_key, dim=dimension)
         elif self.provider_name == "sentence-transformers":
             # Explicit opt-in: requires [local-models] extra and model availability.
@@ -107,7 +112,8 @@ class SynapseEmbedder:
             logger.warning(
                 f"Unknown embedding provider '{self.provider_name}'; falling back to deterministic hash provider."
             )
-            dim = int(os.getenv("SYNAPSE_EMBEDDING_DIMENSION", "128"))
+            raw_dimension = os.getenv("SYNAPSE_EMBEDDING_DIMENSION", "").strip()
+                    dim = int(raw_dimension) if raw_dimension else 128
             return LocalEmbeddingProvider(dim=dim)
         raise RuntimeError(
             f"Unknown embedding provider '{self.provider_name}'. "
