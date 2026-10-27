@@ -18,7 +18,9 @@ services:
       - SYNAPSE_API_KEY=${SYNAPSE_API_KEY:?SYNAPSE_API_KEY is required}
       - SYNAPSE_ENCRYPTION_KEY=${SYNAPSE_ENCRYPTION_KEY:?SYNAPSE_ENCRYPTION_KEY is required}
       # Production topology: runtime role (DML-only, NOBYPASSRLS) for the engine.
-      # Migrations run separately as synapse_admin via scripts/provision_db_roles.py.
+      # Migrations run separately as SYNAPSE_DB_ADMIN_ROLE; POSTGRES_USER is only
+      # the bootstrap account and must remain distinct from that migration role.
+      - SYNAPSE_DB_ADMIN_ROLE=${SYNAPSE_DB_ADMIN_ROLE:-synapse_admin}
       - DATABASE_URL=postgresql://${SYNAPSE_DB_RUNTIME_ROLE:-synapse_app}:${SYNAPSE_APP_DB_PASSWORD:?SYNAPSE_APP_DB_PASSWORD is required}@postgres-pgvector:5432/${POSTGRES_DB:-synapse_cognitive}
       - SYNAPSE_APP_DATABASE_URL=postgresql://${SYNAPSE_DB_RUNTIME_ROLE:-synapse_app}:${SYNAPSE_APP_DB_PASSWORD:?SYNAPSE_APP_DB_PASSWORD is required}@postgres-pgvector:5432/${POSTGRES_DB:-synapse_cognitive}
       - SYNAPSE_STORAGE_BACKEND=${SYNAPSE_STORAGE_BACKEND:-pgvector}
@@ -68,13 +70,17 @@ services:
     container_name: synapse-db-provision
     restart: "no"
     environment:
-      - SYNAPSE_ADMIN_DATABASE_URL=postgresql://${POSTGRES_USER:-synapse_admin}:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}@postgres-pgvector:5432/${POSTGRES_DB:-synapse_cognitive}
+      # Bootstrap DSN must remain a true superuser so it can install extensions
+      # and provision roles; schema DDL then runs using the distinct migration DSN.
+      - SYNAPSE_BOOTSTRAP_DATABASE_URL=postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}@postgres-pgvector:5432/${POSTGRES_DB:-synapse_cognitive}
+      - SYNAPSE_MIGRATION_DATABASE_URL=postgresql://${SYNAPSE_DB_ADMIN_ROLE:-synapse_admin}:${SYNAPSE_ADMIN_DB_PASSWORD:?SYNAPSE_ADMIN_DB_PASSWORD is required}@postgres-pgvector:5432/${POSTGRES_DB:-synapse_cognitive}
       - SYNAPSE_ENCRYPTION_KEY=${SYNAPSE_ENCRYPTION_KEY:?SYNAPSE_ENCRYPTION_KEY is required}
       - SYNAPSE_EMBEDDING_PROVIDER=${SYNAPSE_EMBEDDING_PROVIDER:?set a semantic provider (gemini|openai|sentence-transformers); deterministic is refused in production}
       - SYNAPSE_EMBEDDING_DIMENSION=${SYNAPSE_EMBEDDING_DIMENSION:-}
       - SYNAPSE_EMBEDDING_MODEL=${SYNAPSE_EMBEDDING_MODEL:-all-MiniLM-L6-v2}
       - SYNAPSE_DB_RUNTIME_ROLE=${SYNAPSE_DB_RUNTIME_ROLE:-synapse_app}
-      - SYNAPSE_DB_ADMIN_ROLE=${POSTGRES_USER:-synapse_admin}
+      - SYNAPSE_DB_ADMIN_ROLE=${SYNAPSE_DB_ADMIN_ROLE:-synapse_admin}
+      - SYNAPSE_ADMIN_DB_PASSWORD=${SYNAPSE_ADMIN_DB_PASSWORD:?SYNAPSE_ADMIN_DB_PASSWORD is required}
       - SYNAPSE_APP_DB_PASSWORD=${SYNAPSE_APP_DB_PASSWORD:?SYNAPSE_APP_DB_PASSWORD is required}
       - SYNAPSE_ALLOW_DETERMINISTIC_EMBEDDING=${SYNAPSE_ALLOW_DETERMINISTIC_EMBEDDING:-false}
     command: ["python", "scripts/provision_db_roles.py", "--apply-migrations"]
@@ -121,13 +127,13 @@ services:
     container_name: synapse-db
     restart: unless-stopped
     environment:
-      - POSTGRES_USER=${POSTGRES_USER:-synapse_admin}
+      - POSTGRES_USER=${POSTGRES_USER:-postgres}
       - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}
       - POSTGRES_DB=${POSTGRES_DB:-synapse_cognitive}
     volumes:
       - synapse-db-data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-synapse_admin} -d ${POSTGRES_DB:-synapse_cognitive}"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres} -d ${POSTGRES_DB:-synapse_cognitive}"]
       interval: 5s
       timeout: 5s
       retries: 5
