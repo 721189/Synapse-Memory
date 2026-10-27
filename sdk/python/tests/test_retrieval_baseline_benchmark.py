@@ -88,5 +88,54 @@ class TestRetrievalBaselineBenchmark(unittest.TestCase):
             self.assertTrue(data["deletion"]["sentinel_removed_from_tenant_store"])
 
 
+    def test_hybrid_ranking_is_independent_of_input_row_order(self):
+        # BM25 and cosine ties are common in the deterministic fixture. They
+        # must not inherit whatever order SQLite happened to return.
+        sys.path.insert(0, str(SDK_ROOT / "benchmark"))
+        from retrieval_baselines import _rank_documents
+        from synapse_memory.core.embedder import SynapseEmbedder
+        from synapse_memory.core.hybrid_search import HybridSearch
+
+        embedder = SynapseEmbedder(provider="deterministic")
+        searcher = HybridSearch()
+        query = "shared common keyword"
+        vector = embedder.embed_query(query)
+        documents = [
+            {
+                "id": "doc-z",
+                "tenant_id": "test",
+                "content": "shared common keyword",
+                "embedding": embedder.embed_query("shared common keyword"),
+                "category": "fact",
+                "token_cost": 18,
+            },
+            {
+                "id": "doc-a",
+                "tenant_id": "test",
+                "content": "shared common keyword",
+                "embedding": embedder.embed_query("shared common keyword"),
+                "category": "fact",
+                "token_cost": 18,
+            },
+            {
+                "id": "doc-m",
+                "tenant_id": "test",
+                "content": "shared common keyword",
+                "embedding": embedder.embed_query("shared common keyword"),
+                "category": "fact",
+                "token_cost": 18,
+            },
+        ]
+
+        forward = _rank_documents("hybrid_rrf", query, vector, documents, searcher)
+        reversed_rows = _rank_documents(
+            "hybrid_rrf", query, vector, list(reversed(documents)), searcher
+        )
+        self.assertEqual(
+            [item["id"] for item in forward],
+            [item["id"] for item in reversed_rows],
+        )
+
+
 if __name__ == "__main__":
     unittest.main()
