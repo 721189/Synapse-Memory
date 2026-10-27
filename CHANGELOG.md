@@ -7,9 +7,10 @@
   expression index and matching query expression; refuse implicit model-width
   changes when existing embeddings have not been re-embedded; add an isolated,
   synthetic-vector live integration test.
-- **SDK retry safety:** do not automatically replay writes after ambiguous
-  network failures or transient 5xx responses; retry explicitly read-only queries
-  and honour `Retry-After` for retry-safe requests.
+- **SDK retry safety:** retry idempotent GET/HEAD/OPTIONS requests and honour
+  `Retry-After`; do not automatically replay POST requests (including retrieval,
+  which updates access metadata) after ambiguous network failures or transient
+  5xx responses without a proven idempotency contract.
 - **Deployment diagnostics:** capture Compose logs and container state even when
   initial stack startup fails; provide the semantic embedding-provider values in
   config-validation CI.
