@@ -299,13 +299,22 @@ class SynapseRun:
         if len(evidence) > 100:
             raise ValueError("at most 100 memory evidence records may be captured")
         if retrieval_id is not None and (
-            not isinstance(retrieval_id, str) or not retrieval_id.strip() or len(retrieval_id) > 128
+            not isinstance(retrieval_id, str)
+            or not re.fullmatch(r"[A-Za-z0-9._:-]{1,128}", retrieval_id)
         ):
-            raise ValueError("retrieval_id must be a non-empty string of at most 128 characters")
-        packed_ids = set(packed_memory_ids or ())
-        for memory_id in packed_ids:
-            if not isinstance(memory_id, str) or not memory_id or len(memory_id) > 128:
-                raise ValueError("packed memory IDs must be non-empty strings of at most 128 characters")
+            raise ValueError("retrieval_id must match [A-Za-z0-9._:-] and be 1–128 characters")
+        packed_ids: set[str] = set()
+        if packed_memory_ids is not None:
+            if isinstance(packed_memory_ids, (str, bytes)) or not isinstance(packed_memory_ids, Sequence):
+                raise TypeError("packed_memory_ids must be a sequence of memory IDs")
+            for memory_id in packed_memory_ids:
+                if not isinstance(memory_id, str) or not re.fullmatch(
+                    r"[A-Za-z0-9._:-]{1,128}", memory_id
+                ):
+                    raise ValueError(
+                        "packed memory IDs must match [A-Za-z0-9._:-] and be 1–128 characters"
+                    )
+                packed_ids.add(memory_id)
 
         allowed_scores = {
             "relevance_score", "retrieval_score", "lexical_rank", "dense_score",
