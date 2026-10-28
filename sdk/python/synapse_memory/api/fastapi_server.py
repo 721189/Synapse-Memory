@@ -494,10 +494,10 @@ class AgentRunEventRequest(SynapseAPIModel):
     run_status: RunStatus
     step_index: Optional[int] = Field(None, ge=1)
     tool_call_index: Optional[int] = Field(None, ge=1)
-    tool_name: Optional[str] = Field(None, min_length=1, max_length=128)
+    tool_name: Optional[str] = Field(None, min_length=1, max_length=128, pattern=r"^[A-Za-z][A-Za-z0-9_.:-]*$")
     tool_fingerprint: Optional[str] = Field(None, pattern=r"^[a-fA-F0-9]{64}$")
-    reason: Optional[str] = Field(None, max_length=128)
-    error_type: Optional[str] = Field(None, max_length=128)
+    reason: Optional[str] = Field(None, min_length=1, max_length=128, pattern=r"^[a-z][a-z0-9_]*$")
+    error_type: Optional[str] = Field(None, min_length=1, max_length=128, pattern=r"^[A-Za-z][A-Za-z0-9_.:-]*$")
     retrieval_id: Optional[str] = Field(None, min_length=1, max_length=128)
     memory_evidence: List[MemoryEvidenceRequest] = Field(default_factory=list, max_length=100)
 
