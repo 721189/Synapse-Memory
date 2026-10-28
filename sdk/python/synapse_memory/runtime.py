@@ -317,7 +317,7 @@ class SynapseRun:
             if not isinstance(item, Mapping):
                 raise TypeError("each memory evidence record must be a mapping")
             memory_id = item.get("id", item.get("memory_id"))
-            if not isinstance(memory_id, str) or not memory_id.strip() or len(memory_id) > 128:
+            if not isinstance(memory_id, str) or not re.fullmatch(r"[A-Za-z0-9._:-]{1,128}", memory_id):
                 raise ValueError("each memory evidence record needs a valid memory ID")
             if memory_id in seen:
                 raise ValueError("memory evidence IDs must be unique within a retrieval")
@@ -347,7 +347,7 @@ class SynapseRun:
             superseded_by = item.get("superseded_by")
             for lineage_id in (supersedes, superseded_by):
                 if lineage_id is not None and (
-                    not isinstance(lineage_id, str) or not lineage_id or len(lineage_id) > 128
+                    not isinstance(lineage_id, str) or not re.fullmatch(r"[A-Za-z0-9._:-]{1,128}", lineage_id)
                 ):
                     raise ValueError("memory lineage IDs must be non-empty strings of at most 128 characters")
             packed_value = item.get("packed", memory_id in packed_ids)
@@ -389,8 +389,8 @@ class SynapseRun:
         Raw arguments and exception messages are never added to events.
         """
         self._assert_running()
-        if not isinstance(tool_name, str) or not tool_name.strip():
-            raise ValueError("tool_name must be a non-empty string")
+        if not isinstance(tool_name, str) or not re.fullmatch(r"[A-Za-z][A-Za-z0-9_.:-]{0,127}", tool_name.strip()):
+            raise ValueError("tool_name must be a safe identifier of at most 128 characters")
         tool_name = tool_name.strip()
         if not isinstance(arguments, Mapping):
             raise TypeError("arguments must be a mapping")
