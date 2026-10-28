@@ -23,6 +23,7 @@ __all__ = [
 ]
 
 _ID_RE = re.compile(r"^[A-Za-z0-9._:-]{1,128}$")
+_TENANT_ID_RE = re.compile(r"^[A-Za-z0-9_.-]{1,128}$")
 _FINGERPRINT_RE = re.compile(r"^[a-fA-F0-9]{64}$")
 _SAFE_LABEL_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_.:-]{0,127}$")
 _ALLOWED_REASONS = {
@@ -100,8 +101,8 @@ class RunTraceStore:
         self.is_postgres = callable(getattr(backend, "_set_tenant_context", None))
 
     def _validate_tenant(self, tenant_id: str) -> str:
-        if not isinstance(tenant_id, str) or not tenant_id.strip() or len(tenant_id) > 128:
-            raise ValueError("tenant_id must be a non-empty string of at most 128 characters")
+        if not isinstance(tenant_id, str) or not _TENANT_ID_RE.fullmatch(tenant_id):
+            raise ValueError("tenant_id must match [A-Za-z0-9_.-] and be 1–128 characters")
         return tenant_id
 
     def _validate_id(self, value: str, field_name: str) -> str:
