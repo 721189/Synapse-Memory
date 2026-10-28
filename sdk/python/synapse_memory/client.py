@@ -7,6 +7,7 @@ retryable (429/5xx) failures, and the canonical {success, data} envelope.
 from __future__ import annotations
 
 import time
+import re
 from email.utils import parsedate_to_datetime
 from datetime import datetime, timezone
 from dataclasses import dataclass
@@ -192,6 +193,55 @@ class SynapseClient:
 
     def feedback(self, memory_id: str, feedback_type: str) -> Dict[str, Any]:
         return self._request("POST", "/feedback", {"memory_id": memory_id, "feedback_type": feedback_type})
+
+    def create_agent_run(self, run_id: str) -> Dict[str, Any]:
+        """Create (idempotently) a tenant-bound persistent run trace."""
+        if not isinstance(run_id, str) or not re.fullmatch(r"[A-Za-z0-9._:-]{1,128}", run_id):
+            raise ValueError("run_id must match [A-Za-z0-9._:-] and be 1–128 characters")
+        return self._request(
+            "POST", "/api/agent-runs", {"run_id": run_id, "schema_version": 1}, retry_safe=True
+        )
+
+    def append_agent_run_event(self, run_id: str, event: Any) -> Dict[str, Any]:
+        """Append one versioned event. Stable event IDs make retry safe."""
+        if not isinstance(run_id, str) or not re.fullmatch(r"[A-Za-z0-9._:-]{1,128}", run_id):
+            raise ValueError("run_id must match [A-Za-z0-9._:-] and be 1–128 characters")
+        if hasattr(event, "to_dict") and callable(event.to_dict):
+            payload = event.to_dict()
+        elif isinstance(event, dict):
+            payload = dict(event)
+        else:
+            raise TypeError("event must be a RunEvent or JSON-compatible event dictionary")
+        if payload.get("run_id") != run_id:
+            raise ValueError("event run_id does not match run_id")
+        if not isinstance(payload.get("event_id"), str) or not payload["event_id"]:
+            raise ValueError("event must include a stable event_id")
+        return self._request(
+            "POST", f"/api/agent-runs/{run_id}/events", payload, retry_safe=True
+        )
+
+    def upload_agent_run(self, run: Any) -> Dict[str, Any]:
+        """Persist an in-memory SynapseRun after it finishes.
+
+        The API appends events in the run's original order. Re-uploading the same
+        run is idempotent because create-run and event IDs are stable. A partial
+        upload can be retried by calling this method again.
+        """
+        run_id = getattr(run, "run_id", None)
+        events = getattr(run, "events", None)
+        if not isinstance(run_id, str) or not run_id or events is None:
+            raise TypeError("run must expose run_id and events (for example, SynapseRun)")
+        summary = self.create_agent_run(run_id)
+        uploaded = []
+        for event in events:
+            uploaded.append(self.append_agent_run_event(run_id, event))
+        return {
+            "run": summary,
+            "events_submitted": len(uploaded),
+            "events_inserted": sum(1 for result in uploaded if not result.get("duplicate", False)),
+            "events_deduplicated": sum(1 for result in uploaded if result.get("duplicate", False)),
+            "last_sequence_number": uploaded[-1]["sequence_number"] if uploaded else 0,
+        }
 
     def health(self) -> Dict[str, Any]:
         return self._request("GET", "/health")

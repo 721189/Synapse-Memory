@@ -1,6 +1,8 @@
 import os
 import time
 import unittest
+import uuid
+from datetime import datetime, timezone
 from typing import Any, Dict, List
 
 try:
@@ -11,6 +13,7 @@ except ImportError:
 
 from synapse_memory.core.encryption import FernetEncryptionProvider
 from synapse_memory.core.pgvector_db import PGVectorMemoryStore
+from synapse_memory.core.run_trace_store import RunTraceStore
 
 
 class TestPGVectorIntegration(unittest.TestCase):
@@ -671,3 +674,74 @@ class TestRuntimeRoleIsolation(unittest.TestCase):
             admin_conn.close()
         # The renamed table is back and readable again.
         self.assertEqual(self._raw_rows(self.TENANT_A), ["rt_a1", "rt_a2"])
+
+
+    def test_runtime_role_trace_tables_enforce_tenant_rls(self):
+        """Run/event rows remain tenant-isolated under the actual runtime DB role."""
+        traces = RunTraceStore(self.admin)
+        run_id = "trace_rls_" + uuid.uuid4().hex
+        event_id = "event_" + uuid.uuid4().hex
+        timestamp = datetime.now(timezone.utc).isoformat()
+
+        # Seed two tenants with the same run ID. Only tenant A receives an event.
+        traces.create_run(self.TENANT_A, run_id)
+        traces.create_run(self.TENANT_B, run_id)
+        traces.append_event(
+            self.TENANT_A,
+            run_id,
+            {
+                "schema_version": 1,
+                "event_id": event_id,
+                "run_id": run_id,
+                "event_type": "run.started",
+                "timestamp": timestamp,
+                "run_status": "running",
+            },
+        )
+
+        conn = psycopg2.connect(self.app_url)
+        try:
+            with conn.cursor() as cur:
+                # No tenant context must fail closed for both summaries and events.
+                cur.execute("SELECT tenant_id FROM agent_runs WHERE run_id = %s;", (run_id,))
+                self.assertEqual(cur.fetchall(), [])
+                cur.execute("SELECT tenant_id FROM agent_run_events WHERE run_id = %s;", (run_id,))
+                self.assertEqual(cur.fetchall(), [])
+
+                cur.execute("SET LOCAL app.current_tenant = %s;", (self.TENANT_A,))
+                cur.execute("SELECT tenant_id FROM agent_runs WHERE run_id = %s;", (run_id,))
+                self.assertEqual(cur.fetchall(), [(self.TENANT_A,)])
+                cur.execute("SELECT tenant_id FROM agent_run_events WHERE run_id = %s;", (run_id,))
+                self.assertEqual(cur.fetchall(), [(self.TENANT_A,)])
+            conn.rollback()
+
+            # RLS WITH CHECK must reject a run row for B while context is A.
+            with conn.cursor() as cur:
+                cur.execute("SET LOCAL app.current_tenant = %s;", (self.TENANT_A,))
+                with self.assertRaises(psycopg2.Error) as run_error:
+                    cur.execute(
+                        "INSERT INTO agent_runs "
+                        "(tenant_id, run_id, schema_version, status, started_at, created_at, updated_at, event_count) "
+                        "VALUES (%s, %s, 1, 'created', %s, %s, %s, 0);",
+                        (self.TENANT_B, "trace_write_" + uuid.uuid4().hex,
+                         time.time(), time.time(), time.time()),
+                    )
+                self.assertEqual(run_error.exception.pgcode, "42501")
+            conn.rollback()
+
+            # Event-table WITH CHECK is independently enforced (B's parent run exists).
+            with conn.cursor() as cur:
+                cur.execute("SET LOCAL app.current_tenant = %s;", (self.TENANT_A,))
+                with self.assertRaises(psycopg2.Error) as event_error:
+                    cur.execute(
+                        "INSERT INTO agent_run_events "
+                        "(tenant_id, run_id, sequence_number, event_id, schema_version, event_type, "
+                        "timestamp, run_status, metadata_json, recorded_at) "
+                        "VALUES (%s, %s, 1, %s, 1, 'run.started', %s, 'running', '{}', %s);",
+                        (self.TENANT_B, run_id, "event_write_" + uuid.uuid4().hex,
+                         time.time(), time.time()),
+                    )
+                self.assertEqual(event_error.exception.pgcode, "42501")
+            conn.rollback()
+        finally:
+            conn.close()

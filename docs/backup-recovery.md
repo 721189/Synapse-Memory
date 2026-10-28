@@ -7,7 +7,7 @@ Supported configuration: PostgreSQL + pgvector (prod), SQLite (dev only).
 2. **Encryption key** — the exact `SYNAPSE_ENCRYPTION_KEY` (Fernet, urlsafe-base64).
    Without it, `content` ciphertext is unrecoverable. Reads fail safe (`RuntimeError`).
 3. **Schema ledger** — `schema_migrations` table rides inside the dump; verify
-   `SELECT version FROM schema_migrations;` after restore (expect v4).
+   `SELECT version FROM schema_migrations;` after restore (expect v6).
 
 ## 2. Backup procedure
 ```bash

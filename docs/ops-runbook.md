@@ -98,7 +98,7 @@ ciphertext** (reads raise `RuntimeError`, fail safe).
 
 Back up all three (else restore fails): Postgres data (`pg_dump -Fc`), the
 exact `SYNAPSE_ENCRYPTION_KEY`, and the `schema_migrations` ledger (rides
-inside the dump — expect v4: `SELECT version FROM schema_migrations;`).
+inside the dump — expect v6: `SELECT version FROM schema_migrations;`).
 Drill before every release:
 `python scripts/backup_restore_drill.py` (SQLite, anywhere) and
 `python scripts/backup_restore_drill.py --postgres` (+ client tools).

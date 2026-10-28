@@ -220,3 +220,61 @@ def test_events_are_returned_as_immutable_snapshot():
 
     assert snapshot == (snapshot[0],)
     assert isinstance(run.events, tuple)
+
+
+def test_memory_retrieval_event_captures_only_allowlisted_evidence():
+    secret_content = "THIS_CONTENT_MUST_NEVER_BE_SERIALIZED"
+    secret_query = "THIS_QUERY_MUST_NEVER_BE_SERIALIZED"
+
+    with SynapseRun(run_id="retrieval-run") as run:
+        retrieval_id = run.record_memory_retrieval(
+            [
+                {
+                    "id": "memory-1",
+                    "rank": 1,
+                    "relevance_score": 0.91,
+                    "retrieval_score": 0.88,
+                    "token_cost": 21,
+                    "created_at": 1_760_000_000.0,
+                    "supersedes": "memory-old",
+                    "content": secret_content,
+                    "query": secret_query,
+                },
+                {"id": "memory-2", "rank": 2, "relevance_score": 0.23, "token_cost": 15},
+            ],
+            packed_memory_ids=["memory-1"],
+            retrieval_id="retrieval-1",
+        )
+
+    event = next(e for e in run.events if e.event_type is RunEventType.MEMORY_RETRIEVAL)
+    payload = event.to_dict()
+    assert retrieval_id == "retrieval-1"
+    assert payload["schema_version"] == 1
+    assert payload["retrieval_id"] == retrieval_id
+    assert payload["memory_evidence"][0]["memory_id"] == "memory-1"
+    assert payload["memory_evidence"][0]["packed"] is True
+    assert payload["memory_evidence"][1]["packed"] is False
+    assert payload["memory_evidence"][0]["score_components"]["relevance_score"] == 0.91
+    assert secret_content not in repr(payload)
+    assert secret_query not in repr(payload)
+
+
+def test_memory_retrieval_rejects_duplicate_memory_ids_and_invalid_scores():
+    with SynapseRun() as run:
+        with pytest.raises(ValueError, match="unique"):
+            run.record_memory_retrieval([{"id": "same"}, {"id": "same"}])
+
+    with SynapseRun() as run:
+        with pytest.raises(ValueError, match="finite"):
+            run.record_memory_retrieval([{"id": "memory-1", "relevance_score": float("nan")}])
+
+
+def test_memory_retrieval_rejects_more_than_one_hundred_candidates():
+    with SynapseRun() as run:
+        with pytest.raises(ValueError, match="at most 100"):
+            run.record_memory_retrieval([{"id": f"memory-{index}"} for index in range(101)])
+
+
+def test_run_id_must_match_persistence_contract():
+    with pytest.raises(ValueError, match="run_id"):
+        SynapseRun(run_id="invalid run id")

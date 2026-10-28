@@ -63,6 +63,7 @@ RUNTIME_AUTH_TABLE_PRIVILEGES = ("SELECT", "INSERT", "UPDATE")
 FORBIDDEN_AUTH_TABLE_PRIVILEGES = ("DELETE", "TRUNCATE", "REFERENCES", "TRIGGER")
 
 AUTH_TABLES = ("api_keys", "auth_audit_logs")
+TRACE_TABLES = ("agent_runs", "agent_run_events")
 
 VERIFY_ROLE_ATTRS_SQL = (
     "SELECT rolsuper, rolbypassrls, rolcreaterole, rolcreatedb, rolcanlogin "
@@ -128,7 +129,7 @@ def role_statements(role, password, exists):
 
 
 def privilege_statements(runtime_role, admin_role, has_memories_table,
-                         auth_tables=None):
+                         auth_tables=None, trace_tables=()):
     """Least-privilege grants for the runtime role.
 
     Runtime gets schema USAGE, DML on ``memories``, and nothing else: no schema
@@ -183,6 +184,20 @@ def privilege_statements(runtime_role, admin_role, has_memories_table,
              "REVOKE " + ", ".join(FORBIDDEN_AUTH_TABLE_PRIVILEGES)
              + f" ON TABLE public.{table} FROM " + rt, ()),
         ]
+    # Trace tables are created by schema migration v6, after first provisioning.
+    # Grant existing tables explicitly when this script is re-run post-migration;
+    # default privileges alone do not change permissions on tables already created.
+    for table in trace_tables:
+        stmts += [
+            (f"runtime: strip every existing privilege on {table}",
+             f"REVOKE ALL PRIVILEGES ON TABLE public.{table} FROM " + rt, ()),
+            (f"runtime: grant tenant-scoped DML on {table}",
+             "GRANT " + ", ".join(RUNTIME_TABLE_PRIVILEGES)
+             + f" ON TABLE public.{table} TO " + rt, ()),
+            (f"runtime: revoke forbidden privileges on {table}",
+             "REVOKE " + ", ".join(FORBIDDEN_TABLE_PRIVILEGES)
+             + f" ON TABLE public.{table} FROM " + rt, ()),
+        ]
     stmts.append(
         ("future tables created by the migration role: DML only",
          "ALTER DEFAULT PRIVILEGES FOR ROLE " + adm + " IN SCHEMA public "
@@ -230,7 +245,7 @@ def evaluate_role_row(role, row):
 
 def evaluate_privileges(runtime_role, table_privs, can_create_schema,
                         runtime_in_admin, owner, admin_role,
-                        auth_table_privs=None):
+                        auth_table_privs=None, trace_table_privs=None):
     """Return ``(failures, advisories)`` for the runtime role's privileges.
 
     ``table_privs`` is the 7-tuple from VERIFY_TABLE_PRIVS_SQL, or None when the
@@ -277,12 +292,22 @@ def evaluate_privileges(runtime_role, table_privs, can_create_schema,
                 if perms.get(priv):
                     failures.append(runtime_role + ": must NOT hold " + priv
                                     + " on public." + table)
+    if trace_table_privs is not None:
+        for table, perms in trace_table_privs.items():
+            for priv in RUNTIME_TABLE_PRIVILEGES:
+                if not perms.get(priv):
+                    failures.append(runtime_role + ": missing required " + priv
+                                    + " on public." + table)
+            for priv in FORBIDDEN_TABLE_PRIVILEGES:
+                if perms.get(priv):
+                    failures.append(runtime_role + ": must NOT hold " + priv
+                                    + " on public." + table)
     return failures, advisories
 
 
 def build_plan(runtime_role, admin_role, runtime_password, admin_password,
                runtime_exists, admin_exists, has_memories_table, current_owner=None,
-               auth_tables=None):
+               auth_tables=None, trace_tables=()):
     """Ordered (label, sql, params) plan. No plaintext password ever enters SQL."""
     validate_identifier(runtime_role, "runtime role")
     validate_identifier(admin_role, "admin role")
@@ -291,7 +316,7 @@ def build_plan(runtime_role, admin_role, runtime_password, admin_password,
     plan = role_statements(admin_role, admin_password, admin_exists)
     plan += role_statements(runtime_role, runtime_password, runtime_exists)
     plan += privilege_statements(runtime_role, admin_role, has_memories_table,
-                                 auth_tables=auth_tables)
+                                 auth_tables=auth_tables, trace_tables=trace_tables)
     plan += ownership_statements(runtime_role, admin_role, current_owner)
     return plan
 
@@ -401,10 +426,17 @@ def provision(dsn, runtime_role, admin_role, runtime_password, admin_password,
                 cur,
                 "SELECT 1 FROM pg_tables WHERE schemaname = 'public' AND tablename = %s;",
                 (table,)))
+        existing_trace_tables = tuple(
+            table for table in TRACE_TABLES
+            if _fetchone(
+                cur,
+                "SELECT 1 FROM pg_tables WHERE schemaname = 'public' AND tablename = %s;",
+                (table,)))
 
         plan = build_plan(runtime_role, admin_role, runtime_password, admin_password,
                           runtime_exists, admin_exists, has_table, current_owner,
-                          auth_tables=existing_auth_tables)
+                          auth_tables=existing_auth_tables,
+                          trace_tables=existing_trace_tables)
 
         if not verify_only:
             for label, sql, params in plan:
@@ -447,9 +479,32 @@ def provision(dsn, runtime_role, admin_role, runtime_password, admin_password,
                     )
                     auth_privs[priv] = bool(row[0]) if row else False
                 auth_table_privs[table] = auth_privs
+            trace_table_privs = {}
+            for table in existing_trace_tables:
+                trace_privs = {}
+                for priv in RUNTIME_TABLE_PRIVILEGES + FORBIDDEN_TABLE_PRIVILEGES:
+                    row = _fetchone(
+                        cur,
+                        "SELECT has_table_privilege(%s, %s, %s)",
+                        (runtime_role, f"public.{table}", priv),
+                    )
+                    trace_privs[priv] = bool(row[0]) if row else False
+                trace_table_privs[table] = trace_privs
+                owner_row = _fetchone(
+                    cur,
+                    "SELECT tableowner FROM pg_tables WHERE schemaname = 'public' AND tablename = %s;",
+                    (table,),
+                )
+                trace_owner = owner_row[0] if owner_row else None
+                if trace_owner == runtime_role:
+                    failures.append(runtime_role + ": OWNS public." + table + " (may alter tenant RLS policies)")
+                elif trace_owner and trace_owner != admin_role:
+                    advisories.append("public." + table + " owner is " + str(trace_owner)
+                                      + ", expected " + admin_role + " (FORCE RLS must stay enabled)")
             priv_failures, priv_advisories = evaluate_privileges(
                 runtime_role, privs, can_create, in_admin, current_owner, admin_role,
-                auth_table_privs=auth_table_privs)
+                auth_table_privs=auth_table_privs,
+                trace_table_privs=trace_table_privs)
             failures += priv_failures
             advisories += priv_advisories
     finally:

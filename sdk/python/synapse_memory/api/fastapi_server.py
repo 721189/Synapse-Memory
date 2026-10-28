@@ -5,10 +5,10 @@ import datetime
 import hashlib
 import logging
 import threading
-from typing import List, Dict, Any, Optional, Tuple
-from pydantic import BaseModel, ConfigDict, Field
+from typing import List, Dict, Any, Optional, Tuple, Literal
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 import uvicorn
-from fastapi import FastAPI, HTTPException, status, Header, Request, Depends
+from fastapi import FastAPI, HTTPException, status, Header, Request, Depends, Path
 from fastapi.middleware.cors import CORSMiddleware
 
 # Adjust path to enable absolute imports when running as standalone script
@@ -21,6 +21,10 @@ from synapse_memory.core.memory_manager import DEFAULT_MAX_RECORD_LIMIT, MemoryM
 from synapse_memory.core.knapsack_packer import KnapsackPacker
 from synapse_memory.core.decay_engine import DecayEngine
 from synapse_memory.core.hybrid_search import HybridSearch
+from synapse_memory.runtime import RunEventType, RunStatus
+from synapse_memory.core.run_trace_store import (
+    RunTraceStore, RunTraceError, RunNotFoundError, RunConflictError,
+)
 from synapse_memory.core.auth import (
     SecurityManager,
     APIKeyRecord,
@@ -106,6 +110,7 @@ else:
     ACTIVE_BACKEND = "sqlite"
 
 manager = MemoryManager(store=store, embedder=embedder, max_record_limit=DEFAULT_MAX_RECORD_LIMIT)
+run_trace_store = RunTraceStore(store)
 logger.info(
     f"MemoryManager capacity limit: {manager.max_record_limit} records "
     f"(override with SYNAPSE_MAX_RECORD_LIMIT; historical default is 50)"
@@ -244,9 +249,11 @@ async def add_request_id_and_rate_limit(request: Request, call_next):  # type: i
     request_id = request.headers.get("X-Request-ID") or f"req_{_uuid.uuid4().hex[:12]}"
     start = time.time()
     # Rate-limit only mutating + heavy retrieval endpoints
-    if request.url.path.startswith(("/ingest", "/api/memories", "/query", "/api/retrieval")):
+    if request.url.path.startswith(("/ingest", "/api/memories", "/query", "/api/retrieval", "/api/agent-runs")):
+        # Avoid unbounded per-run limiter buckets: all run/event URLs share one bucket.
+        rate_route = "/api/agent-runs" if request.url.path.startswith("/api/agent-runs") else request.url.path
         try:
-            _check_rate_limit(f"{_rate_limit_principal(request)}:{request.url.path}")
+            _check_rate_limit(f"{_rate_limit_principal(request)}:{rate_route}")
         except HTTPException as e:
             from fastapi.responses import JSONResponse
 
@@ -453,6 +460,62 @@ class QueryResponse(SynapseAPIModel):
     injected_nodes_count: int
     injected_nodes: List[Dict[str, Any]]
     active_storage_backend: str
+
+
+class RunCreateRequest(SynapseAPIModel):
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+    run_id: str = Field(..., min_length=1, max_length=128, pattern=r"^[A-Za-z0-9._:-]+$")
+    schema_version: Literal[1] = 1
+    tenant_id: Optional[str] = Field(
+        None, alias="tenantId", min_length=1, max_length=128,
+        pattern=r"^[A-Za-z0-9_\-\.]+$",
+    )
+
+
+class MemoryEvidenceRequest(SynapseAPIModel):
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+    memory_id: str = Field(..., min_length=1, max_length=128, pattern=r"^[A-Za-z0-9._:-]+$")
+    rank: int = Field(..., ge=1, le=10000)
+    score_components: Dict[str, float] = Field(default_factory=dict, max_length=8)
+    token_cost: int = Field(0, ge=0, le=100000)
+    packed: bool = False
+    created_at: Optional[float] = Field(None, ge=0, allow_inf_nan=False)
+    supersedes: Optional[str] = Field(None, min_length=1, max_length=128, pattern=r"^[A-Za-z0-9._:-]+$")
+    superseded_by: Optional[str] = Field(None, min_length=1, max_length=128, pattern=r"^[A-Za-z0-9._:-]+$")
+
+
+class AgentRunEventRequest(SynapseAPIModel):
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+    schema_version: Literal[1] = 1
+    event_id: str = Field(..., min_length=1, max_length=128, pattern=r"^[A-Za-z0-9._:-]+$")
+    run_id: str = Field(..., min_length=1, max_length=128, pattern=r"^[A-Za-z0-9._:-]+$")
+    event_type: RunEventType
+    timestamp: datetime.datetime
+    run_status: RunStatus
+    step_index: Optional[int] = Field(None, ge=1)
+    tool_call_index: Optional[int] = Field(None, ge=1)
+    tool_name: Optional[str] = Field(None, min_length=1, max_length=128, pattern=r"^[A-Za-z][A-Za-z0-9_.:-]*$")
+    tool_fingerprint: Optional[str] = Field(None, pattern=r"^[a-fA-F0-9]{64}$")
+    reason: Optional[str] = Field(None, min_length=1, max_length=128, pattern=r"^[a-z][a-z0-9_]*$")
+    error_type: Optional[str] = Field(None, min_length=1, max_length=128, pattern=r"^[A-Za-z][A-Za-z0-9_.:-]*$")
+    retrieval_id: Optional[str] = Field(None, min_length=1, max_length=128, pattern=r"^[A-Za-z0-9._:-]+$")
+    memory_evidence: List[MemoryEvidenceRequest] = Field(default_factory=list, max_length=100)
+
+    @field_validator("timestamp")
+    @classmethod
+    def timestamp_must_be_timezone_aware(cls, value: datetime.datetime) -> datetime.datetime:
+        if value.tzinfo is None or value.utcoffset() is None:
+            raise ValueError("timestamp must include a timezone")
+        return value
+
+    @model_validator(mode="after")
+    def retrieval_metadata_must_match_event_type(self):
+        if self.event_type is RunEventType.MEMORY_RETRIEVAL:
+            if not self.retrieval_id:
+                raise ValueError("memory.retrieval requires retrieval_id")
+        elif self.retrieval_id is not None or self.memory_evidence:
+            raise ValueError("retrieval metadata is only valid for memory.retrieval")
+        return self
 
 
 class FeedbackRequest(SynapseAPIModel):
@@ -789,6 +852,137 @@ def query_memory(
         },
         request,
     )
+
+
+@app.post("/api/agent-runs", tags=["Agent Reliability"])
+def create_agent_run(
+    request: Request,
+    payload: RunCreateRequest,
+    principal: APIKeyRecord = Depends(require_scope("agent-runs:write")),
+):
+    """Create a tenant-bound run before streaming events (or before manual upload)."""
+    effective_tenant = resolve_tenant(principal, payload.tenant_id)
+    try:
+        result = run_trace_store.create_run(
+            effective_tenant, payload.run_id, schema_version=payload.schema_version,
+        )
+    except RunTraceError as exc:
+        raise HTTPException(status_code=503, detail="Agent trace storage unavailable.") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return envelope(result, request)
+
+
+@app.post("/api/agent-runs/{run_id}/events", tags=["Agent Reliability"])
+def append_agent_run_event(
+    request: Request,
+    payload: AgentRunEventRequest,
+    run_id: str = Path(..., min_length=1, max_length=128, pattern=r"^[A-Za-z0-9._:-]+$"),
+    tenant_id: Optional[str] = None,
+    principal: APIKeyRecord = Depends(require_scope("agent-runs:write")),
+):
+    """Append one versioned event; retries with the same event ID are idempotent."""
+    if payload.run_id != run_id:
+        raise HTTPException(status_code=422, detail="event run_id does not match the path run_id.")
+    effective_tenant = resolve_tenant(principal, tenant_id)
+    event = payload.model_dump(exclude_none=True)
+    event["event_type"] = payload.event_type.value
+    event["run_status"] = payload.run_status.value
+    event["memory_evidence"] = [
+        item.model_dump(exclude_none=True) for item in payload.memory_evidence
+    ]
+    try:
+        result = run_trace_store.append_event(effective_tenant, run_id, event)
+    except RunNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="Run not found for the authenticated tenant.") from exc
+    except RunConflictError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except RunTraceError as exc:
+        raise HTTPException(status_code=503, detail="Agent trace storage unavailable.") from exc
+    except (ValueError, TypeError) as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return envelope(result, request)
+
+
+@app.get("/api/agent-runs", tags=["Agent Reliability"])
+def list_agent_runs(
+    request: Request,
+    tenant_id: Optional[str] = None,
+    limit: int = 50,
+    offset: int = 0,
+    principal: APIKeyRecord = Depends(require_scope("agent-runs:read")),
+):
+    """List recent run summaries for the authenticated tenant."""
+    effective_tenant = resolve_tenant(principal, tenant_id)
+    try:
+        runs = run_trace_store.list_runs(effective_tenant, limit=limit, offset=offset)
+    except RunTraceError as exc:
+        raise HTTPException(status_code=503, detail="Agent trace storage unavailable.") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return envelope({"runs": runs, "limit": limit, "offset": offset}, request)
+
+
+@app.get("/api/agent-runs/{run_id}", tags=["Agent Reliability"])
+def get_agent_run(
+    request: Request,
+    run_id: str = Path(..., min_length=1, max_length=128, pattern=r"^[A-Za-z0-9._:-]+$"),
+    tenant_id: Optional[str] = None,
+    principal: APIKeyRecord = Depends(require_scope("agent-runs:read")),
+):
+    """Fetch one run summary without returning event payloads by default."""
+    effective_tenant = resolve_tenant(principal, tenant_id)
+    try:
+        result = run_trace_store.get_run(effective_tenant, run_id)
+    except RunNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="Run not found for the authenticated tenant.") from exc
+    except RunTraceError as exc:
+        raise HTTPException(status_code=503, detail="Agent trace storage unavailable.") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return envelope(result, request)
+
+
+@app.get("/api/agent-runs/{run_id}/events", tags=["Agent Reliability"])
+def list_agent_run_events(
+    request: Request,
+    run_id: str = Path(..., min_length=1, max_length=128, pattern=r"^[A-Za-z0-9._:-]+$"),
+    tenant_id: Optional[str] = None,
+    limit: int = 100,
+    offset: int = 0,
+    principal: APIKeyRecord = Depends(require_scope("agent-runs:read")),
+):
+    """Read a bounded, chronological metadata-only event page."""
+    effective_tenant = resolve_tenant(principal, tenant_id)
+    try:
+        events = run_trace_store.list_events(
+            effective_tenant, run_id, limit=limit, offset=offset,
+        )
+    except RunNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="Run not found for the authenticated tenant.") from exc
+    except RunTraceError as exc:
+        raise HTTPException(status_code=503, detail="Agent trace storage unavailable.") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return envelope({"run_id": run_id, "events": events, "limit": limit, "offset": offset}, request)
+
+
+@app.delete("/api/agent-runs/{run_id}", tags=["Agent Reliability"])
+def delete_agent_run(
+    request: Request,
+    run_id: str = Path(..., min_length=1, max_length=128, pattern=r"^[A-Za-z0-9._:-]+$"),
+    tenant_id: Optional[str] = None,
+    principal: APIKeyRecord = Depends(require_scope("agent-runs:delete")),
+):
+    """Delete a run and its events for data lifecycle/retention workflows."""
+    effective_tenant = resolve_tenant(principal, tenant_id)
+    try:
+        deleted = run_trace_store.delete_run(effective_tenant, run_id)
+    except RunTraceError as exc:
+        raise HTTPException(status_code=503, detail="Agent trace storage unavailable.") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return envelope({"run_id": run_id, "status": "DELETED" if deleted else "NOT_FOUND"}, request)
 
 
 @app.post("/feedback", tags=["Reinforcement"])

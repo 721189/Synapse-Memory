@@ -288,6 +288,61 @@ class PGVectorMemoryStore:
                         "Security violation: tenant_isolation_policy is missing from public.memories."
                     )
 
+                # Agent traces are a required v6 schema surface. A runtime-role
+                # deployment must prove both tables exist and enforce tenant RLS.
+                for trace_table, trace_policy in (
+                    ("agent_runs", "agent_runs_tenant_policy"),
+                    ("agent_run_events", "agent_run_events_tenant_policy"),
+                ):
+                    cur.execute("SELECT to_regclass(%s)", (f"public.{trace_table}",))
+                    trace_table_row = cur.fetchone()
+                    trace_regclass = (
+                        trace_table_row[0]
+                        if isinstance(trace_table_row, (tuple, list))
+                        else trace_table_row.get("to_regclass") if trace_table_row else None
+                    ) if trace_table_row else None
+                    if trace_regclass is None:
+                        raise RuntimeError(
+                            f"Schema not provisioned: public.{trace_table} is missing. "
+                            "Run schema migrations before enabling traffic."
+                        )
+                    cur.execute(
+                        "SELECT c.relrowsecurity, c.relforcerowsecurity, t.tableowner, current_user "
+                        "FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace "
+                        "JOIN pg_tables t ON t.schemaname = n.nspname AND t.tablename = c.relname "
+                        "WHERE n.nspname = 'public' AND c.relname = %s;",
+                        (trace_table,),
+                    )
+                    trace_rls = cur.fetchone()
+                    if not trace_rls:
+                        raise RuntimeError(
+                            f"Schema not provisioned: public.{trace_table} is missing."
+                        )
+                    rls_enabled = trace_rls[0] if isinstance(trace_rls, (tuple, list)) else trace_rls.get("relrowsecurity")
+                    rls_forced = trace_rls[1] if isinstance(trace_rls, (tuple, list)) else trace_rls.get("relforcerowsecurity")
+                    trace_owner = trace_rls[2] if isinstance(trace_rls, (tuple, list)) else trace_rls.get("tableowner")
+                    trace_current_user = trace_rls[3] if isinstance(trace_rls, (tuple, list)) else trace_rls.get("current_user")
+                    if not bool(rls_enabled) or not bool(rls_forced):
+                        raise RuntimeError(
+                            f"Security violation: public.{trace_table} must have ENABLE and FORCE ROW LEVEL SECURITY."
+                        )
+                    if trace_owner == trace_current_user:
+                        raise RuntimeError(
+                            f"Security violation: runtime connection user '{trace_current_user}' "
+                            f"owns public.{trace_table}."
+                        )
+                    cur.execute(
+                        "SELECT 1 FROM pg_policies WHERE schemaname = 'public' "
+                        "AND tablename = %s AND policyname = %s;",
+                        (trace_table, trace_policy),
+                    )
+                    if not cur.fetchone():
+                        raise RuntimeError(
+                            f"Security violation: {trace_policy} is missing from public.{trace_table}."
+                        )
+                    cur.execute(f"SELECT 1 FROM {trace_table} LIMIT 1;")
+                    # Readability is required even when RLS returns zero rows.
+
                 cur.execute(
                     """
                     SELECT r.rolsuper, r.rolbypassrls, t.tableowner, current_user

@@ -102,6 +102,29 @@ class TestProvisioningContract(unittest.TestCase):
         self.assertIn("REVOKE CREATE ON SCHEMA public", joined)
         self.assertIn("GRANT USAGE ON SCHEMA public", joined)
 
+    def test_trace_tables_get_explicit_dml_grants_when_present(self):
+        plan = self.mod.build_plan(
+            RUNTIME, ADMIN, "runtime-pw", "admin-pw",
+            runtime_exists=True, admin_exists=True,
+            has_memories_table=True, current_owner=ADMIN,
+            auth_tables=("api_keys", "auth_audit_logs"),
+            trace_tables=self.mod.TRACE_TABLES,
+        )
+        statements = [sql for _label, sql, _params in plan]
+        for table in self.mod.TRACE_TABLES:
+            self.assertIn(
+                f'REVOKE ALL PRIVILEGES ON TABLE public.{table} FROM "{RUNTIME}"',
+                statements,
+            )
+            self.assertIn(
+                f'GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE public.{table} TO "{RUNTIME}"',
+                statements,
+            )
+            self.assertIn(
+                f'REVOKE TRUNCATE, REFERENCES, TRIGGER ON TABLE public.{table} FROM "{RUNTIME}"',
+                statements,
+            )
+
     def test_migration_role_may_create_objects_but_runtime_may_not(self):
         for label, sql, _p in self.plan:
             if "GRANT CREATE" in sql:
@@ -188,6 +211,26 @@ class TestVerificationLogic(unittest.TestCase):
         joined = " | ".join(failures)
         for priv in ("INSERT", "UPDATE", "DELETE"):
             self.assertIn("missing required " + priv, joined)
+
+    def test_evaluate_privileges_checks_trace_table_grants(self):
+        trace_privs = {
+            "agent_runs": {
+                "SELECT": True, "INSERT": False, "UPDATE": True, "DELETE": True,
+                "TRUNCATE": False, "REFERENCES": False, "TRIGGER": False,
+            },
+            "agent_run_events": {
+                "SELECT": True, "INSERT": True, "UPDATE": True, "DELETE": True,
+                "TRUNCATE": True, "REFERENCES": False, "TRIGGER": False,
+            },
+        }
+        failures, _ = self.mod.evaluate_privileges(
+            RUNTIME, (True, True, True, True, False, False, False),
+            can_create_schema=False, runtime_in_admin=False,
+            owner=ADMIN, admin_role=ADMIN, trace_table_privs=trace_privs,
+        )
+        joined = " | ".join(failures)
+        self.assertIn("missing required INSERT on public.agent_runs", joined)
+        self.assertIn("must NOT hold TRUNCATE on public.agent_run_events", joined)
 
     def test_evaluate_privileges_is_clean_for_a_compliant_role(self):
         failures, advisories = self.mod.evaluate_privileges(
