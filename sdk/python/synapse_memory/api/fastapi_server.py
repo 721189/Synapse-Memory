@@ -468,7 +468,7 @@ class RunCreateRequest(SynapseAPIModel):
     schema_version: Literal[1] = 1
     tenant_id: Optional[str] = Field(
         None, alias="tenantId", min_length=1, max_length=128,
-        pattern=r"^[A-Za-z0-9_\\-\\.]+$",
+        pattern=r"^[A-Za-z0-9_\-\.]+$",
     )
 
 
@@ -980,6 +980,8 @@ def delete_agent_run(
         deleted = run_trace_store.delete_run(effective_tenant, run_id)
     except RunTraceError as exc:
         raise HTTPException(status_code=503, detail="Agent trace storage unavailable.") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     return envelope({"run_id": run_id, "status": "DELETED" if deleted else "NOT_FOUND"}, request)
 
 
