@@ -237,6 +237,7 @@ class SynapseRun:
         self._assert_running()
         if not isinstance(tool_name, str) or not tool_name.strip():
             raise ValueError("tool_name must be a non-empty string")
+        tool_name = tool_name.strip()
         if not isinstance(arguments, Mapping):
             raise TypeError("arguments must be a mapping")
         if not callable(tool):
@@ -278,7 +279,7 @@ class SynapseRun:
             tool_fingerprint=fingerprint,
         )
         try:
-            result = tool(**dict(arguments))
+            result = tool(**normalized)
         except BaseException as exc:
             self._failure_counts[fingerprint] = self._failure_counts.get(fingerprint, 0) + 1
             self._emit(
