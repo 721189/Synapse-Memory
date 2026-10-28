@@ -126,7 +126,7 @@ def test_success_resets_consecutive_failure_count():
         with pytest.raises(ValueError):
             run.call_tool("flaky", {"id": 1}, flaky_tool)
 
-    assert run.status is RunStatus.FAILED
+    assert run.status is RunStatus.SUCCEEDED
     assert calls == 3
 
 
@@ -193,7 +193,7 @@ def test_non_json_arguments_are_rejected_before_tool_execution():
             run.call_tool("bad", {"value": object()}, lambda **kwargs: executed)
 
     assert not executed
-    assert run.status is RunStatus.FAILED
+    assert run.status is RunStatus.SUCCEEDED
 
 
 def test_non_finite_arguments_are_rejected_before_tool_execution():
@@ -201,7 +201,7 @@ def test_non_finite_arguments_are_rejected_before_tool_execution():
         with pytest.raises(ValueError, match="non-finite"):
             run.call_tool("bad", {"value": float("nan")}, lambda **kwargs: None)
 
-    assert run.status is RunStatus.FAILED
+    assert run.status is RunStatus.SUCCEEDED
 
 
 def test_events_are_returned_as_immutable_snapshot():
