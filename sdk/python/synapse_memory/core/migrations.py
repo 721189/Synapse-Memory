@@ -262,6 +262,7 @@ def _m6_agent_run_traces_postgres(cur: Any) -> None:
             """
         )
 
+
 MIGRATIONS: List[Migration] = [
     Migration(1, "embedding_metadata", _m1_embedding_metadata, _m1_embedding_metadata),
     Migration(2, "migration_ledger", _m2_migration_ledger, _m2_migration_ledger),
