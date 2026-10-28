@@ -98,6 +98,9 @@ _KNOWN_SCOPES = frozenset({
     "memories:write",
     "memories:delete",
     "memories:list",
+    "agent-runs:read",
+    "agent-runs:write",
+    "agent-runs:delete",
 })
 
 
