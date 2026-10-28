@@ -14,8 +14,8 @@ import math
 import secrets
 import time
 import uuid
-from collections.abc import Callable, Mapping
-from dataclasses import dataclass
+from collections.abc import Callable, Mapping, Sequence
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
 from typing import Any, Literal, Optional, TypeVar
@@ -25,6 +25,7 @@ __all__ = [
     "RunStatus",
     "RunEventType",
     "RunEvent",
+    "MemoryEvidence",
     "SynapseRun",
     "RunGuardError",
     "RunStateError",
@@ -57,6 +58,7 @@ class RunEventType(str, Enum):
     TOOL_CALL_BLOCKED = "tool_call.blocked"
     LIMIT_EXCEEDED = "run.limit_exceeded"
     RUN_FINISHED = "run.finished"
+    MEMORY_RETRIEVAL = "memory.retrieval"
 
 
 @dataclass(frozen=True)
@@ -90,6 +92,36 @@ class RunPolicy:
 
 
 @dataclass(frozen=True)
+class MemoryEvidence:
+    """Metadata-only explanation of one retrieved memory; never includes content."""
+
+    memory_id: str
+    rank: int
+    score_components: Mapping[str, float] = field(default_factory=dict)
+    token_cost: int = 0
+    packed: bool = False
+    created_at: Optional[float] = None
+    supersedes: Optional[str] = None
+    superseded_by: Optional[str] = None
+
+    def to_dict(self) -> dict[str, Any]:
+        result: dict[str, Any] = {
+            "memory_id": self.memory_id,
+            "rank": self.rank,
+            "score_components": dict(self.score_components),
+            "token_cost": self.token_cost,
+            "packed": self.packed,
+        }
+        if self.created_at is not None:
+            result["created_at"] = self.created_at
+        if self.supersedes is not None:
+            result["supersedes"] = self.supersedes
+        if self.superseded_by is not None:
+            result["superseded_by"] = self.superseded_by
+        return result
+
+
+@dataclass(frozen=True)
 class RunEvent:
     """Privacy-minimized event; fields intentionally exclude arguments/content."""
 
@@ -104,6 +136,27 @@ class RunEvent:
     tool_fingerprint: Optional[str] = None
     reason: Optional[str] = None
     error_type: Optional[str] = None
+    schema_version: int = 1
+    retrieval_id: Optional[str] = None
+    memory_evidence: tuple[MemoryEvidence, ...] = ()
+
+    def to_dict(self) -> dict[str, Any]:
+        """Return the versioned JSON-compatible event contract for trace upload."""
+        result: dict[str, Any] = {
+            "schema_version": self.schema_version,
+            "event_id": self.event_id,
+            "run_id": self.run_id,
+            "event_type": self.event_type.value,
+            "timestamp": self.timestamp.astimezone(timezone.utc).isoformat().replace("+00:00", "Z"),
+            "run_status": self.run_status.value,
+        }
+        for key in ("step_index", "tool_call_index", "tool_name", "tool_fingerprint", "reason", "error_type", "retrieval_id"):
+            value = getattr(self, key)
+            if value is not None:
+                result[key] = value
+        if self.memory_evidence:
+            result["memory_evidence"] = [item.to_dict() for item in self.memory_evidence]
+        return result
 
 
 class RunGuardError(RuntimeError):
@@ -222,6 +275,103 @@ class SynapseRun:
         self._reserve_step()
         self._emit(RunEventType.STEP_STARTED, step_index=self._steps)
         return self._steps
+
+    def record_memory_retrieval(
+        self,
+        evidence: Sequence[Mapping[str, Any]],
+        *,
+        packed_memory_ids: Optional[Sequence[str]] = None,
+        retrieval_id: Optional[str] = None,
+    ) -> str:
+        """Record IDs/scores/packing decisions without storing memory text or query.
+
+        The caller supplies candidate metadata from its retrieval pipeline. Only a
+        small allow-list is copied; arbitrary fields such as content or prompt text
+        are deliberately ignored. One retrieval consumes one step.
+        """
+        self._reserve_step()
+        if isinstance(evidence, (str, bytes)) or not isinstance(evidence, Sequence):
+            raise TypeError("evidence must be a sequence of memory metadata mappings")
+        if len(evidence) > 100:
+            raise ValueError("at most 100 memory evidence records may be captured")
+        if retrieval_id is not None and (
+            not isinstance(retrieval_id, str) or not retrieval_id.strip() or len(retrieval_id) > 128
+        ):
+            raise ValueError("retrieval_id must be a non-empty string of at most 128 characters")
+        packed_ids = set(packed_memory_ids or ())
+        for memory_id in packed_ids:
+            if not isinstance(memory_id, str) or not memory_id or len(memory_id) > 128:
+                raise ValueError("packed memory IDs must be non-empty strings of at most 128 characters")
+
+        allowed_scores = {
+            "relevance_score", "retrieval_score", "lexical_rank", "dense_score",
+            "rrf_score", "decay_multiplier", "bm25_score", "semantic_score",
+        }
+        captured: list[MemoryEvidence] = []
+        seen: set[str] = set()
+        for index, item in enumerate(evidence, start=1):
+            if not isinstance(item, Mapping):
+                raise TypeError("each memory evidence record must be a mapping")
+            memory_id = item.get("id", item.get("memory_id"))
+            if not isinstance(memory_id, str) or not memory_id.strip() or len(memory_id) > 128:
+                raise ValueError("each memory evidence record needs a valid memory ID")
+            if memory_id in seen:
+                raise ValueError("memory evidence IDs must be unique within a retrieval")
+            seen.add(memory_id)
+            rank = item.get("rank", index)
+            if isinstance(rank, bool) or not isinstance(rank, int) or rank < 1:
+                raise ValueError("memory evidence rank must be a positive integer")
+            token_cost = item.get("token_cost", 0)
+            if isinstance(token_cost, bool) or not isinstance(token_cost, int) or token_cost < 0:
+                raise ValueError("memory evidence token_cost must be a non-negative integer")
+            score_components: dict[str, float] = {}
+            for key in allowed_scores:
+                value = item.get(key)
+                if value is None:
+                    continue
+                if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value):
+                    raise ValueError("memory score components must be finite numbers")
+                score_components[key] = float(value)
+            created_at = item.get("created_at")
+            if created_at is not None and (
+                isinstance(created_at, bool)
+                or not isinstance(created_at, (int, float))
+                or not math.isfinite(created_at)
+            ):
+                raise ValueError("memory created_at must be a finite timestamp")
+            supersedes = item.get("supersedes")
+            superseded_by = item.get("superseded_by")
+            for lineage_id in (supersedes, superseded_by):
+                if lineage_id is not None and (
+                    not isinstance(lineage_id, str) or not lineage_id or len(lineage_id) > 128
+                ):
+                    raise ValueError("memory lineage IDs must be non-empty strings of at most 128 characters")
+            packed_value = item.get("packed", memory_id in packed_ids)
+            if not isinstance(packed_value, bool):
+                raise ValueError("memory packed flag must be boolean")
+            if packed_memory_ids is not None:
+                packed_value = memory_id in packed_ids
+            captured.append(
+                MemoryEvidence(
+                    memory_id=memory_id,
+                    rank=rank,
+                    score_components=score_components,
+                    token_cost=token_cost,
+                    packed=packed_value,
+                    created_at=float(created_at) if created_at is not None else None,
+                    supersedes=supersedes,
+                    superseded_by=superseded_by,
+                )
+            )
+
+        resolved_retrieval_id = retrieval_id or str(uuid.uuid4())
+        self._emit(
+            RunEventType.MEMORY_RETRIEVAL,
+            step_index=self._steps,
+            retrieval_id=resolved_retrieval_id,
+            memory_evidence=tuple(captured),
+        )
+        return resolved_retrieval_id
 
     def call_tool(
         self,
@@ -355,6 +505,8 @@ class SynapseRun:
         tool_fingerprint: Optional[str] = None,
         reason: Optional[str] = None,
         error_type: Optional[str] = None,
+        retrieval_id: Optional[str] = None,
+        memory_evidence: tuple[MemoryEvidence, ...] = (),
     ) -> None:
         self._events.append(
             RunEvent(
@@ -369,5 +521,7 @@ class SynapseRun:
                 tool_fingerprint=tool_fingerprint,
                 reason=reason,
                 error_type=error_type,
+                retrieval_id=retrieval_id,
+                memory_evidence=memory_evidence,
             )
         )
