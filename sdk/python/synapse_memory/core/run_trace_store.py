@@ -440,11 +440,18 @@ class RunTraceStore:
                     step_index, tool_call_index, tool_name, fingerprint, reason, error_type, metadata_json, now,
                 ),
             )
-            cur.execute(
-                f"UPDATE agent_runs SET status = {p}, event_count = {p}, updated_at = {p} "
-                f"WHERE tenant_id = {p} AND run_id = {p}",
-                (status, next_sequence, now, tenant, run),
-            )
+            if event_type == RunEventType.RUN_STARTED.value:
+                cur.execute(
+                    f"UPDATE agent_runs SET status = {p}, event_count = {p}, updated_at = {p}, started_at = {p} "
+                    f"WHERE tenant_id = {p} AND run_id = {p}",
+                    (status, next_sequence, now, timestamp, tenant, run),
+                )
+            else:
+                cur.execute(
+                    f"UPDATE agent_runs SET status = {p}, event_count = {p}, updated_at = {p} "
+                    f"WHERE tenant_id = {p} AND run_id = {p}",
+                    (status, next_sequence, now, tenant, run),
+                )
             return {
                 "run_id": run, "event_id": event_id,
                 "sequence_number": next_sequence, "duplicate": False,
