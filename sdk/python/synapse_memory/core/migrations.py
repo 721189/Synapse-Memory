@@ -22,7 +22,7 @@ logger = logging.getLogger("SynapseMigrations")
 
 # Ledger + metadata columns tracked on the memories table so embedding-model
 # upgrades (e.g. 128-d hash -> 384-d MiniLM) are explicit, not silent.
-CURRENT_SCHEMA_VERSION = 5
+CURRENT_SCHEMA_VERSION = 6
 
 
 @dataclass
@@ -135,12 +135,144 @@ def _m5_supersession_chain(cur: Any) -> None:
     _add_column_if_missing(cur, "memories", "superseded_by", "VARCHAR(128)")
 
 
+def _m6_agent_run_traces_sqlite(cur: Any) -> None:
+    """v6: Tenant-scoped run summaries and metadata-only event history (SQLite)."""
+    cur.execute(
+        """
+        CREATE TABLE IF NOT EXISTS agent_runs (
+            tenant_id TEXT NOT NULL,
+            run_id TEXT NOT NULL,
+            schema_version INTEGER NOT NULL DEFAULT 1,
+            status TEXT NOT NULL DEFAULT 'created',
+            started_at REAL NOT NULL,
+            created_at REAL NOT NULL,
+            updated_at REAL NOT NULL,
+            event_count INTEGER NOT NULL DEFAULT 0,
+            PRIMARY KEY (tenant_id, run_id)
+        );
+        """
+    )
+    cur.execute(
+        """
+        CREATE TABLE IF NOT EXISTS agent_run_events (
+            tenant_id TEXT NOT NULL,
+            run_id TEXT NOT NULL,
+            sequence_number INTEGER NOT NULL,
+            event_id TEXT NOT NULL,
+            schema_version INTEGER NOT NULL DEFAULT 1,
+            event_type TEXT NOT NULL,
+            timestamp REAL NOT NULL,
+            run_status TEXT NOT NULL,
+            step_index INTEGER,
+            tool_call_index INTEGER,
+            tool_name TEXT,
+            tool_fingerprint VARCHAR(64),
+            reason VARCHAR(128),
+            error_type VARCHAR(128),
+            metadata_json TEXT NOT NULL DEFAULT '{}',
+            recorded_at REAL NOT NULL,
+            PRIMARY KEY (tenant_id, run_id, sequence_number),
+            UNIQUE (tenant_id, run_id, event_id),
+            FOREIGN KEY (tenant_id, run_id)
+                REFERENCES agent_runs(tenant_id, run_id) ON DELETE CASCADE
+        );
+        """
+    )
+    cur.execute(
+        "CREATE INDEX IF NOT EXISTS idx_agent_runs_tenant_updated "
+        "ON agent_runs(tenant_id, updated_at DESC);"
+    )
+    cur.execute(
+        "CREATE INDEX IF NOT EXISTS idx_agent_events_tenant_run "
+        "ON agent_run_events(tenant_id, run_id, sequence_number);"
+    )
+
+
+def _m6_agent_run_traces_postgres(cur: Any) -> None:
+    """v6: Tenant-scoped run summaries and event history protected by forced RLS."""
+    cur.execute(
+        """
+        CREATE TABLE IF NOT EXISTS agent_runs (
+            tenant_id VARCHAR(128) NOT NULL,
+            run_id VARCHAR(128) NOT NULL,
+            schema_version INTEGER NOT NULL DEFAULT 1,
+            status VARCHAR(32) NOT NULL DEFAULT 'created',
+            started_at DOUBLE PRECISION NOT NULL,
+            created_at DOUBLE PRECISION NOT NULL,
+            updated_at DOUBLE PRECISION NOT NULL,
+            event_count INTEGER NOT NULL DEFAULT 0,
+            PRIMARY KEY (tenant_id, run_id)
+        );
+        """
+    )
+    cur.execute(
+        """
+        CREATE TABLE IF NOT EXISTS agent_run_events (
+            tenant_id VARCHAR(128) NOT NULL,
+            run_id VARCHAR(128) NOT NULL,
+            sequence_number BIGINT NOT NULL,
+            event_id VARCHAR(128) NOT NULL,
+            schema_version INTEGER NOT NULL DEFAULT 1,
+            event_type VARCHAR(64) NOT NULL,
+            timestamp DOUBLE PRECISION NOT NULL,
+            run_status VARCHAR(32) NOT NULL,
+            step_index INTEGER,
+            tool_call_index INTEGER,
+            tool_name VARCHAR(128),
+            tool_fingerprint VARCHAR(64),
+            reason VARCHAR(128),
+            error_type VARCHAR(128),
+            metadata_json TEXT NOT NULL DEFAULT '{}',
+            recorded_at DOUBLE PRECISION NOT NULL,
+            PRIMARY KEY (tenant_id, run_id, sequence_number),
+            UNIQUE (tenant_id, run_id, event_id),
+            FOREIGN KEY (tenant_id, run_id)
+                REFERENCES agent_runs(tenant_id, run_id) ON DELETE CASCADE
+        );
+        """
+    )
+    cur.execute(
+        "CREATE INDEX IF NOT EXISTS idx_agent_runs_tenant_updated "
+        "ON agent_runs(tenant_id, updated_at DESC);"
+    )
+    cur.execute(
+        "CREATE INDEX IF NOT EXISTS idx_agent_events_tenant_run "
+        "ON agent_run_events(tenant_id, run_id, sequence_number);"
+    )
+    # RLS is the database boundary; every app query additionally supplies tenant_id.
+    for table, policy in (
+        ("agent_runs", "agent_runs_tenant_policy"),
+        ("agent_run_events", "agent_run_events_tenant_policy"),
+    ):
+        cur.execute(f"ALTER TABLE {table} ENABLE ROW LEVEL SECURITY;")
+        cur.execute(f"ALTER TABLE {table} FORCE ROW LEVEL SECURITY;")
+        cur.execute(
+            f"""
+            DO $
+            BEGIN
+                DROP POLICY IF EXISTS {policy} ON {table};
+                CREATE POLICY {policy} ON {table}
+                FOR ALL
+                USING (
+                    tenant_id = NULLIF(current_setting('app.current_tenant', true), '')
+                    AND tenant_id IS NOT NULL
+                )
+                WITH CHECK (
+                    tenant_id = NULLIF(current_setting('app.current_tenant', true), '')
+                    AND tenant_id IS NOT NULL
+                );
+            END $;
+            """
+        )
+
+
 MIGRATIONS: List[Migration] = [
     Migration(1, "embedding_metadata", _m1_embedding_metadata, _m1_embedding_metadata),
     Migration(2, "migration_ledger", _m2_migration_ledger, _m2_migration_ledger),
     Migration(3, "backfill_dimension", _m3_backfill_dimension, _m3_backfill_dimension),
     Migration(4, "content_plain_search_projection", _m4_content_plain_search_projection, _m4_content_plain_search_projection),
     Migration(5, "supersession_chain", _m5_supersession_chain, _m5_supersession_chain),
+    Migration(6, "agent_run_traces", _m6_agent_run_traces_sqlite, _m6_agent_run_traces_postgres),
 ]
 
 
