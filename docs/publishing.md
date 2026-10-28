@@ -53,7 +53,7 @@ install commands as `pip install synapse-memory-engine[...]`.
 3. Tag and push — the tag must equal `v<version>`:
 
    ```bash
-   VERSION=1.3.2
+   VERSION=1.4.0
    git tag -s "v${VERSION}"
    git push origin "v${VERSION}"
    ```
