@@ -52,6 +52,29 @@ bypass exists ONLY for a fully unconfigured local setup (not production, no
 `SYNAPSE_API_KEY`, no keys provisioned); once any auth is configured,
 anonymous requests are 403.
 
+## Agent run traces and retrieval provenance
+
+Trace endpoints use explicit scopes. The legacy admin scope does not imply agent-trace access.
+
+| Endpoint | Required scope | Behavior |
+|---|---|---|
+| POST /api/agent-runs | agent-runs:write | Create a run summary; idempotent for the same tenant/run ID |
+| POST /api/agent-runs/{run_id}/events | agent-runs:write | Append one versioned event; reusing the same event ID and payload is idempotent |
+| GET /api/agent-runs | agent-runs:read | List a bounded, tenant-scoped page of summaries |
+| GET /api/agent-runs/{run_id} | agent-runs:read | Read one run summary |
+| GET /api/agent-runs/{run_id}/events | agent-runs:read | Read chronological metadata-only events |
+| DELETE /api/agent-runs/{run_id} | agent-runs:delete | Delete the run and its events for this tenant |
+
+IDs run_id and event_id must match the pattern ^[A-Za-z0-9._:-]{1,128}$. Supported schema version is 1. Run creation accepts run_id, schema_version, and optional tenant_id/tenantId; normal principals remain bound to their key's tenant via resolve_tenant().
+
+The event contract includes event_id, run_id, schema_version, event_type, timezone-aware timestamp, and run_status, plus optional step/tool metadata, a 64-character hexadecimal argument fingerprint, a short reason/error type, and retrieval metadata. Supported event types are run.started, step.started, tool_call.started, tool_call.succeeded, tool_call.failed, tool_call.blocked, run.limit_exceeded, run.finished, and memory.retrieval.
+
+For memory.retrieval, provide a retrieval_id and up to 100 memory_evidence entries. Each entry supports memory_id, positive rank, allowlisted numeric score_components, non-negative token_cost, boolean packed, optional created_at, and optional supersedes/superseded_by IDs. The persistence layer rejects arbitrary evidence fields; prompts, queries, raw tool arguments, tool results, and memory content are not stored. Evidence is recorded only when the application explicitly instruments the retrieval pipeline; the API does not automatically attach all /query calls to a run.
+
+Event sequence numbers are assigned transactionally per run. Duplicate event IDs are accepted only when the persisted event fields match; conflicting reuse returns HTTP 409. Missing runs return 404; invalid payloads return 422; database failures return 503. Event listing defaults to 100 and caps at 500; run listing defaults to 50 and caps at 100. The API rate limiter uses a normalized run-route bucket so arbitrary run IDs do not create unlimited rate-limit entries.
+
+On PostgreSQL, agent_runs and agent_run_events have ENABLE/FORCE RLS policies tied to app.current_tenant; every SQL operation also includes an explicit tenant predicate. SQLite uses tenant predicates in every operation. Schema migration v6 creates these tables. Apply migrations before booting a least-privilege PostgreSQL runtime role.
+
 ## Telemetry (no auth)
 
 ### GET /liveness
