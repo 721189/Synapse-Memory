@@ -6,7 +6,6 @@ import hashlib
 import logging
 import threading
 from typing import List, Dict, Any, Optional, Tuple, Literal
-from datetime import datetime
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 import uvicorn
 from fastapi import FastAPI, HTTPException, status, Header, Request, Depends, Path
@@ -491,7 +490,7 @@ class AgentRunEventRequest(SynapseAPIModel):
     event_id: str = Field(..., min_length=1, max_length=128, pattern=r"^[A-Za-z0-9._:-]+$")
     run_id: str = Field(..., min_length=1, max_length=128, pattern=r"^[A-Za-z0-9._:-]+$")
     event_type: RunEventType
-    timestamp: datetime
+    timestamp: datetime.datetime
     run_status: RunStatus
     step_index: Optional[int] = Field(None, ge=1)
     tool_call_index: Optional[int] = Field(None, ge=1)
@@ -504,7 +503,7 @@ class AgentRunEventRequest(SynapseAPIModel):
 
     @field_validator("timestamp")
     @classmethod
-    def timestamp_must_be_timezone_aware(cls, value: datetime) -> datetime:
+    def timestamp_must_be_timezone_aware(cls, value: datetime.datetime) -> datetime.datetime:
         if value.tzinfo is None or value.utcoffset() is None:
             raise ValueError("timestamp must include a timezone")
         return value
