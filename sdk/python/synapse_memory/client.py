@@ -7,6 +7,7 @@ retryable (429/5xx) failures, and the canonical {success, data} envelope.
 from __future__ import annotations
 
 import time
+import re
 from email.utils import parsedate_to_datetime
 from datetime import datetime, timezone
 from dataclasses import dataclass
@@ -196,14 +197,16 @@ class SynapseClient:
 
     def create_agent_run(self, run_id: str) -> Dict[str, Any]:
         """Create (idempotently) a tenant-bound persistent run trace."""
-        if not isinstance(run_id, str) or not run_id or len(run_id) > 128:
-            raise ValueError("run_id must be a non-empty string of at most 128 characters")
+        if not isinstance(run_id, str) or not re.fullmatch(r"[A-Za-z0-9._:-]{1,128}", run_id):
+            raise ValueError("run_id must match [A-Za-z0-9._:-] and be 1–128 characters")
         return self._request(
             "POST", "/api/agent-runs", {"run_id": run_id, "schema_version": 1}, retry_safe=True
         )
 
     def append_agent_run_event(self, run_id: str, event: Any) -> Dict[str, Any]:
         """Append one versioned event. Stable event IDs make retry safe."""
+        if not isinstance(run_id, str) or not re.fullmatch(r"[A-Za-z0-9._:-]{1,128}", run_id):
+            raise ValueError("run_id must match [A-Za-z0-9._:-] and be 1–128 characters")
         if hasattr(event, "to_dict") and callable(event.to_dict):
             payload = event.to_dict()
         elif isinstance(event, dict):
