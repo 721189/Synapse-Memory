@@ -105,7 +105,7 @@ class RunTraceStore:
             raise ValueError("tenant_id must match [A-Za-z0-9_.-] and be 1–128 characters")
         return tenant_id
 
-    def _validate_id(self, value: str, field_name: str) -> str:
+    def _validate_id(self, value: Any, field_name: str) -> str:
         if not isinstance(value, str) or not _ID_RE.fullmatch(value):
             raise ValueError(f"{field_name} must match [A-Za-z0-9._:-] and be 1–128 characters")
         return value
