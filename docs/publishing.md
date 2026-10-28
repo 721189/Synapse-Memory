@@ -44,9 +44,14 @@ install commands as `pip install synapse-memory-engine[...]`.
 
 ## Release procedure
 
-1. Bump the version in lockstep (see the compatibility matrix in the root
-   `README.md`): `sdk/python/pyproject.toml`, `sdk/python/setup.py`,
-   `sdk/python/synapse_memory/__init__.py`, and root `pyproject.toml`.
+1. Bump the **SDK** version in lockstep: `sdk/python/pyproject.toml`,
+   `sdk/python/setup.py`, `sdk/python/synapse_memory/__init__.py`,
+   `sdk/python/synapse_memory/client.py` (`SDK_VERSION`),
+   `sdk/python/synapse_memory/api/fastapi_server.py` (OpenAPI version),
+   root `pyproject.toml`, the source-version summary in `README.md`, and
+   `CHANGELOG.md`. The SDK version is checked independently from
+   `package.json` and deployment image tags: publishing to PyPI does **not**
+   publish or retag the engine/gateway container images.
 2. Update `CHANGELOG.md`; merge to `main`; wait for the full CI matrix, the
    3072-dimensional pgvector integration test, and deployment smoke test to pass.
    Do not tag a release from a commit whose deployment checks are failing.
