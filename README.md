@@ -54,7 +54,7 @@ Database-level tenant isolation (PostgreSQL RLS) Â· Fail-closed paths are cove
 
 ## 1. Executive Summary
 
-**Synapse Memory** (v1.3.1) is a persistent, encrypted, multi-tenant memory layer that solves the
+**Synapse Memory** (v1.4.0) is a persistent, encrypted, multi-tenant memory layer that solves the
 statelessness of LLM APIs. It ingests text, embeds it, deduplicates it, stores it encrypted, and later
 returns **only the most relevant context that fits a finite token budget** â€” fused across lexical and
 dense retrieval, decayed by recency and usage, and packed by dynamic programming instead of naive
@@ -62,8 +62,8 @@ truncation.
 
 | | |
 |---|---|
-| **Status** | Python SDK v1.3.1 is published on PyPI after the release workflow's build, metadata, install, and trusted-publishing checks passed. This is not independent production sign-off: workload-specific validation, an independent security review, and customer usage remain outstanding. |
-| **Surfaces** | HTTP engine (FastAPI, `:8008`) Â· Node gateway + React dashboard (`:3000`) Â· Python SDK (`synapse-memory-engine` 1.3.1; [published on PyPI](https://pypi.org/project/synapse-memory-engine/1.3.1/)) |
+| **Status** | Source targets SDK v1.4.0; PyPI publication is a separate signed-tag workflow. Passing CI is not independent production sign-off: workload-specific validation, an independent security review, and customer usage remain outstanding. |
+| **Surfaces** | HTTP engine (FastAPI, `:8008`) · Node gateway + React dashboard (`:3000`) · Python SDK source (`synapse-memory-engine` 1.4.0; published availability follows the release workflow) |
 | **Storage** | PostgreSQL 16 + pgvector HNSW (production) Â· SQLite (single-node dev) â€” both with Fernet field encryption |
 | **Integrations** | LangChain Â· LlamaIndex Â· raw HTTP (any language) |
 | **Deployment** | Docker Compose (4 services) Â· Kubernetes Helm chart (split engine/gateway + HPA) Â· bare `uvicorn` |
@@ -334,7 +334,7 @@ source .venv/bin/activate
 # Windows PowerShell: .venv\Scripts\Activate.ps1
 
 python -m pip install --upgrade pip
-python -m pip install synapse-memory-engine==1.3.1
+python -m pip install synapse-memory-engine
 ```
 
 Start the engine in terminal 1:
@@ -570,11 +570,11 @@ python scripts/provision_db_roles.py --verify-only   # must exit 0
 
 | Component | Version | Notes |
 |---|---|---|
-| Python SDK (`synapse-memory-engine`) | **1.3.1 published** | `SynapseClient`, `__version__ = "1.3.1"`; [PyPI package](https://pypi.org/project/synapse-memory-engine/1.3.1/) |
+| Python SDK (`synapse-memory-engine`) | **1.4.0 source candidate** | `SynapseClient`, `__version__ = "1.4.0"`; PyPI publication requires the signed-tag release workflow |
 | HTTP API compat | **v1** | canonical `{success, data, request_id}` envelope; `/api/*` aliases stable |
-| Engine / gateway images | **1.3.1 source version** | Confirm image build and deployment tags separately; PyPI publication does not publish container images |
+| Engine / gateway images | **v1.3.1 default image tags** | PyPI publication does not publish container images; Helm defaults remain pinned to the last image tag |
 | Helm chart | **0.3.0** (app 1.3.1) | chart version â‰  app version; see `Chart.yaml` |
-| Schema | **v4 ledger** | forward-only; v4 adds `content_plain` |
+| Schema | **v6 ledger** | forward-only; v6 adds tenant-scoped agent run traces and events |
 | Python | 3.10 / 3.11 / 3.12 | CI-tested matrix |
 | Node.js | â‰¥ 20.19 (20.x, 22.x in CI) | gateway build matrix |
 | PostgreSQL | 16 + pgvector â‰¥ 0.2 | HNSW index, `tsvector`, RLS |

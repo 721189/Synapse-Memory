@@ -25,7 +25,7 @@ from synapse_memory.runtime import (
     RepeatedToolCallError,
 )
 
-__version__ = "1.3.1"
+__version__ = "1.4.0"
 __api_compat_version__ = "v1"
 
 __all__ = [

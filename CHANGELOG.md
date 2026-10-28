@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+## 1.4.0 — prepared 2026-10-29
+
+- **Persistent agent-run traces:** add schema migration v6, SQLite/PostgreSQL persistence, chronological event sequencing, idempotent uploads, and authenticated run/event APIs.
+- **Tenant isolation and least privilege:** enforce PostgreSQL RLS for trace tables, keep trace scopes separate from memory/admin scopes, and verify post-migration runtime grants.
+- **Retrieval evidence:** persist allowlisted memory IDs, ranking/score metadata, packing selection, token cost, timestamps, and supersession lineage without raw memory text or tool payloads.
+- **Bounded runtime guard:** expose opt-in step/tool budgets, cooperative deadlines, repeated-failure detection, typed stop states, and privacy-minimized run events.
+- **Validation and operations:** add regression and PostgreSQL RLS integration coverage plus API, SDK, migration, provisioning, and runbook documentation.
+
 ## 1.3.1 — released 2026-10-27
 
 - **Embedding compatibility and release correctness:** support the shipped

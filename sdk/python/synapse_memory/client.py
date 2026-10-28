@@ -17,7 +17,7 @@ import requests
 
 __all__ = ["SynapseClient", "SynapseError", "CreateResult", "QueryResult"]
 
-SDK_VERSION = "1.3.1"
+SDK_VERSION = "1.4.0"
 API_COMPAT_VERSION = "v1"
 
 
