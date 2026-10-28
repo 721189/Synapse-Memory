@@ -115,9 +115,10 @@ class RunTraceStore:
         tenant = self._validate_tenant(tenant_id)
         if self.is_postgres and not getattr(self.backend, "is_connected", False):
             raise RunTraceError("Persistent agent traces require an available PostgreSQL connection.")
-        conn = self.backend._get_connection()
+        conn = None
         cursor = None
         try:
+            conn = self.backend._get_connection()
             if self.is_postgres:
                 cursor = conn.cursor()
                 self.backend._set_tenant_context(cursor, tenant)
@@ -128,10 +129,11 @@ class RunTraceStore:
             yield conn, cursor
             conn.commit()
         except BaseException as exc:
-            try:
-                conn.rollback()
-            except Exception:
-                pass
+            if conn is not None:
+                try:
+                    conn.rollback()
+                except Exception:
+                    pass
             if isinstance(exc, (RunTraceError, ValueError, TypeError)) or not isinstance(exc, Exception):
                 raise
             raise RunTraceError("Agent trace storage operation failed.") from exc
@@ -141,13 +143,14 @@ class RunTraceStore:
                     cursor.close()
                 except Exception:
                     pass
-            if self.is_postgres:
-                self.backend._return_connection(conn)
-            elif getattr(self.backend, "db_path", None) != ":memory:":
-                try:
-                    conn.close()
-                except Exception:
-                    pass
+            if conn is not None:
+                if self.is_postgres:
+                    self.backend._return_connection(conn)
+                elif getattr(self.backend, "db_path", None) != ":memory:":
+                    try:
+                        conn.close()
+                    except Exception:
+                        pass
 
     def _placeholder(self) -> str:
         return "%s" if self.is_postgres else "?"
@@ -210,7 +213,7 @@ class RunTraceStore:
             if retrieval_id is not None or evidence:
                 raise ValueError("retrieval metadata is only valid on memory.retrieval events")
             return "{}"
-        if not isinstance(retrieval_id, str) or not retrieval_id.strip() or len(retrieval_id) > 128:
+        if not isinstance(retrieval_id, str) or not _ID_RE.fullmatch(retrieval_id):
             raise ValueError("memory.retrieval events require a non-empty retrieval_id")
         if not isinstance(evidence, list) or len(evidence) > 100:
             raise ValueError("memory_evidence must be a list of at most 100 records")
