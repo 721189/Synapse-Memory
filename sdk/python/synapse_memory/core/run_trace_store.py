@@ -24,6 +24,13 @@ __all__ = [
 
 _ID_RE = re.compile(r"^[A-Za-z0-9._:-]{1,128}$")
 _FINGERPRINT_RE = re.compile(r"^[a-fA-F0-9]{64}$")
+_SAFE_LABEL_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_.:-]{0,127}$")
+_ALLOWED_REASONS = {
+    "succeeded", "failed", "aborted", "limit_exceeded", "timed_out",
+    "timeout", "max_steps", "max_tool_calls", "repeated_tool_call_failures",
+    "budget_exceeded", "verification_failed", "unknown_outcome", "cancelled",
+    "manual_stop", "approval_required", "approval_granted", "approval_denied",
+}
 _TERMINAL_STATUSES = {
     RunStatus.SUCCEEDED.value,
     RunStatus.FAILED.value,
@@ -287,16 +294,23 @@ class RunTraceStore:
             if value is not None and (isinstance(value, bool) or not isinstance(value, int) or value < 1):
                 raise ValueError(f"{name} must be a positive integer when supplied")
         tool_name = event.get("tool_name")
-        if tool_name is not None and (not isinstance(tool_name, str) or not tool_name.strip() or len(tool_name) > 128):
-            raise ValueError("tool_name must be a non-empty string of at most 128 characters")
+        if tool_name is not None and (
+            not isinstance(tool_name, str) or not _SAFE_LABEL_RE.fullmatch(tool_name)
+        ):
+            raise ValueError("tool_name must be a safe identifier of at most 128 characters")
         fingerprint = event.get("tool_fingerprint")
         if fingerprint is not None and (not isinstance(fingerprint, str) or not _FINGERPRINT_RE.fullmatch(fingerprint)):
             raise ValueError("tool_fingerprint must be a 64-character hexadecimal digest")
         reason = event.get("reason")
         error_type = event.get("error_type")
-        for name, value in (("reason", reason), ("error_type", error_type)):
-            if value is not None and (not isinstance(value, str) or len(value) > 128):
-                raise ValueError(f"{name} must be at most 128 characters")
+        if reason is not None and (
+            not isinstance(reason, str) or reason not in _ALLOWED_REASONS
+        ):
+            raise ValueError("reason must be a recognized event reason code")
+        if error_type is not None and (
+            not isinstance(error_type, str) or not _SAFE_LABEL_RE.fullmatch(error_type)
+        ):
+            raise ValueError("error_type must be a safe exception type identifier")
         metadata_json = self._safe_metadata(event, event_type)
         now = time.time()
         p = self._placeholder()
