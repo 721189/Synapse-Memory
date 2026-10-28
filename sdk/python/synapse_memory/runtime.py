@@ -11,6 +11,7 @@ import hashlib
 import hmac
 import json
 import math
+import re
 import secrets
 import time
 import uuid
@@ -216,10 +217,13 @@ class SynapseRun:
     """
 
     def __init__(self, policy: Optional[RunPolicy] = None, run_id: Optional[str] = None):
-        if run_id is not None and (not isinstance(run_id, str) or not run_id.strip()):
-            raise ValueError("run_id must be a non-empty string")
+        if run_id is not None and (
+            not isinstance(run_id, str)
+            or not re.fullmatch(r"[A-Za-z0-9._:-]{1,128}", run_id)
+        ):
+            raise ValueError("run_id must match [A-Za-z0-9._:-] and be 1–128 characters")
         self.policy = policy or RunPolicy()
-        self.run_id = run_id or str(uuid.uuid4())
+        self.run_id = run_id if run_id is not None else str(uuid.uuid4())
         self._status = RunStatus.CREATED
         self._started_monotonic: Optional[float] = None
         self._steps = 0
