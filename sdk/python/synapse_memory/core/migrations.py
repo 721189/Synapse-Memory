@@ -246,25 +246,21 @@ def _m6_agent_run_traces_postgres(cur: Any) -> None:
     ):
         cur.execute(f"ALTER TABLE {table} ENABLE ROW LEVEL SECURITY;")
         cur.execute(f"ALTER TABLE {table} FORCE ROW LEVEL SECURITY;")
+        cur.execute(f"DROP POLICY IF EXISTS {policy} ON {table};")
         cur.execute(
             f"""
-            DO $
-            BEGIN
-                DROP POLICY IF EXISTS {policy} ON {table};
-                CREATE POLICY {policy} ON {table}
-                FOR ALL
-                USING (
-                    tenant_id = NULLIF(current_setting('app.current_tenant', true), '')
-                    AND tenant_id IS NOT NULL
-                )
-                WITH CHECK (
-                    tenant_id = NULLIF(current_setting('app.current_tenant', true), '')
-                    AND tenant_id IS NOT NULL
-                );
-            END $;
+            CREATE POLICY {policy} ON {table}
+            FOR ALL
+            USING (
+                tenant_id = NULLIF(current_setting('app.current_tenant', true), '')
+                AND tenant_id IS NOT NULL
+            )
+            WITH CHECK (
+                tenant_id = NULLIF(current_setting('app.current_tenant', true), '')
+                AND tenant_id IS NOT NULL
+            );
             """
         )
-
 
 MIGRATIONS: List[Migration] = [
     Migration(1, "embedding_metadata", _m1_embedding_metadata, _m1_embedding_metadata),
