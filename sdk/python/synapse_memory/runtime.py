@@ -18,7 +18,7 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from enum import Enum
-from typing import Any, Optional, TypeVar
+from typing import Any, Literal, Optional, TypeVar
 
 __all__ = [
     "RunPolicy",
@@ -200,7 +200,7 @@ class SynapseRun:
         self._emit(RunEventType.RUN_STARTED)
         return self
 
-    def __exit__(self, exc_type: Any, exc_value: Any, traceback: Any) -> bool:
+    def __exit__(self, exc_type: Any, exc_value: Any, traceback: Any) -> Literal[False]:
         if self._status is RunStatus.RUNNING:
             if self._deadline_passed():
                 self._mark_limit(RunStatus.TIMED_OUT, "timeout")
