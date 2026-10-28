@@ -69,6 +69,15 @@ def test_events_do_not_contain_raw_tool_arguments_or_error_message():
     failed = next(event for event in run.events if event.event_type is RunEventType.TOOL_CALL_FAILED)
     assert failed.error_type == "RuntimeError"
     assert failed.tool_fingerprint
+    # A handled tool exception does not fail the overall run; its event remains visible.
+    assert run.status is RunStatus.SUCCEEDED
+
+
+def test_uncaught_exception_marks_run_failed():
+    run = SynapseRun()
+    with pytest.raises(RuntimeError, match="run failed"):
+        with run:
+            raise RuntimeError("run failed")
     assert run.status is RunStatus.FAILED
 
 
