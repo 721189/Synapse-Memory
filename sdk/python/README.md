@@ -10,6 +10,7 @@ Python distribution for the Synapse Memory engine. The distribution name is `syn
 - **Semantic Deduplication**: Dual lexical Jaccard and dense cosine similarity detection to prevent node fragmentation.
 - **Hybrid Retrieval**: BM25 sparse lexical ranking fused with dense vector embeddings via Reciprocal Rank Fusion (RRF).
 - **Framework Integrations**: True drop-in adapters for LangChain (`BaseMemory`) and LlamaIndex (`BaseMemory`).
+- **Opt-in agent run guard**: Bounded steps/tool calls, cooperative deadlines, repeated-failure blocking, and privacy-minimized in-memory events.
 
 ## Installation
 
@@ -37,6 +38,36 @@ with SynapseClient(
 ```
 
 The client automatically retries idempotent `GET`/`HEAD`/`OPTIONS` requests and honours `Retry-After`. It does not automatically replay `POST` requests (including `/query`, which updates access metadata) after an ambiguous failure; callers should reconcile the operation before manually retrying, or provide their own idempotency mechanism.
+
+## Opt-in Python run guard
+
+The runtime only guards tool calls explicitly routed through `SynapseRun`; it does not intercept arbitrary framework calls. Events stay in memory until the application exports or persists them. Event records contain tool names and keyed argument fingerprints, not raw arguments, prompts, tool results, or exception messages.
+
+```python
+from synapse_memory import RunPolicy, SynapseRun
+
+policy = RunPolicy(
+    max_steps=12,
+    max_tool_calls=8,
+    timeout_seconds=30,
+    max_repeated_failures=2,
+)
+
+with SynapseRun(policy=policy) as run:
+    customer = run.call_tool(
+        "lookup_customer",
+        {"customer_id": "cust_123"},
+        lookup_customer,  # callable accepts arguments as keyword arguments
+    )
+    run.record_step()  # account for non-tool work
+    print(customer)
+
+# Inspect metadata-only events after the context exits.
+for event in run.events:
+    print(event.event_type.value, event.reason, event.tool_fingerprint)
+```
+
+Limits are checked before admitting each step/tool call. The deadline is cooperative: a synchronous tool already in progress cannot be forcibly interrupted. A run guard is not a sandbox, does not authorize tools, does not intercept unwrapped calls, and does not persist traces or enforce provider token/cost budgets. Repeated-call blocking applies after the configured number of consecutive failures for the same tool and equivalent JSON arguments; a successful call resets that failure count. No automatic retries are performed.
 
 ## Testing
 
