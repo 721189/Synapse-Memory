@@ -9,6 +9,20 @@ from synapse_memory.core.decay_engine import DecayEngine
 from synapse_memory.integrations.langchain import SynapseLangChainMemory
 from synapse_memory.integrations.llamaindex import SynapseLlamaIndexMemory
 from synapse_memory.client import SynapseClient, SynapseError, CreateResult, QueryResult
+from synapse_memory.runtime import (
+    RunPolicy,
+    RunStatus,
+    RunEventType,
+    RunEvent,
+    SynapseRun,
+    RunGuardError,
+    RunStateError,
+    RunLimitExceeded,
+    RunStepLimitExceeded,
+    RunToolCallLimitExceeded,
+    RunDeadlineExceeded,
+    RepeatedToolCallError,
+)
 
 __version__ = "1.3.1"
 __api_compat_version__ = "v1"
@@ -28,4 +42,16 @@ __all__ = [
     "SynapseError",
     "CreateResult",
     "QueryResult",
+    "RunPolicy",
+    "RunStatus",
+    "RunEventType",
+    "RunEvent",
+    "SynapseRun",
+    "RunGuardError",
+    "RunStateError",
+    "RunLimitExceeded",
+    "RunStepLimitExceeded",
+    "RunToolCallLimitExceeded",
+    "RunDeadlineExceeded",
+    "RepeatedToolCallError",
 ]
