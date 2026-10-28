@@ -62,6 +62,25 @@ class TestMigrations(unittest.TestCase):
         self.assertIn("embedding_dimension", cols)
         self.assertIn("model_version", cols)
 
+        conn = self._get_conn()
+        try:
+            tables = {
+                row[0] for row in conn.execute(
+                    "SELECT name FROM sqlite_master WHERE type='table'"
+                ).fetchall()
+            }
+            self.assertIn("agent_runs", tables)
+            self.assertIn("agent_run_events", tables)
+            run_columns = {row[1] for row in conn.execute("PRAGMA table_info(agent_runs)").fetchall()}
+            event_columns = {row[1] for row in conn.execute("PRAGMA table_info(agent_run_events)").fetchall()}
+            self.assertTrue({"tenant_id", "run_id", "schema_version", "status", "event_count"} <= run_columns)
+            self.assertTrue({
+                "tenant_id", "run_id", "sequence_number", "event_id",
+                "event_type", "timestamp", "metadata_json",
+            } <= event_columns)
+        finally:
+            conn.close()
+
         # Ledger table exists with all versions recorded.
         conn = self._get_conn()
         try:
