@@ -10,7 +10,9 @@ from synapse_memory.core.run_trace_store import (
     RunTraceStore,
 )
 from synapse_memory.core.sqlite_db import SQLiteMemoryStore
-from synapse_memory.runtime import RunEventType, RunPolicy, RunStatus, SynapseRun
+from synapse_memory.runtime import (
+    RunEventType, RunPolicy, RunStatus, RunToolCallLimitExceeded, SynapseRun,
+)
 
 
 class TestRunTraceStore(unittest.TestCase):
@@ -151,6 +153,41 @@ class TestRunTraceStore(unittest.TestCase):
         event["memory_evidence"][0]["content"] = "must not be stored"
         with self.assertRaises(ValueError):
             self.traces.append_event("tenant-alpha", run.run_id, event)
+
+    def test_tool_call_limit_events_persist_until_terminal_finish(self):
+        run = SynapseRun(
+            run_id="trace-limit-events",
+            policy=RunPolicy(max_tool_calls=1),
+        )
+        with run:
+            run.call_tool("first_tool", {}, lambda: "ok")
+            with self.assertRaises(RunToolCallLimitExceeded):
+                run.call_tool("blocked_tool", {}, lambda: "must-not-run")
+
+        self.assertEqual(run.status, RunStatus.LIMIT_EXCEEDED)
+        self._persist("tenant-alpha", run)
+        events = self.traces.list_events("tenant-alpha", run.run_id)
+        types = [event["event_type"] for event in events]
+        self.assertIn(RunEventType.TOOL_CALL_BLOCKED.value, types)
+        self.assertIn(RunEventType.LIMIT_EXCEEDED.value, types)
+        self.assertEqual(types[-1], RunEventType.RUN_FINISHED.value)
+        self.assertEqual(self.traces.get_run("tenant-alpha", run.run_id)["status"], "limit_exceeded")
+
+    def test_duplicate_retrieval_event_with_changed_evidence_is_conflict(self):
+        run = self._completed_run("trace-evidence-conflict")
+        self.traces.create_run("tenant-alpha", run.run_id)
+        retrieval = next(
+            event.to_dict()
+            for event in run.events
+            if event.event_type is RunEventType.MEMORY_RETRIEVAL
+        )
+        self.traces.append_event("tenant-alpha", run.run_id, run.events[0].to_dict())
+        self.traces.append_event("tenant-alpha", run.run_id, retrieval)
+        changed = dict(retrieval)
+        changed["memory_evidence"] = [dict(item) for item in retrieval["memory_evidence"]]
+        changed["memory_evidence"][0]["score_components"] = {"relevance_score": 0.01}
+        with self.assertRaises(RunConflictError):
+            self.traces.append_event("tenant-alpha", run.run_id, changed)
 
     def test_delete_removes_run_and_events(self):
         run = self._completed_run("trace-delete")
