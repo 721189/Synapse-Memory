@@ -1,23 +1,29 @@
 #!/usr/bin/env python3
-"""Fail when release versions drift across the repository (P1).
+"""Fail when SDK release metadata or deployment image metadata drifts.
 
-Checked surfaces:
+The Python SDK is published to PyPI independently from the Node gateway and
+container images. These groups are checked internally, but they need not share
+a version because the PyPI trusted-publisher workflow does not publish images.
+
+SDK surfaces:
   * sdk/python/pyproject.toml            -> project.version
   * sdk/python/synapse_memory/__init__.py -> __version__
-  * sdk/python/synapse_memory/client.py   -> SDK_VERSION
+  * sdk/python/synapse_memory/client.py  -> SDK_VERSION
   * sdk/python/synapse_memory/api/fastapi_server.py -> OpenAPI version
-  * sdk/python/setup.py                   -> legacy version metadata
-  * pyproject.toml (root)                -> project.version
-  * package.json / package-lock.json     -> version
-  * README.md                            -> version badge
-  * deploy/helm-chart/Chart.yaml         -> appVersion
-  * deploy/docker-compose.yml            -> GATEWAY_VERSION fallback
+  * sdk/python/setup.py                  -> legacy SDK metadata
+  * pyproject.toml (root)                -> workspace version
+  * README.md                            -> source version in executive summary
+  * CHANGELOG.md                         -> heading for the current SDK version
+
+Gateway/deployment surfaces:
+  * package.json / package-lock.json     -> gateway version
+  * deploy/helm-chart/Chart.yaml         -> default image appVersion
+  * deploy/docker-compose.yml            -> default image tag
   * deploy/.env.example                  -> GATEWAY_VERSION
-  * deploy/helm-chart/values.yaml        -> image tags
-  * CHANGELOG.md                          -> released state for this version
+  * deploy/helm-chart/values.yaml        -> default image tags
 
 Usage: python scripts/check_version_consistency.py
-Exit code 1 on any drift, with one line per mismatch.
+Exit code 1 if either group contains version drift.
 """
 import json
 import re
