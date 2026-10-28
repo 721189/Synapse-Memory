@@ -327,7 +327,8 @@ class RunTraceStore:
             if int(run_row["schema_version"]) != schema_version:
                 raise RunConflictError("event schema version does not match the run.")
             cur.execute(
-                f"SELECT sequence_number, event_type, timestamp, run_status, tool_fingerprint "
+                f"SELECT sequence_number, event_type, timestamp, run_status, tool_fingerprint, tool_name, "
+                f"step_index, tool_call_index, reason, error_type, metadata_json "
                 f"FROM agent_run_events WHERE tenant_id = {p} AND run_id = {p} AND event_id = {p}",
                 (tenant, run, event_id),
             )
@@ -339,6 +340,12 @@ class RunTraceStore:
                     and duplicate["run_status"] == status
                     and math.isclose(float(duplicate["timestamp"]), timestamp, abs_tol=0.000001)
                     and duplicate["tool_fingerprint"] == fingerprint
+                    and duplicate["tool_name"] == tool_name
+                    and duplicate["step_index"] == step_index
+                    and duplicate["tool_call_index"] == tool_call_index
+                    and duplicate["reason"] == reason
+                    and duplicate["error_type"] == error_type
+                    and (duplicate["metadata_json"] or "{}") == metadata_json
                 )
                 if not same:
                     raise RunConflictError("event_id has already been used for different event data.")
