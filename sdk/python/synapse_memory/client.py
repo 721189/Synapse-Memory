@@ -194,7 +194,6 @@ class SynapseClient:
     def feedback(self, memory_id: str, feedback_type: str) -> Dict[str, Any]:
         return self._request("POST", "/feedback", {"memory_id": memory_id, "feedback_type": feedback_type})
 
-
     def create_agent_run(self, run_id: str) -> Dict[str, Any]:
         """Create (idempotently) a tenant-bound persistent run trace."""
         if not isinstance(run_id, str) or not re.fullmatch(r"[A-Za-z0-9._:-]{1,128}", run_id):
