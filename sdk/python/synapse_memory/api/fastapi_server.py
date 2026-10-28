@@ -498,7 +498,7 @@ class AgentRunEventRequest(SynapseAPIModel):
     tool_fingerprint: Optional[str] = Field(None, pattern=r"^[a-fA-F0-9]{64}$")
     reason: Optional[str] = Field(None, min_length=1, max_length=128, pattern=r"^[a-z][a-z0-9_]*$")
     error_type: Optional[str] = Field(None, min_length=1, max_length=128, pattern=r"^[A-Za-z][A-Za-z0-9_.:-]*$")
-    retrieval_id: Optional[str] = Field(None, min_length=1, max_length=128)
+    retrieval_id: Optional[str] = Field(None, min_length=1, max_length=128, pattern=r"^[A-Za-z0-9._:-]+$")
     memory_evidence: List[MemoryEvidenceRequest] = Field(default_factory=list, max_length=100)
 
     @field_validator("timestamp")
