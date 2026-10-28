@@ -357,12 +357,18 @@ class RunTraceStore:
 
             current_status = run_row["status"]
             current_count = int(run_row["event_count"])
-            if current_status in _TERMINAL_STATUSES:
-                if not (
-                    event_type == RunEventType.RUN_FINISHED.value
-                    and status == current_status
-                ):
-                    raise RunConflictError("run is terminal; no further events may be appended.")
+            last_event_type = None
+            if current_count:
+                cur.execute(
+                    f"SELECT event_type FROM agent_run_events "
+                    f"WHERE tenant_id = {p} AND run_id = {p} ORDER BY sequence_number DESC LIMIT 1",
+                    (tenant, run),
+                )
+                last_event_row = cur.fetchone()
+                if last_event_row is not None:
+                    last_event = _as_dict(cur, last_event_row)
+                    last_event_type = last_event["event_type"]
+
             if current_count == 0 and event_type != RunEventType.RUN_STARTED.value:
                 raise RunConflictError("the first run event must be run.started.")
             if current_count > 0 and event_type == RunEventType.RUN_STARTED.value:
@@ -371,6 +377,41 @@ class RunTraceStore:
                 raise RunConflictError("run.started must have run_status=running.")
             if event_type == RunEventType.RUN_FINISHED.value and status not in _TERMINAL_STATUSES:
                 raise RunConflictError("run.finished must have a terminal run_status.")
+
+            # Match the runtime's explicit lifecycle: ordinary work stays running;
+            # only stop notifications may switch to a terminal state before finish.
+            if event_type == RunEventType.TOOL_CALL_BLOCKED.value and status != RunStatus.LIMIT_EXCEEDED.value:
+                raise RunConflictError("tool_call.blocked must have run_status=limit_exceeded.")
+            if event_type == RunEventType.RUN_LIMIT_EXCEEDED.value and status not in {
+                RunStatus.LIMIT_EXCEEDED.value, RunStatus.TIMED_OUT.value
+            }:
+                raise RunConflictError("run.limit_exceeded must have a limit terminal status.")
+            if event_type not in {
+                RunEventType.RUN_STARTED.value,
+                RunEventType.RUN_FINISHED.value,
+                RunEventType.TOOL_CALL_BLOCKED.value,
+                RunEventType.RUN_LIMIT_EXCEEDED.value,
+            } and status != RunStatus.RUNNING.value:
+                raise RunConflictError("non-terminal work events must have run_status=running.")
+
+            if current_status in _TERMINAL_STATUSES:
+                allow_limit_followup = (
+                    current_status == RunStatus.LIMIT_EXCEEDED.value
+                    and last_event_type == RunEventType.TOOL_CALL_BLOCKED.value
+                    and event_type == RunEventType.RUN_LIMIT_EXCEEDED.value
+                    and status == current_status
+                )
+                allow_finish = (
+                    event_type == RunEventType.RUN_FINISHED.value
+                    and status == current_status
+                    and last_event_type != RunEventType.RUN_FINISHED.value
+                )
+                if not (allow_limit_followup or allow_finish):
+                    raise RunConflictError("run is terminal; no further events may be appended.")
+            elif event_type == RunEventType.RUN_LIMIT_EXCEEDED.value and status not in {
+                RunStatus.LIMIT_EXCEEDED.value, RunStatus.TIMED_OUT.value
+            }:
+                raise RunConflictError("invalid run limit status.")
 
             next_sequence = current_count + 1
             cur.execute(
