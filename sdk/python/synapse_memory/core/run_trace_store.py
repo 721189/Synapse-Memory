@@ -119,12 +119,14 @@ class RunTraceStore:
                 cursor = conn.cursor()
             yield conn, cursor
             conn.commit()
-        except BaseException:
+        except BaseException as exc:
             try:
                 conn.rollback()
             except Exception:
                 pass
-            raise
+            if isinstance(exc, (RunTraceError, ValueError, TypeError)) or not isinstance(exc, Exception):
+                raise
+            raise RunTraceError("Agent trace storage operation failed.") from exc
         finally:
             if cursor is not None:
                 try:
