@@ -400,7 +400,7 @@ class RunTraceStore:
             # only stop notifications may switch to a terminal state before finish.
             if event_type == RunEventType.TOOL_CALL_BLOCKED.value and status != RunStatus.LIMIT_EXCEEDED.value:
                 raise RunConflictError("tool_call.blocked must have run_status=limit_exceeded.")
-            if event_type == RunEventType.RUN_LIMIT_EXCEEDED.value and status not in {
+            if event_type == RunEventType.LIMIT_EXCEEDED.value and status not in {
                 RunStatus.LIMIT_EXCEEDED.value, RunStatus.TIMED_OUT.value
             }:
                 raise RunConflictError("run.limit_exceeded must have a limit terminal status.")
@@ -408,7 +408,7 @@ class RunTraceStore:
                 RunEventType.RUN_STARTED.value,
                 RunEventType.RUN_FINISHED.value,
                 RunEventType.TOOL_CALL_BLOCKED.value,
-                RunEventType.RUN_LIMIT_EXCEEDED.value,
+                RunEventType.LIMIT_EXCEEDED.value,
             } and status != RunStatus.RUNNING.value:
                 raise RunConflictError("non-terminal work events must have run_status=running.")
 
@@ -416,7 +416,7 @@ class RunTraceStore:
                 allow_limit_followup = (
                     current_status == RunStatus.LIMIT_EXCEEDED.value
                     and last_event_type == RunEventType.TOOL_CALL_BLOCKED.value
-                    and event_type == RunEventType.RUN_LIMIT_EXCEEDED.value
+                    and event_type == RunEventType.LIMIT_EXCEEDED.value
                     and status == current_status
                 )
                 allow_finish = (
@@ -426,7 +426,7 @@ class RunTraceStore:
                 )
                 if not (allow_limit_followup or allow_finish):
                     raise RunConflictError("run is terminal; no further events may be appended.")
-            elif event_type == RunEventType.RUN_LIMIT_EXCEEDED.value and status not in {
+            elif event_type == RunEventType.LIMIT_EXCEEDED.value and status not in {
                 RunStatus.LIMIT_EXCEEDED.value, RunStatus.TIMED_OUT.value
             }:
                 raise RunConflictError("invalid run limit status.")
