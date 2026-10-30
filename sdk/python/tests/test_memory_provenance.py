@@ -50,6 +50,26 @@ class TestMemoryProvenance(unittest.TestCase):
         self.assertIsNone(memory["supersession_reason"])
         self.assertIsNone(memory["retracted_at"])
 
+    def test_supersession_reason_is_a_controlled_code(self):
+        old_id, _, _ = self.manager.ingest_with_deduplication(
+            content="The release window is Tuesday",
+            category="fact",
+            tenant_id="provenance-test",
+            confidence=0.95,
+        )
+        new_id, status, _ = self.manager.ingest_with_deduplication(
+            content="The release window is Tuesday",
+            category="fact",
+            tenant_id="provenance-test",
+            confidence=0.95,
+        )
+        self.assertEqual(status, "MERGED")
+        old_memory = self.store.get_memory_by_id(old_id, tenant_id="provenance-test")
+        new_memory = self.store.get_memory_by_id(new_id, tenant_id="provenance-test")
+        self.assertEqual(old_memory["superseded_by"], new_id)
+        self.assertEqual(new_memory["supersedes"], old_id)
+        self.assertEqual(new_memory["supersession_reason"], "similarity_threshold_merge")
+
     def test_legacy_call_gets_explicit_unknown_provenance(self):
         memory_id, _, _ = self.manager.ingest_with_deduplication(
             content="Legacy caller did not provide provenance",
