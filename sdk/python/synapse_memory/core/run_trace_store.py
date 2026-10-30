@@ -212,9 +212,14 @@ class RunTraceStore:
     def _safe_metadata(self, event: Mapping[str, Any], event_type: str) -> str:
         retrieval_id = event.get("retrieval_id")
         retrieval_as_of = event.get("retrieval_as_of")
+        protected_count = event.get("protected_constraints_count")
+        protected_token_cost = event.get("protected_constraints_token_cost")
         evidence = event.get("memory_evidence") or []
         if event_type != RunEventType.MEMORY_RETRIEVAL.value:
-            if retrieval_id is not None or retrieval_as_of is not None or evidence:
+            if (
+                retrieval_id is not None or retrieval_as_of is not None or evidence
+                or protected_count is not None or protected_token_cost is not None
+            ):
                 raise ValueError("retrieval metadata is only valid on memory.retrieval events")
             return "{}"
         if retrieval_as_of is not None and (
@@ -226,6 +231,20 @@ class RunTraceStore:
             raise ValueError("retrieval_as_of must be a finite non-negative timestamp")
         if not isinstance(retrieval_id, str) or not _ID_RE.fullmatch(retrieval_id):
             raise ValueError("memory.retrieval events require a non-empty retrieval_id")
+        if (protected_count is None) != (protected_token_cost is None):
+            raise ValueError("protected constraint count and token cost must be supplied together")
+        if protected_count is not None and (
+            isinstance(protected_count, bool)
+            or not isinstance(protected_count, int)
+            or not 0 <= protected_count <= 8
+        ):
+            raise ValueError("protected_constraints_count must be an integer between 0 and 8")
+        if protected_token_cost is not None and (
+            isinstance(protected_token_cost, bool)
+            or not isinstance(protected_token_cost, int)
+            or not 0 <= protected_token_cost <= 8000
+        ):
+            raise ValueError("protected_constraints_token_cost must be an integer between 0 and 8000")
         if not isinstance(evidence, list) or len(evidence) > 100:
             raise ValueError("memory_evidence must be a list of at most 100 records")
         safe_evidence: List[Dict[str, Any]] = []
@@ -312,6 +331,9 @@ class RunTraceStore:
         }
         if retrieval_as_of is not None:
             metadata_object["retrieval_as_of"] = float(retrieval_as_of)
+        if protected_count is not None:
+            metadata_object["protected_constraints_count"] = protected_count
+            metadata_object["protected_constraints_token_cost"] = protected_token_cost
         metadata = json.dumps(
             metadata_object,
             ensure_ascii=False, sort_keys=True, separators=(",", ":"), allow_nan=False,
