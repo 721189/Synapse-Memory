@@ -1,4 +1,3 @@
-@import url('data:text/css,');
 :root {
   color-scheme: dark;
   --ink: #0a0e19;
@@ -335,7 +334,7 @@ kbd { padding: 2px 5px; border: 1px solid #cbd4db; border-radius: 4px; backgroun
 .feedback-prompt-card div { display: flex; flex-direction: column; gap: 1px; }
 .feedback-prompt-card b { color: #293749; font-size: 10px; }
 .feedback-prompt-card small { color: #88939e; font-size: 8px; }
-.feedback-form { padding: 28px; border: 1px solid #dce4e8; border-radius: 16px; background: #fff; box-shadow: 0 15px 40px rgba(22,43,58,.045); }
+.feedback-form { color-scheme: light; padding: 28px; border: 1px solid #dce4e8; border-radius: 16px; background: #fff; box-shadow: 0 15px 40px rgba(22,43,58,.045); }
 .form-topline { display: flex; justify-content: space-between; gap: 15px; align-items: center; padding-bottom: 19px; margin-bottom: 17px; border-bottom: 1px solid #e3e9ec; }
 .form-topline h2 { color: #1a2738; font-size: 22px; letter-spacing: -.04em; margin: 6px 0 0; }
 .optional-label { color: #8c98a4; font-size: 7px; font-weight: 800; letter-spacing: .13em; }
