@@ -115,7 +115,6 @@ PYTHONPATH=sdk/python pytest sdk/python/tests -v
 
 Database-gated tests require a disposable PostgreSQL/pgvector database and explicitly documented environment flags. Passing the offline suite alone is not production verification.
 
-**Licence:** proprietary. Installation does not grant unrestricted usage or deployment rights; obtain written permission under [`../../LICENSE`](../../LICENSE) before using this package outside the permissions granted by the copyright holder.
 
 ## License
 
