@@ -122,4 +122,4 @@ npm ci && npm run lint && npm run build
 
 ## License
 
-Proprietary — see [LICENSE](../LICENSE).
+Apache License 2.0 — see [LICENSE](../LICENSE) and the [open-core licensing policy](licensing.md).
