@@ -177,7 +177,14 @@ class MemoryManager:
                 "model_version": getattr(self.embedder, "model_name", "unknown"),
                 "supersedes": match_id,
                 "superseded_by": None,
-                **{**provenance, "supersession_reason": result.reason},
+                **{
+                    **provenance,
+                    "supersession_reason": (
+                        "higher_confidence_supersession"
+                        if result.reason == "Higher confidence supersession"
+                        else "similarity_threshold_merge"
+                    ),
+                },
             }
             self.store.insert_memory(new_node)
 
