@@ -31,8 +31,13 @@ memory_id, status, token_cost = manager.ingest_with_deduplication(
 ```
 
 The trust value is an assertion made by the caller, not a cryptographic or
-independent verification result. Do not put prompts, raw document text, names,
-email addresses, credentials, or other sensitive content in `source_id`.
+independent verification result. At the HTTP API boundary, ordinary
+`memories:write` credentials may set only `unverified` or `low`; assigning
+`medium`, `high`, or `authoritative` requires the separate `memories:trust`
+scope. The legacy `admin` scope does not imply trust elevation. User/tool text
+cannot promote its own provenance by containing instructions that claim
+authority. Do not put prompts, raw document text, names, email addresses,
+credentials, or other sensitive content in `source_id`.
 
 ## Compatibility and current limits
 
