@@ -452,11 +452,6 @@ class SynapseRun:
             or delay < 0
         ):
             raise ValueError("retry_delay_seconds must be a finite non-negative number")
-        if delay > min(30.0, self.policy.timeout_seconds):
-            raise ValueError(
-                "retry_delay_seconds cannot exceed 30 seconds or the run timeout budget"
-            )
-
         for attempt in range(1, attempts + 1):
             try:
                 return self._call_tool(tool_name, arguments, tool)
