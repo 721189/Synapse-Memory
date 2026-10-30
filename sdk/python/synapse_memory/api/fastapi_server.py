@@ -21,7 +21,7 @@ from synapse_memory.core.sqlite_db import SQLiteMemoryStore
 from synapse_memory.core.pgvector_db import PGVectorMemoryStore
 from synapse_memory.core.embedder import SynapseEmbedder
 from synapse_memory.core.memory_manager import (
-    DEFAULT_MAX_RECORD_LIMIT, MemoryManager, estimate_token_cost,
+    DEFAULT_MAX_RECORD_LIMIT, MemoryManager, estimate_token_cost_upper_bound,
 )
 from synapse_memory.core.knapsack_packer import KnapsackPacker
 from synapse_memory.core.decay_engine import DecayEngine
@@ -854,7 +854,7 @@ def query_memory(
     # Include formatting/separator overhead in the reserved estimate so optional
     # memories cannot consume budget needed to retain the required context.
     protected_constraints_token_cost = (
-        estimate_token_cost(protected_context_block + "\n\n---\n\n")
+        estimate_token_cost_upper_bound(protected_context_block + "\n\n---\n\n")
         if protected_context_block else 0
     )
     try:
