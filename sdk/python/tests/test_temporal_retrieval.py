@@ -4,6 +4,8 @@ import unittest
 from unittest.mock import patch
 
 from synapse_memory.client import SynapseClient
+from synapse_memory.core.run_trace_store import RunTraceStore
+from synapse_memory.runtime import RunEventType, RunStatus
 from synapse_memory.core.sqlite_db import SQLiteMemoryStore
 from synapse_memory.core.temporal import is_retrieval_eligible
 
@@ -58,10 +60,13 @@ class TestPythonClientTemporalMethods(unittest.TestCase):
                 "injected_nodes": [],
                 "active_storage_backend": "sqlite",
                 "retrieval_as_of": 100.0,
+                "retrieval_id": "ret_test",
             }) as request:
-                result = client.retrieve("project deployment", as_of=100.0)
+                result = client.retrieve("project deployment", as_of=100.0, run_id="run_123")
             self.assertEqual(request.call_args.args[2]["asOf"], 100.0)
+            self.assertEqual(request.call_args.args[2]["run_id"], "run_123")
             self.assertEqual(result.retrieval_as_of, 100.0)
+            self.assertEqual(result.retrieval_id, "ret_test")
         finally:
             client.close()
 
@@ -112,6 +117,49 @@ class TestTemporalEligibility(unittest.TestCase):
             with self.assertRaises(ValueError):
                 is_retrieval_eligible({}, value)
 
+
+    def test_run_trace_persists_allowlisted_temporal_evidence_without_content(self):
+        store = SQLiteMemoryStore(db_path=":memory:")
+        traces = RunTraceStore(store)
+        traces.create_run("tenant-a", "run-temporal")
+        traces.append_event("tenant-a", "run-temporal", {
+            "event_id": "evt-start",
+            "run_id": "run-temporal",
+            "event_type": RunEventType.RUN_STARTED.value,
+            "timestamp": "2026-10-30T12:00:00Z",
+            "run_status": RunStatus.RUNNING.value,
+        })
+        traces.append_event("tenant-a", "run-temporal", {
+            "event_id": "evt-retrieval",
+            "run_id": "run-temporal",
+            "event_type": RunEventType.MEMORY_RETRIEVAL.value,
+            "timestamp": "2026-10-30T12:00:01Z",
+            "run_status": RunStatus.RUNNING.value,
+            "retrieval_id": "ret-temporal",
+            "retrieval_as_of": 100.0,
+            "memory_evidence": [{
+                "memory_id": "mem-source",
+                "rank": 1,
+                "score_components": {"relevance_score": 0.02, "fused_score": 0.02},
+                "token_cost": 15,
+                "packed": True,
+                "created_at": 50.0,
+                "source_type": "document",
+                "source_id": "doc:123",
+                "observed_at": 50.0,
+                "valid_from": 80.0,
+                "valid_until": 120.0,
+                "trust_level": "high",
+            }],
+        })
+        events = traces.list_events("tenant-a", "run-temporal")
+        retrieval = events[1]
+        self.assertEqual(retrieval["retrieval_id"], "ret-temporal")
+        self.assertEqual(retrieval["retrieval_as_of"], 100.0)
+        self.assertEqual(retrieval["memory_evidence"][0]["source_type"], "document")
+        self.assertEqual(retrieval["memory_evidence"][0]["valid_until"], 120.0)
+        self.assertNotIn("content", retrieval["memory_evidence"][0])
+        self.assertNotIn("query", retrieval)
 
 class TestSQLiteTemporalRetrievalAndRetraction(unittest.TestCase):
     def setUp(self):
