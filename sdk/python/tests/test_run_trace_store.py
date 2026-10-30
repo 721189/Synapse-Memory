@@ -189,6 +189,46 @@ class TestRunTraceStore(unittest.TestCase):
         with self.assertRaises(RunConflictError):
             self.traces.append_event("tenant-alpha", run.run_id, changed)
 
+    def test_retry_and_postcondition_events_persist_as_metadata_only(self):
+        calls = 0
+        secret = "PRIVATE_TOOL_RESULT_SHOULD_NOT_ENTER_TRACE"
+
+        def transient_tool(**_kwargs):
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                raise ConnectionError("temporary connection failure")
+            return {"receipt": secret}
+
+        run = SynapseRun(
+            run_id="trace-retry-verify",
+            policy=RunPolicy(max_steps=10, max_tool_calls=4, max_retry_attempts=2),
+        )
+        with run:
+            run.call_tool_with_retry(
+                "read_receipt",
+                {"receipt_id": "receipt-1"},
+                transient_tool,
+                retry_safe=True,
+                retry_on=(ConnectionError,),
+            )
+            run.call_tool_verified(
+                "verify_write",
+                {"resource_id": "resource-1"},
+                lambda **_kwargs: {"accepted": True, "persisted": True},
+                postcondition=lambda result: result["persisted"] is True,
+            )
+
+        self._persist("tenant-alpha", run)
+        events = self.traces.list_events("tenant-alpha", run.run_id)
+        types = [event["event_type"] for event in events]
+        self.assertIn(RunEventType.TOOL_CALL_RETRYING.value, types)
+        self.assertIn(RunEventType.TOOL_CALL_VERIFICATION_PASSED.value, types)
+        serialized = repr(events)
+        self.assertNotIn(secret, serialized)
+        self.assertNotIn("receipt_id", serialized)
+        self.assertNotIn("resource_id", serialized)
+
     def test_delete_removes_run_and_events(self):
         run = self._completed_run("trace-delete")
         self._persist("tenant-alpha", run)

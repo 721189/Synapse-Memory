@@ -35,6 +35,7 @@ __all__ = [
     "RunToolCallLimitExceeded",
     "RunDeadlineExceeded",
     "RepeatedToolCallError",
+    "PostconditionFailed",
 ]
 
 T = TypeVar("T")
@@ -57,6 +58,10 @@ class RunEventType(str, Enum):
     TOOL_CALL_SUCCEEDED = "tool_call.succeeded"
     TOOL_CALL_FAILED = "tool_call.failed"
     TOOL_CALL_BLOCKED = "tool_call.blocked"
+    TOOL_CALL_RETRYING = "tool_call.retrying"
+    TOOL_CALL_RETRY_BLOCKED = "tool_call.retry_blocked"
+    TOOL_CALL_VERIFICATION_PASSED = "tool_call.verification_passed"
+    TOOL_CALL_VERIFICATION_FAILED = "tool_call.verification_failed"
     LIMIT_EXCEEDED = "run.limit_exceeded"
     RUN_FINISHED = "run.finished"
     MEMORY_RETRIEVAL = "memory.retrieval"
@@ -76,9 +81,12 @@ class RunPolicy:
     max_tool_calls: int = 20
     timeout_seconds: float = 120.0
     max_repeated_failures: int = 2
+    max_retry_attempts: int = 2
 
     def __post_init__(self) -> None:
-        for field_name in ("max_steps", "max_tool_calls", "max_repeated_failures"):
+        for field_name in (
+            "max_steps", "max_tool_calls", "max_repeated_failures", "max_retry_attempts"
+        ):
             value = getattr(self, field_name)
             if isinstance(value, bool) or not isinstance(value, int) or value < 1:
                 raise ValueError(f"{field_name} must be a positive integer")
@@ -186,6 +194,10 @@ class RunDeadlineExceeded(RunLimitExceeded):
 
 class RepeatedToolCallError(RunLimitExceeded):
     """Raised when an equivalent tool call has failed too many times."""
+
+
+class PostconditionFailed(RunGuardError):
+    """Raised when a successful tool result fails its independent postcondition."""
 
 
 def _normalize_json(value: Any, path: str = "arguments") -> Any:
@@ -392,7 +404,161 @@ class SynapseRun:
         arguments: Mapping[str, Any],
         tool: Callable[..., T],
     ) -> T:
-        """Execute one tool call through the run guard.
+        """Execute one tool call once; ambiguous failures are never replayed."""
+        return self._call_tool(tool_name, arguments, tool)
+
+    def call_tool_with_retry(
+        self,
+        tool_name: str,
+        arguments: Mapping[str, Any],
+        tool: Callable[..., T],
+        *,
+        retry_safe: bool = False,
+        retry_on: tuple[type[Exception], ...] = (TimeoutError, ConnectionError),
+        max_attempts: Optional[int] = None,
+        retry_delay_seconds: float = 0.0,
+    ) -> T:
+        """Retry transient errors only when the caller explicitly asserts replay safety.
+
+        retry_safe=True is the caller's assertion that the operation is
+        idempotent or protected by a downstream idempotency key. Synapse cannot
+        infer this property. Non-idempotent operations default to one attempt.
+        Each attempt consumes the normal step and tool-call budgets.
+        """
+        if not isinstance(retry_safe, bool):
+            raise TypeError("retry_safe must be a boolean")
+        if not isinstance(retry_on, tuple) or any(
+            not isinstance(exc_type, type) or not issubclass(exc_type, Exception)
+            for exc_type in retry_on
+        ):
+            raise TypeError("retry_on must be a tuple of Exception classes")
+        if max_attempts is None:
+            attempts = self.policy.max_retry_attempts if retry_safe else 1
+        else:
+            if isinstance(max_attempts, bool) or not isinstance(max_attempts, int) or max_attempts < 1:
+                raise ValueError("max_attempts must be a positive integer")
+            attempts = max_attempts
+        if attempts > self.policy.max_retry_attempts:
+            raise ValueError("max_attempts exceeds the configured max_retry_attempts ceiling")
+        if not retry_safe and attempts > 1:
+            raise ValueError("multiple attempts require retry_safe=True and an idempotent operation")
+        if retry_safe and attempts > 1 and not retry_on:
+            raise ValueError("retry_on must contain at least one exception class when retries are enabled")
+        delay = retry_delay_seconds
+        if (
+            isinstance(delay, bool)
+            or not isinstance(delay, (int, float))
+            or not math.isfinite(delay)
+            or delay < 0
+        ):
+            raise ValueError("retry_delay_seconds must be a finite non-negative number")
+        for attempt in range(1, attempts + 1):
+            try:
+                return self._call_tool(tool_name, arguments, tool)
+            except BaseException as exc:
+                retryable = (
+                    isinstance(exc, Exception)
+                    and not isinstance(exc, RunGuardError)
+                    and isinstance(exc, retry_on)
+                )
+                if not retryable:
+                    raise
+                if not retry_safe:
+                    self._emit(
+                        RunEventType.TOOL_CALL_RETRY_BLOCKED,
+                        step_index=self._steps,
+                        tool_call_index=self._tool_calls,
+                        tool_name=tool_name,
+                        reason="retry_not_safe",
+                        error_type=type(exc).__name__,
+                    )
+                    raise
+                if attempt >= attempts:
+                    raise
+                self._emit(
+                    RunEventType.TOOL_CALL_RETRYING,
+                    step_index=self._steps,
+                    tool_call_index=self._tool_calls,
+                    tool_name=tool_name,
+                    reason="safe_transient_retry",
+                    error_type=type(exc).__name__,
+                )
+                if delay > 0:
+                    self._wait_for_retry(delay)
+        raise AssertionError("bounded retry loop exited without returning or raising")
+
+    def _wait_for_retry(self, delay_seconds: float) -> None:
+        """Wait only within the cooperative run deadline; never sleep past it."""
+        if self._started_monotonic is None:
+            time.sleep(delay_seconds)
+            return
+        remaining = self.policy.timeout_seconds - (
+            time.monotonic() - self._started_monotonic
+        )
+        if remaining <= 0:
+            self._mark_limit(RunStatus.TIMED_OUT, "timeout")
+            raise RunDeadlineExceeded("The configured run deadline passed before retry.")
+        time.sleep(min(delay_seconds, remaining))
+        if self._deadline_passed():
+            self._mark_limit(RunStatus.TIMED_OUT, "timeout")
+            raise RunDeadlineExceeded("The configured run deadline passed during retry backoff.")
+
+    def call_tool_verified(
+        self,
+        tool_name: str,
+        arguments: Mapping[str, Any],
+        tool: Callable[..., T],
+        *,
+        postcondition: Callable[[T], bool],
+    ) -> T:
+        """Execute a tool and independently verify its externally observable result.
+
+        The verifier must return literal True. Verification output is never
+        serialized; only a pass/fail event with safe metadata is recorded.
+        """
+        if not callable(postcondition):
+            raise TypeError("postcondition must be callable")
+        result = self.call_tool(tool_name, arguments, tool)
+        try:
+            verified = postcondition(result)
+        except Exception as exc:
+            self._emit(
+                RunEventType.TOOL_CALL_VERIFICATION_FAILED,
+                step_index=self._steps,
+                tool_call_index=self._tool_calls,
+                tool_name=tool_name,
+                reason="postcondition_failed",
+                error_type=type(exc).__name__,
+            )
+            self._status = RunStatus.FAILED
+            raise PostconditionFailed("Tool result failed its independent postcondition.") from None
+        if verified is not True:
+            self._emit(
+                RunEventType.TOOL_CALL_VERIFICATION_FAILED,
+                step_index=self._steps,
+                tool_call_index=self._tool_calls,
+                tool_name=tool_name,
+                reason="postcondition_failed",
+                error_type="PostconditionFailed",
+            )
+            self._status = RunStatus.FAILED
+            raise PostconditionFailed("Tool result failed its independent postcondition.")
+        self._emit(
+            RunEventType.TOOL_CALL_VERIFICATION_PASSED,
+            step_index=self._steps,
+            tool_call_index=self._tool_calls,
+            tool_name=tool_name,
+            reason="postcondition_passed",
+        )
+        return result
+
+    def _call_tool(
+        self,
+        tool_name: str,
+        arguments: Mapping[str, Any],
+        tool: Callable[..., T],
+    ) -> T:
+        """Execute one admitted attempt while preserving normal run budgets.
 
         Only a per-run keyed HMAC fingerprint of canonical arguments is emitted.
         Raw arguments and exception messages are never added to events.

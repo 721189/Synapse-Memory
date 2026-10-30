@@ -73,7 +73,7 @@ _KEY_MINT_ROLES = frozenset({"platform_admin", "organization_admin", "workspace_
 
 # Scopes a non-platform caller may delegate. "admin" is never delegable
 # except by a platform_admin holding it.
-_ADMIN_ONLY_SCOPES = frozenset({"admin", "security:audit"})
+_ADMIN_ONLY_SCOPES = frozenset({"admin", "security:audit", "memories:trust"})
 
 # Canonical, closed allow-lists (F-01). Authorization is deny-by-default: a
 # role or scope that is not listed here is never granted, never delegated and
@@ -98,6 +98,7 @@ _KNOWN_SCOPES = frozenset({
     "memories:write",
     "memories:delete",
     "memories:list",
+    "memories:trust",
     "agent-runs:read",
     "agent-runs:write",
     "agent-runs:delete",
@@ -223,7 +224,28 @@ def scope_satisfied(principal: APIKeyRecord, required_scope: Optional[str]) -> b
     scopes = set(principal.scopes or ())
     if required_scope in scopes:
         return True
-    return "admin" in scopes and required_scope.startswith("memories:")
+    # Legacy admin is a memory-domain superuser, but trust elevation remains
+    # an explicit capability: callers cannot self-promote evidence to medium,
+    # high, or authoritative merely by holding the broad memory admin scope.
+    return (
+        "admin" in scopes
+        and required_scope.startswith("memories:")
+        and required_scope != "memories:trust"
+    )
+
+
+def can_assign_memory_trust(principal: APIKeyRecord, trust_level: str) -> bool:
+    """Allow ordinary writers to submit unverified/low trust only.
+
+    Elevating a memory to medium/high/authoritative requires an explicit
+    memories:trust grant. The content itself is never inspected for instructions
+    that might change its provenance classification.
+    """
+    if trust_level in {"unverified", "low"}:
+        return True
+    if trust_level in {"medium", "high", "authoritative"}:
+        return "memories:trust" in set(principal.scopes or ())
+    return False
 
 
 def canonicalize_role(role: Optional[str]) -> str:
@@ -283,8 +305,8 @@ def can_create_api_key(
     if not allowed:
         return False, reason
 
-    # Scopes must be known, and the admin/security:audit scopes may only be
-    # delegated by a platform_admin. The route previously omitted
+    # Scopes must be known. Privileged scopes (admin, security:audit,
+    # memories:trust) may only be delegated by a platform_admin. The route previously omitted
     # requested_scopes entirely, so this guard never ran.
     if requested_scopes:
         unknown = sorted({s for s in requested_scopes if s not in _KNOWN_SCOPES})

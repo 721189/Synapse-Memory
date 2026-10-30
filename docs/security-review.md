@@ -60,8 +60,10 @@ compliance. Each item maps to the actual control in this repo.
 
 - **Control:** scope matrix enforced by `require_scope` per route —
   `memories:read` (list/query/scrub), `memories:write` (ingest/feedback),
-  `memories:delete` (delete/clear/gdpr-delete), `admin` (key + audit
-  management). See `docs/api-reference.md` permission matrix.
+  `memories:delete` (delete/clear/gdpr-delete), `memories:trust` (medium/high/
+  authoritative provenance labels), `admin` (key + audit management).
+  The legacy `admin` scope does not imply `memories:trust`. See
+  `docs/api-reference.md` permission matrix.
 - **Admin surface:** key create/list/revoke/rotate, audit read/export/prune
   are `admin`-only; key listing is organization-scoped. Documented in
   `docs/api-reference.md`.

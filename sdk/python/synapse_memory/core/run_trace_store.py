@@ -31,6 +31,7 @@ _ALLOWED_REASONS = {
     "timeout", "max_steps", "max_tool_calls", "repeated_tool_call_failures",
     "budget_exceeded", "verification_failed", "unknown_outcome", "cancelled",
     "manual_stop", "approval_required", "approval_granted", "approval_denied",
+    "safe_transient_retry", "retry_not_safe", "postcondition_passed", "postcondition_failed",
 }
 _TERMINAL_STATUSES = {
     RunStatus.SUCCEEDED.value,

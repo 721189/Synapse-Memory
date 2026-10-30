@@ -29,10 +29,11 @@ compatibility shims returning identical envelopes.
 |---|---|---|
 | `GET /liveness`, `GET /readiness`, `GET /health`, `GET /metrics` | none | Unauthenticated probes |
 | `GET /api/memories` (+ alias) | `memories:read` | Tenant-scoped list |
-| `POST /ingest`, `/api/memories/create`, `/api/memories/add` | `memories:write` | 201 on success |
+| `POST /ingest`, `/api/memories/create`, `/api/memories/add` | `memories:write` | 201 on success; medium/high/authoritative provenance additionally requires `memories:trust` |
 | `POST /api/memories/bulk` | `memories:write` | max 100 items, 500KB text |
 | `POST /query`, `/api/memories/query`, `/api/retrieval/knapsack-pack` | `memories:read` | Retrieval + packing; optional run correlation also requires `agent-runs:write` |
 | `POST /feedback` | `memories:write` | Reinforcement signal |
+| trust elevation on `POST /ingest` | `memories:trust` in addition to `memories:write` | `medium`, `high`, and `authoritative` provenance only; not implied by legacy `admin`; platform-admin-only key delegation |
 | `DELETE /api/memories/{memory_id}` | `memories:delete` | Ownership enforced |
 | `POST /api/memories/clear` | `memories:delete` | Real `deleted_count`; audited |
 | `POST /api/security/gdpr-delete` | `memories:delete` | Right-to-erasure; audited |
@@ -129,10 +130,15 @@ encryption, semantic deduplication, token-cost calculation.
 | `source_id` | No | null | 1–256 character opaque identifier (letters, digits, period, underscore, colon, hyphen) |
 | `observed_at` | No | ingestion time | finite Unix timestamp ≥ 0 |
 | `valid_from` / `valid_until` | No | unbounded | finite Unix timestamps; when both supplied, `valid_until` must be later than `valid_from` |
-| `trust_level` | No | `unverified` | `unverified`, `low`, `medium`, `high`, or `authoritative` |
+| `trust_level` | No | `unverified` | `unverified`, `low`, `medium`, `high`, or `authoritative`; `medium` and above require `memories:trust` |
 
 Response `data`: `{id, status: "SUCCESS_<action>", token_cost, tenant_id}`.
-Trust is caller-declared metadata, not an independent authenticity check. Do not put prompts, PII, secrets, or raw source text in `source_id`; use an opaque identifier.
+Trust is caller-declared metadata, not an independent authenticity check. Ordinary
+`memories:write` keys may only set `unverified` or `low`; medium/high/authoritative
+classification requires a separate `memories:trust` capability, which only a
+`platform_admin` may delegate to another key. The legacy `admin` scope neither
+implies nor delegates trust elevation. Do not put prompts, PII, secrets, or raw
+source text in `source_id`; use an opaque identifier.
 
 
 ### POST /api/memories/bulk

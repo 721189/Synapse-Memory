@@ -35,6 +35,7 @@ from synapse_memory.core.auth import (
     SecurityManager,
     APIKeyRecord,
     can_create_api_key,
+    can_assign_memory_trust,
     is_platform_admin,
     tenant_selection_allowed,
 )
@@ -802,6 +803,11 @@ def ingest_memory(
         raise HTTPException(status_code=400, detail="Content string cannot be empty.")
 
     effective_tenant = resolve_tenant(principal, payload.tenant_id)
+    if not can_assign_memory_trust(principal, payload.trust_level):
+        raise HTTPException(
+            status_code=403,
+            detail="Elevated memory trust requires the explicit memories:trust scope.",
+        )
 
     global _ingest_success, _ingest_errors
     try:
