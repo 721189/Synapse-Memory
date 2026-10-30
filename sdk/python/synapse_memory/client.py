@@ -42,6 +42,7 @@ class QueryResult:
     injected_nodes_count: int
     injected_nodes: List[Dict[str, Any]]
     storage_backend: str
+    retrieval_as_of: Optional[float] = None
 
 
 class SynapseClient:
@@ -202,15 +203,24 @@ class SynapseClient:
         data = self._request("POST", "/ingest", payload)
         return CreateResult(id=data["id"], status=data["status"], token_cost=data["token_cost"], tenant_id=data["tenant_id"])
 
-    def retrieve(self, query: str, max_tokens: int = 1500) -> QueryResult:
-        data = self._request(
-            "POST", "/query", {"prompt": query, "maxTokens": max_tokens}
-        )
+    def retrieve(
+        self,
+        query: str,
+        max_tokens: int = 1500,
+        *,
+        as_of: Optional[float] = None,
+    ) -> QueryResult:
+        """Retrieve context using current validity time or an explicit Unix timestamp."""
+        payload: Dict[str, Any] = {"prompt": query, "maxTokens": max_tokens}
+        if as_of is not None:
+            payload["asOf"] = as_of
+        data = self._request("POST", "/query", payload)
         return QueryResult(
             fused_context=data.get("fused_context", ""),
             injected_nodes_count=data.get("injected_nodes_count", 0),
             injected_nodes=data.get("injected_nodes", []),
             storage_backend=data.get("active_storage_backend", "unknown"),
+            retrieval_as_of=data.get("retrieval_as_of"),
         )
 
     def list_memories(self, limit: int = 50, offset: int = 0) -> Dict[str, Any]:
@@ -218,6 +228,18 @@ class SynapseClient:
 
     def delete_memory(self, memory_id: str) -> Dict[str, Any]:
         return self._request("DELETE", f"/api/memories/{memory_id}")
+
+    def retract_memory(self, memory_id: str, reason: str) -> Dict[str, Any]:
+        """Retract (but do not hard-delete) evidence for this tenant."""
+        if not isinstance(memory_id, str) or not re.fullmatch(r"[A-Za-z0-9._:-]{1,128}", memory_id):
+            raise ValueError("memory_id must match [A-Za-z0-9._:-] and be 1–128 characters")
+        if not isinstance(reason, str) or not re.fullmatch(r"[a-z][a-z0-9_]{0,127}", reason):
+            raise ValueError("reason must be a 1–128 character lowercase snake_case code")
+        return self._request(
+            "POST", f"/api/memories/{memory_id}/retract", {"reason": reason},
+            retry_safe=True,
+        )
+
 
     def feedback(self, memory_id: str, feedback_type: str) -> Dict[str, Any]:
         return self._request("POST", "/feedback", {"memory_id": memory_id, "feedback_type": feedback_type})
