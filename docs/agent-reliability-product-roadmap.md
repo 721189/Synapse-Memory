@@ -196,6 +196,8 @@ UI: the first metadata-only run inspector is now implemented in the existing Rea
 **Planning window:** Weeks 8–12+, only after earlier gates pass.  
 **Owners:** Product/founder + all workstreams.
 
+Use the [design-partner pilot runbook](design-partner-pilot-runbook.md) for partner qualification, baseline/treatment protocol, success metrics, data boundaries, independent security-review evidence, and pilot decision records. The runbook is preparation material; completing it does not satisfy the pilot or independent-review acceptance criteria.
+
 Tasks:
 - Onboard 2–3 design partners on non-critical or staging workloads first.
 - Agree on a baseline period and a fixed success measure with each pilot (for example, fewer repeated tool invocations, shorter time-to-diagnosis, fewer unverified completions, or lower spend for the same task success rate).
