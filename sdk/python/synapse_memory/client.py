@@ -44,6 +44,8 @@ class QueryResult:
     storage_backend: str
     retrieval_as_of: Optional[float] = None
     retrieval_id: Optional[str] = None
+    protected_constraints_count: int = 0
+    protected_constraints_token_cost: int = 0
 
 
 class SynapseClient:
@@ -211,9 +213,12 @@ class SynapseClient:
         *,
         as_of: Optional[float] = None,
         run_id: Optional[str] = None,
+        protected_constraints: Optional[List[Dict[str, str]]] = None,
     ) -> QueryResult:
-        """Retrieve context using current validity time or an explicit Unix timestamp."""
+        """Retrieve context, reserving budget for mandatory caller-supplied constraints."""
         payload: Dict[str, Any] = {"prompt": query, "maxTokens": max_tokens}
+        if protected_constraints is not None:
+            payload["protected_constraints"] = protected_constraints
         if as_of is not None:
             payload["asOf"] = as_of
         if run_id is not None:
@@ -228,6 +233,8 @@ class SynapseClient:
             storage_backend=data.get("active_storage_backend", "unknown"),
             retrieval_as_of=data.get("retrieval_as_of"),
             retrieval_id=data.get("retrieval_id"),
+            protected_constraints_count=data.get("protected_constraints_count", 0),
+            protected_constraints_token_cost=data.get("protected_constraints_token_cost", 0),
         )
 
     def list_memories(self, limit: int = 50, offset: int = 0) -> Dict[str, Any]:
