@@ -11,13 +11,13 @@ from fastapi.testclient import TestClient
 import synapse_memory.api.fastapi_server as server
 
 
-def _mint_key(tenant_id):
+def _mint_key(tenant_id, scopes=None):
     token, _ = server.security_manager.generate_api_key(
         name="protected-context-test",
         organization_id="org_" + uuid.uuid4().hex[:8],
         project_id="proj_protected",
         tenant_id=tenant_id,
-        scopes=["memories:read", "agent-runs:write", "agent-runs:read"],
+        scopes=scopes or ["memories:read", "agent-runs:write", "agent-runs:read"],
         role="developer",
     )
     return {"X-Synapse-API-Key": token, "X-Tenant-ID": tenant_id}
@@ -52,7 +52,7 @@ class TestProtectedRunConstraints:
 
     def test_empty_query_with_run_id_requires_scope_and_is_traced(self):
         run_id = "protected-blank-" + uuid.uuid4().hex[:12]
-        readonly_headers = _mint_key(self.tenant_id + "_readonly")
+        readonly_headers = _mint_key(self.tenant_id + "_readonly", scopes=["memories:read"])
         # The request must not bypass the run-write scope check just because the
         # retrieval prompt is empty.
         denied = self.client.post(
