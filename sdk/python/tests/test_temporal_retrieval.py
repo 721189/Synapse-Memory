@@ -115,7 +115,7 @@ class TestTemporalEligibility(unittest.TestCase):
         self.assertFalse(is_retrieval_eligible({"observed_at": 10.0, "retracted_at": 20.0}, 100.0))
 
     def test_non_finite_as_of_is_rejected(self):
-        for value in (float("nan"), float("inf"), True):
+        for value in (float("nan"), float("inf"), True, -1.0):
             with self.assertRaises(ValueError):
                 is_retrieval_eligible({}, value)
 
