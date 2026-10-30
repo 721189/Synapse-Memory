@@ -1,6 +1,6 @@
 # Synapse Memory API Contract
 
-**Engine version:** 1.2.0 — **HTTP API compat:** v1
+**Engine version:** 1.4.0 — **HTTP API compat:** v1
 **Base URL:** `http://<host>:8008` (engine); the gateway proxies `/api/*` to it.
 **Auth:** `X-Synapse-API-Key` header (or `Authorization: Bearer <key>`) on all
 endpoints except the unauthenticated telemetry probes (`/liveness`, `/readiness`,
@@ -194,7 +194,7 @@ without `observed_at` use `created_at`. The response includes `retrieval_as_of`
 so an evaluation or replay can reproduce the time boundary.
 
 \* At least one of `prompt`/`query` should be non-empty; an empty query
-returns an empty packed context, not an error.
+returns any supplied protected section (and no memories), not an error.
 
 Response `data`: `{fused_context, injected_nodes_count, injected_nodes,
 active_storage_backend, retrieval_as_of, retrieval_id,
