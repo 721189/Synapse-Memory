@@ -11,6 +11,9 @@ from typing import Any, Dict
 from unittest.mock import patch
 
 from synapse_memory.fault_injection import run_fault_injection_suite
+from synapse_memory.core.memory_manager import MemoryManager
+from synapse_memory.core.sqlite_db import SQLiteMemoryStore
+from synapse_memory.core.temporal import is_retrieval_eligible
 from synapse_memory.runtime import (
     RunDeadlineExceeded,
     RunPolicy,
@@ -18,6 +21,55 @@ from synapse_memory.runtime import (
     RunToolCallLimitExceeded,
     SynapseRun,
 )
+
+
+class _FixtureEmbedder:
+    dimension = 2
+    model_name = "fault-injection-report"
+
+    def embed_query(self, _text: str):
+        return [1.0, 0.0]
+
+
+def _storage_correction_scenario() -> bool:
+    store = SQLiteMemoryStore(db_path=":memory:")
+    manager = MemoryManager(
+        store=store,
+        embedder=_FixtureEmbedder(),
+        max_record_limit=20,
+    )
+    tenant = "report-correction-fixture"
+    old_id, old_status, _ = manager.ingest_with_deduplication(
+        content="The release window is Tuesday.",
+        category="fact",
+        confidence=0.70,
+        tenant_id=tenant,
+        source_type="document",
+        source_id="doc:old-release-window",
+        trust_level="medium",
+    )
+    corrected_id, corrected_status, _ = manager.ingest_with_deduplication(
+        content="Correction: the release window is Friday.",
+        category="fact",
+        confidence=0.95,
+        tenant_id=tenant,
+        source_type="document",
+        source_id="doc:corrected-release-window",
+        trust_level="high",
+    )
+    old_record = store.get_memory_by_id(old_id, tenant_id=tenant)
+    corrected_record = store.get_memory_by_id(corrected_id, tenant_id=tenant)
+    as_of = max(time.time(), float(corrected_record["observed_at"]) + 1.0)
+    success = (
+        old_status == "CREATED"
+        and corrected_status == "MERGED"
+        and old_record["superseded_by"] == corrected_id
+        and corrected_record["supersedes"] == old_id
+        and not is_retrieval_eligible(old_record, as_of)
+        and is_retrieval_eligible(corrected_record, as_of)
+    )
+    store.close()
+    return bool(success)
 
 
 def build_fault_injection_report() -> Dict[str, Any]:
@@ -48,6 +100,16 @@ def build_fault_injection_report() -> Dict[str, Any]:
                 deadline_run.record_step()
             except RunDeadlineExceeded:
                 deadline_fired = True
+
+    correction_scenario = next(
+        scenario for scenario in report["scenarios"]
+        if scenario["scenario"] == "new-fact-supersedes-old-evidence"
+    )
+    storage_correction_confirmed = _storage_correction_scenario()
+    correction_scenario["storage_supersession_confirmed"] = storage_correction_confirmed
+    correction_scenario["passed"] = bool(
+        correction_scenario["passed"] and storage_correction_confirmed
+    )
 
     budget_scenario = next(
         scenario for scenario in report["scenarios"]
