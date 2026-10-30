@@ -425,6 +425,9 @@ jobs:
     name: Deterministic Agent Reliability Fault Injection
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    env:
+      SYNAPSE_ENCRYPTION_KEY: "2N53Wk7u2V5bK1wU_1F5Y9mZ7zN53Wk7u2V5bK1wU_0="
+      SYNAPSE_API_KEY: "syn_live_ci_test_key"
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
 
