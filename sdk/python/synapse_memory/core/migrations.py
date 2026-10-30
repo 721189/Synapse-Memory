@@ -278,6 +278,9 @@ def _m7_memory_provenance(cur: Any) -> None:
     )
     for column, coltype in columns:
         _add_column_if_missing(cur, "memories", column, coltype)
+    # Historical records predate explicit observation timestamps. Use the
+    # creation timestamp as their conservative observation-time fallback.
+    cur.execute("UPDATE memories SET observed_at = created_at WHERE observed_at IS NULL")
 
 
 MIGRATIONS: List[Migration] = [
