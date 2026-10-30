@@ -129,10 +129,14 @@ encryption, semantic deduplication, token-cost calculation.
 | `source_id` | No | null | 1–256 character opaque identifier (letters, digits, period, underscore, colon, hyphen) |
 | `observed_at` | No | ingestion time | finite Unix timestamp ≥ 0 |
 | `valid_from` / `valid_until` | No | unbounded | finite Unix timestamps; when both supplied, `valid_until` must be later than `valid_from` |
-| `trust_level` | No | `unverified` | `unverified`, `low`, `medium`, `high`, or `authoritative` |
+| `trust_level` | No | `unverified` | `unverified`, `low`, `medium`, `high`, or `authoritative`; `medium` and above require `memories:trust` |
 
 Response `data`: `{id, status: "SUCCESS_<action>", token_cost, tenant_id}`.
-Trust is caller-declared metadata, not an independent authenticity check. Do not put prompts, PII, secrets, or raw source text in `source_id`; use an opaque identifier.
+Trust is caller-declared metadata, not an independent authenticity check. Ordinary
+`memories:write` keys may only set `unverified` or `low`; medium/high/authoritative
+classification requires a separate `memories:trust` capability. The legacy
+`admin` scope does not imply this trust-elevation capability. Do not put prompts,
+PII, secrets, or raw source text in `source_id`; use an opaque identifier.
 
 
 ### POST /api/memories/bulk
