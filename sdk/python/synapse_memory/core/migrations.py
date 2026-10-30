@@ -22,7 +22,7 @@ logger = logging.getLogger("SynapseMigrations")
 
 # Ledger + metadata columns tracked on the memories table so embedding-model
 # upgrades (e.g. 128-d hash -> 384-d MiniLM) are explicit, not silent.
-CURRENT_SCHEMA_VERSION = 6
+CURRENT_SCHEMA_VERSION = 7
 
 
 @dataclass
@@ -263,6 +263,23 @@ def _m6_agent_run_traces_postgres(cur: Any) -> None:
         )
 
 
+def _m7_memory_provenance(cur: Any) -> None:
+    """v7: Explicit source, temporal validity, trust, and retraction metadata."""
+    columns = (
+        ("source_type", "VARCHAR(64) NOT NULL DEFAULT 'unspecified'"),
+        ("source_id", "VARCHAR(256)"),
+        ("observed_at", "DOUBLE PRECISION"),
+        ("valid_from", "DOUBLE PRECISION"),
+        ("valid_until", "DOUBLE PRECISION"),
+        ("trust_level", "VARCHAR(32) NOT NULL DEFAULT 'unverified'"),
+        ("supersession_reason", "VARCHAR(128)"),
+        ("retracted_at", "DOUBLE PRECISION"),
+        ("retraction_reason", "VARCHAR(128)"),
+    )
+    for column, coltype in columns:
+        _add_column_if_missing(cur, "memories", column, coltype)
+
+
 MIGRATIONS: List[Migration] = [
     Migration(1, "embedding_metadata", _m1_embedding_metadata, _m1_embedding_metadata),
     Migration(2, "migration_ledger", _m2_migration_ledger, _m2_migration_ledger),
@@ -270,6 +287,7 @@ MIGRATIONS: List[Migration] = [
     Migration(4, "content_plain_search_projection", _m4_content_plain_search_projection, _m4_content_plain_search_projection),
     Migration(5, "supersession_chain", _m5_supersession_chain, _m5_supersession_chain),
     Migration(6, "agent_run_traces", _m6_agent_run_traces_sqlite, _m6_agent_run_traces_postgres),
+    Migration(7, "memory_provenance", _m7_memory_provenance, _m7_memory_provenance),
 ]
 
 
