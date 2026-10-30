@@ -770,8 +770,12 @@ def query_memory(
     and packs candidate nodes optimally into context budget using 0/1 Knapsack DP.
     """
     query_text = payload.prompt or payload.query or ""
+    retrieval_as_of = time.time() if payload.as_of is None else payload.as_of
     if not query_text.strip():
-        return envelope(QueryResponse(fused_context="", injected_nodes_count=0, injected_nodes=[], active_storage_backend=ACTIVE_BACKEND).model_dump(), request)
+        return envelope(QueryResponse(
+            fused_context="", injected_nodes_count=0, injected_nodes=[],
+            active_storage_backend=ACTIVE_BACKEND, retrieval_as_of=retrieval_as_of,
+        ).model_dump(), request)
 
     effective_tenant = resolve_tenant(principal, payload.tenant_id)
     query_vector = embedder.embed_query(query_text)
@@ -787,6 +791,7 @@ def query_memory(
             top_k=25,
             category=payload.category,
             tenant_id=effective_tenant,
+            temporal_as_of=retrieval_as_of,
         )
 
     if not candidates:
@@ -795,13 +800,15 @@ def query_memory(
             query_vec=query_vector,
             top_k=100,
             category=payload.category,
-            tenant_id=effective_tenant
+            tenant_id=effective_tenant,
+            temporal_as_of=retrieval_as_of,
         )
         lexical_candidates = store.lexical_search(
             query=query_text,
             top_k=100,
             category=payload.category,
-            tenant_id=effective_tenant
+            tenant_id=effective_tenant,
+            temporal_as_of=retrieval_as_of,
         )
 
         candidate_map = {m["id"]: m for m in dense_candidates}
@@ -812,6 +819,10 @@ def query_memory(
         candidate_docs = list(candidate_map.values())
         if not candidate_docs:
             candidate_docs = store.get_all_memories(tenant_id=effective_tenant)
+        candidate_docs = [
+            memory for memory in candidate_docs
+            if is_retrieval_eligible(memory, retrieval_as_of)
+        ]
 
         if not candidate_docs:
             return envelope(QueryResponse(fused_context="", injected_nodes_count=0, injected_nodes=[], active_storage_backend=ACTIVE_BACKEND).model_dump(), request)
@@ -874,6 +885,7 @@ def query_memory(
             "injected_nodes_count": len(packed_nodes),
             "injected_nodes": packed_nodes,
             "active_storage_backend": ACTIVE_BACKEND,
+            "retrieval_as_of": retrieval_as_of,
         },
         request,
     )
