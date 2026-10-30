@@ -159,7 +159,16 @@ class SQLiteMemoryStore:
                     embedding TEXT,
                     feedback_multiplier REAL NOT NULL,
                     supersedes VARCHAR(128),
-                    superseded_by VARCHAR(128)
+                    superseded_by VARCHAR(128),
+                    source_type VARCHAR(64) NOT NULL DEFAULT 'unspecified',
+                    source_id VARCHAR(256),
+                    observed_at REAL,
+                    valid_from REAL,
+                    valid_until REAL,
+                    trust_level VARCHAR(32) NOT NULL DEFAULT 'unverified',
+                    supersession_reason VARCHAR(128),
+                    retracted_at REAL,
+                    retraction_reason VARCHAR(128)
                 )
             """)
 
@@ -229,8 +238,10 @@ class SQLiteMemoryStore:
                     id, tenant_id, content, category, confidence, created_at,
                     last_accessed_at, access_count, token_cost,
                     embedding, feedback_multiplier, embedding_dimension, model_version,
-                    supersedes, superseded_by
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    supersedes, superseded_by, source_type, source_id, observed_at,
+                    valid_from, valid_until, trust_level, supersession_reason,
+                    retracted_at, retraction_reason
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (
                 memory["id"],
                 tenant_id,
@@ -247,6 +258,15 @@ class SQLiteMemoryStore:
                 memory.get("model_version", "unknown"),
                 memory.get("supersedes"),
                 memory.get("superseded_by"),
+                memory.get("source_type", "unspecified"),
+                memory.get("source_id"),
+                memory.get("observed_at"),
+                memory.get("valid_from"),
+                memory.get("valid_until"),
+                memory.get("trust_level", "unverified"),
+                memory.get("supersession_reason"),
+                memory.get("retracted_at"),
+                memory.get("retraction_reason"),
             ))
             conn.commit()
 
