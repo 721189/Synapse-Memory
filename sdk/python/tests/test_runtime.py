@@ -361,6 +361,36 @@ def test_retry_configuration_cannot_exceed_policy_or_bypass_idempotency():
     assert calls == []
 
 
+def test_safe_retry_cannot_bypass_repeated_failure_ceiling():
+    attempts = 0
+
+    def always_transient(**_kwargs):
+        nonlocal attempts
+        attempts += 1
+        raise ConnectionError("fixture transient error")
+
+    run = SynapseRun(
+        policy=RunPolicy(
+            max_repeated_failures=2,
+            max_retry_attempts=4,
+            max_tool_calls=5,
+        )
+    )
+    with run:
+        with pytest.raises(RepeatedToolCallError):
+            run.call_tool_with_retry(
+                "idempotent_read",
+                {"key": "same"},
+                always_transient,
+                retry_safe=True,
+                retry_on=(ConnectionError,),
+                max_attempts=4,
+            )
+
+    assert attempts == 2
+    assert run.status is RunStatus.LIMIT_EXCEEDED
+
+
 def test_retry_delay_cannot_outlive_run_timeout_or_exceed_global_cap():
     with SynapseRun(policy=RunPolicy(timeout_seconds=2.0)) as run:
         with pytest.raises(ValueError, match="retry_delay_seconds"):
