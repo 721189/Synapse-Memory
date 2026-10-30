@@ -6,18 +6,18 @@ This directory contains the standalone, dependency-free public product website. 
 
 From the repository root:
 
-- Python: \`python -m http.server 8080 --directory website\`
-- Open \`http://localhost:8080\`
+- Python: <code>python -m http.server 8080 --directory website</code>
+- Open <code>http://localhost:8080</code>
 
 The site is plain HTML, CSS, and JavaScript. No build step, package install, analytics, cookie banner, or third-party font request is required.
 
 ## GitHub Pages
 
-The workflow at \`.github/workflows/pages.yml\` publishes only this directory. After merging the website branch, open **Repository Settings → Pages** and set the build/deployment source to **GitHub Actions** if it is not already configured. The workflow then deploys to the repository's GitHub Pages URL.
+The workflow at <code>.github/workflows/pages.yml</code> publishes only this directory. After merging the website branch, open **Repository Settings → Pages** and set the build/deployment source to **GitHub Actions** if it is not already configured. The workflow then deploys to the repository's GitHub Pages URL.
 
 The current project-site URL used in metadata is:
 
-\`https://721189.github.io/Synapse-Memory/\`
+<code>https://721189.github.io/Synapse-Memory/</code>
 
 A custom domain can be configured later; do not point a domain here until the Pages deployment is active and verified.
 
@@ -27,6 +27,6 @@ The feedback form does not submit data to a server. It can copy the user's answe
 
 ## Content maintenance
 
-Keep release labels synchronized with \`sdk/python/pyproject.toml\`, the PyPI release page, and the repository changelog. Distinguish published package functionality from capabilities available only in the current source tree. Do not describe CI, synthetic fault injection, or a source release as independent production validation or customer success.
+Keep release labels synchronized with <code>sdk/python/pyproject.toml</code>, the PyPI release page, and the repository changelog. Distinguish published package functionality from capabilities available only in the current source tree. Do not describe CI, synthetic fault injection, or a source release as independent production validation or customer success.
 
 The security section intentionally calls out the current plaintext search projections/derivatives and the required PostgreSQL runtime-role configuration. Update it only when the underlying code and security documentation change.
