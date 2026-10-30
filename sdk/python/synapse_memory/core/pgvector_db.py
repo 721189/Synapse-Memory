@@ -10,6 +10,7 @@ import re
 import time
 from typing import Any, Dict, List, Optional
 
+from synapse_memory.core.temporal import is_retrieval_eligible
 from synapse_memory.core.encryption import (
     FernetEncryptionProvider,
     KeyManagementProvider,
@@ -1005,18 +1006,22 @@ class PGVectorMemoryStore:
         query_vec: List[float],
         top_k: int = 10,
         category: Optional[str] = None,
-        tenant_id: Optional[str] = None
+        tenant_id: Optional[str] = None,
+        temporal_as_of: Optional[float] = None,
     ) -> List[Dict[str, Any]]:
         """
         Executes native pgvector cosine distance search using HNSW index:
         ORDER BY embedding <=> query_vec::vector LIMIT top_k
         """
+        as_of = time.time() if temporal_as_of is None else temporal_as_of
         if not self._connected or not HAS_PSYCOPG2:
             results = []
             for mem in self._fallback_cache.values():
                 if tenant_id and mem.get("tenant_id") != tenant_id:
                     continue
                 if category and mem.get("category") != category:
+                    continue
+                if not is_retrieval_eligible(mem, as_of):
                     continue
                 v = mem.get("embedding", [])
                 if v and len(v) == len(query_vec):
@@ -1039,9 +1044,14 @@ class PGVectorMemoryStore:
                 self._set_tenant_context(cur, tenant_id)
                 emb_str = f"[{','.join(str(float(x)) for x in query_vec)}]"
 
-                conditions = []
-                params: List[Any] = [emb_str]
-                conditions.append("superseded_by IS NULL")
+                conditions = [
+                    "superseded_by IS NULL",
+                    "retracted_at IS NULL",
+                    "COALESCE(observed_at, created_at) <= %s",
+                    "(valid_from IS NULL OR valid_from <= %s)",
+                    "(valid_until IS NULL OR valid_until > %s)",
+                ]
+                params: List[Any] = [emb_str, as_of, as_of, as_of]
                 if tenant_id:
                     conditions.append("tenant_id = %s")
                     params.append(tenant_id)
@@ -1056,6 +1066,9 @@ class PGVectorMemoryStore:
                 query = f"""
                     SELECT id, tenant_id, content, category, confidence, created_at,
                            last_accessed_at, access_count, token_cost, feedback_multiplier,
+                           supersedes, superseded_by, source_type, source_id, observed_at,
+                           valid_from, valid_until, trust_level, supersession_reason,
+                           retracted_at, retraction_reason,
                            1 - ({distance_sql}) AS cosine_similarity
                     FROM memories
                     {where_clause}
@@ -1081,17 +1094,19 @@ class PGVectorMemoryStore:
         query: str,
         top_k: int = 100,
         category: Optional[str] = None,
-        tenant_id: Optional[str] = None
+        tenant_id: Optional[str] = None,
+        temporal_as_of: Optional[float] = None,
     ) -> List[Dict[str, Any]]:
         """
         Executes native PostgreSQL Full-Text Search ranking using GIN tsvector index:
         ORDER BY ts_rank(search_vector, plainto_tsquery('english', query)) DESC
         """
+        as_of = time.time() if temporal_as_of is None else temporal_as_of
         if not self._connected or not HAS_PSYCOPG2:
             query_terms = set(query.lower().split())
             results = []
             for mem in self._fallback_cache.values():
-                if mem.get("superseded_by"):
+                if not is_retrieval_eligible(mem, as_of):
                     continue
                 if tenant_id and mem.get("tenant_id") != tenant_id:
                     continue
@@ -1116,8 +1131,15 @@ class PGVectorMemoryStore:
                 # 3. WHERE tenant_id                   -> tenant_id (if present)
                 # 4. WHERE category                    -> category (if present)
                 # 5. LIMIT                             -> top_k
-                conditions = ["search_vector @@ plainto_tsquery('english', %s)", "superseded_by IS NULL"]
-                params: List[Any] = [query, query]
+                conditions = [
+                    "search_vector @@ plainto_tsquery('english', %s)",
+                    "superseded_by IS NULL",
+                    "retracted_at IS NULL",
+                    "COALESCE(observed_at, created_at) <= %s",
+                    "(valid_from IS NULL OR valid_from <= %s)",
+                    "(valid_until IS NULL OR valid_until > %s)",
+                ]
+                params: List[Any] = [query, query, as_of, as_of, as_of]
                 if tenant_id:
                     conditions.append("tenant_id = %s")
                     params.append(tenant_id)
@@ -1130,6 +1152,9 @@ class PGVectorMemoryStore:
                 sql = f"""
                     SELECT id, tenant_id, content, category, confidence, created_at,
                            last_accessed_at, access_count, token_cost, feedback_multiplier,
+                           supersedes, superseded_by, source_type, source_id, observed_at,
+                           valid_from, valid_until, trust_level, supersession_reason,
+                           retracted_at, retraction_reason,
                            ts_rank(search_vector, plainto_tsquery('english', %s)) AS lexical_rank
                     FROM memories
                     {where_clause}
@@ -1159,6 +1184,7 @@ class PGVectorMemoryStore:
         category: Optional[str] = None,
         tenant_id: Optional[str] = None,
         candidate_pool: int = 100,
+        temporal_as_of: Optional[float] = None,
     ) -> List[Dict[str, Any]]:
         """Single-query hybrid retrieval pushed down into PostgreSQL.
 
@@ -1174,6 +1200,7 @@ class PGVectorMemoryStore:
         if not self._connected or not HAS_PSYCOPG2:
             return []
 
+        as_of = time.time() if temporal_as_of is None else temporal_as_of
         emb_str = f"[{','.join(str(float(x)) for x in query_vec)}]"
         conn = self._get_connection()
         try:
@@ -1183,13 +1210,20 @@ class PGVectorMemoryStore:
                 # text order: dense rank (emb), dense cat?, dense order (emb),
                 # dense limit, lexical rank (q), lexical where (q), lexical
                 # cat?, lexical order (q), lexical limit, final limit.
+                temporal_clause = (
+                    "AND retracted_at IS NULL "
+                    "AND COALESCE(observed_at, created_at) <= %s "
+                    "AND (valid_from IS NULL OR valid_from <= %s) "
+                    "AND (valid_until IS NULL OR valid_until > %s)"
+                )
                 params: List[Any] = [emb_str]
                 cat_clause = ""
                 if category:
                     cat_clause = "AND category = %s"
                     params.append(category)
+                params.extend([as_of, as_of, as_of])
                 distance_sql = self._vector_distance_sql("%s")
-                params.extend([emb_str, candidate_pool, query, query])
+                params.extend([emb_str, candidate_pool, query, query, as_of, as_of, as_of])
                 if category:
                     params.append(category)
                 params.extend([query, candidate_pool, top_k])
@@ -1201,6 +1235,7 @@ class PGVectorMemoryStore:
                     FROM memories
                     WHERE tenant_id = NULLIF(current_setting('app.current_tenant', true), '')
                       AND superseded_by IS NULL
+                      {temporal_clause}
                       {cat_clause}
                     ORDER BY {distance_sql}
                     LIMIT %s
@@ -1382,6 +1417,41 @@ class PGVectorMemoryStore:
         finally:
             self._return_connection(conn)
 
+    def retract_memory(
+        self,
+        memory_id: str,
+        tenant_id: str,
+        reason: str,
+        retracted_at: Optional[float] = None,
+    ) -> bool:
+        """Mark a memory retracted without erasing its audit lineage."""
+        timestamp = time.time() if retracted_at is None else float(retracted_at)
+        cached = self._fallback_cache.get(memory_id)
+        if cached is not None and cached.get("tenant_id") == tenant_id:
+            if cached.get("retracted_at") is not None:
+                return False
+            cached["retracted_at"] = timestamp
+            cached["retraction_reason"] = reason
+        if not self._connected or not HAS_PSYCOPG2:
+            return cached is not None and cached.get("tenant_id") == tenant_id
+        conn = self._get_connection()
+        try:
+            with conn.cursor() as cur:
+                self._set_tenant_context(cur, tenant_id)
+                cur.execute(
+                    "UPDATE memories SET retracted_at = %s, retraction_reason = %s "
+                    "WHERE id = %s AND tenant_id = %s AND retracted_at IS NULL",
+                    (timestamp, reason, memory_id, tenant_id),
+                )
+                changed = cur.rowcount > 0
+                conn.commit()
+                return changed
+        except Exception as e:
+            conn.rollback()
+            self._handle_db_error("retract_memory", e)
+            raise
+        finally:
+            self._return_connection(conn)
     def delete_memory(self, memory_id: str, tenant_id: Optional[str] = None) -> None:
         self._fallback_cache.pop(memory_id, None)
         if not self._connected or not HAS_PSYCOPG2:
