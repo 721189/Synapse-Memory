@@ -1,8 +1,11 @@
 import json
+import math
+import re
 import sqlite3
 import time
 from typing import Any, Dict, List, Optional
 
+from synapse_memory.core.temporal import is_retrieval_eligible, validate_as_of
 from synapse_memory.core.encryption import (
     FernetEncryptionProvider,
     KeyManagementProvider,
@@ -387,6 +390,36 @@ class SQLiteMemoryStore:
                 """, (new_confidence, memory_id))
             conn.commit()
 
+    def retract_memory(
+        self,
+        memory_id: str,
+        tenant_id: str,
+        reason: str,
+        retracted_at: Optional[float] = None,
+    ) -> bool:
+        """Mark a memory retracted without erasing its audit lineage."""
+        if not isinstance(reason, str) or not re.fullmatch(r"[a-z][a-z0-9_]{0,127}", reason):
+            raise ValueError("reason must be a controlled lowercase snake_case code")
+        timestamp = time.time() if retracted_at is None else retracted_at
+        if (
+            isinstance(timestamp, bool)
+            or not isinstance(timestamp, (int, float))
+            or not math.isfinite(timestamp)
+            or timestamp < 0
+        ):
+            raise ValueError("retracted_at must be a finite non-negative timestamp")
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                """UPDATE memories
+                   SET retracted_at = ?, retraction_reason = ?
+                   WHERE id = ? AND tenant_id = ? AND retracted_at IS NULL""",
+                (timestamp, reason, memory_id, tenant_id),
+            )
+            changed = cursor.rowcount > 0
+            conn.commit()
+            return changed
+
     def delete_memory(self, memory_id: str, tenant_id: Optional[str] = None) -> None:
         with self._get_connection() as conn:
             cursor = conn.cursor()
@@ -445,7 +478,8 @@ class SQLiteMemoryStore:
         query_vec: List[float],
         top_k: int = 10,
         category: Optional[str] = None,
-        tenant_id: Optional[str] = None
+        tenant_id: Optional[str] = None,
+        temporal_as_of: Optional[float] = None,
     ) -> List[Dict[str, Any]]:
         """
         Dense retrieval over the SQLite corpus using cosine similarity.
@@ -456,11 +490,13 @@ class SQLiteMemoryStore:
         Results match the PGVectorMemoryStore.vector_search contract:
         each node carries `cosine_similarity` and `relevance_score`.
         """
+        as_of = validate_as_of(time.time() if temporal_as_of is None else temporal_as_of)
         memories = (
             self.get_memories_by_category(category, tenant_id=tenant_id)
             if category
             else self.get_all_memories(tenant_id=tenant_id)
         )
+        memories = [m for m in memories if is_retrieval_eligible(m, as_of)]
 
         mag_q = sum(a * a for a in query_vec) ** 0.5
         results: List[Dict[str, Any]] = []
@@ -485,7 +521,8 @@ class SQLiteMemoryStore:
         query: str,
         top_k: int = 100,
         category: Optional[str] = None,
-        tenant_id: Optional[str] = None
+        tenant_id: Optional[str] = None,
+        temporal_as_of: Optional[float] = None,
     ) -> List[Dict[str, Any]]:
         """
         Sparse (lexical) retrieval over the SQLite corpus using token-overlap
@@ -493,11 +530,13 @@ class SQLiteMemoryStore:
         Matches the PGVectorMemoryStore.lexical_search contract: each node
         carries `lexical_rank` and `relevance_score`.
         """
+        as_of = time.time() if temporal_as_of is None else temporal_as_of
         memories = (
             self.get_memories_by_category(category, tenant_id=tenant_id)
             if category
             else self.get_all_memories(tenant_id=tenant_id)
         )
+        memories = [m for m in memories if is_retrieval_eligible(m, as_of)]
 
         query_terms = set(query.lower().split())
         if not query_terms:

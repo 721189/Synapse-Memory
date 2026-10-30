@@ -4,6 +4,8 @@ import time
 import datetime
 import hashlib
 import logging
+import math
+import re
 import threading
 from typing import List, Dict, Any, Optional, Tuple, Literal
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
@@ -21,6 +23,7 @@ from synapse_memory.core.memory_manager import DEFAULT_MAX_RECORD_LIMIT, MemoryM
 from synapse_memory.core.knapsack_packer import KnapsackPacker
 from synapse_memory.core.decay_engine import DecayEngine
 from synapse_memory.core.hybrid_search import HybridSearch
+from synapse_memory.core.temporal import is_retrieval_eligible
 from synapse_memory.runtime import RunEventType, RunStatus
 from synapse_memory.core.run_trace_store import (
     RunTraceStore, RunTraceError, RunNotFoundError, RunConflictError,
@@ -465,6 +468,8 @@ class QueryRequest(SynapseAPIModel):
     max_token_budget: int = Field(1500, ge=50, le=8000, description="Max token window allowed for context packing", alias="maxTokens")
     category: Optional[str] = Field(None, min_length=1, max_length=64, pattern=r"^[a-z0-9_\-]+$", description="Optional category filter")
     tenant_id: Optional[str] = Field(None, alias="tenantId", min_length=1, max_length=128, pattern=r"^[A-Za-z0-9_\-\.]+$", description="Target tenant ID")
+    as_of: Optional[float] = Field(None, ge=0, allow_inf_nan=False, alias="asOf", description="Evaluate temporal validity at this Unix timestamp")
+    run_id: Optional[str] = Field(None, min_length=1, max_length=128, pattern=r"^[A-Za-z0-9._:-]+$", description="Optionally attach this retrieval to an active tenant-scoped agent run")
 
 
 class QueryResponse(SynapseAPIModel):
@@ -472,6 +477,12 @@ class QueryResponse(SynapseAPIModel):
     injected_nodes_count: int
     injected_nodes: List[Dict[str, Any]]
     active_storage_backend: str
+    retrieval_as_of: Optional[float] = None
+    retrieval_id: Optional[str] = None
+
+
+class RetractionRequest(SynapseAPIModel):
+    reason: str = Field(..., min_length=1, max_length=128, pattern=r"^[a-z][a-z0-9_]*$")
 
 
 class RunCreateRequest(SynapseAPIModel):
@@ -494,6 +505,15 @@ class MemoryEvidenceRequest(SynapseAPIModel):
     created_at: Optional[float] = Field(None, ge=0, allow_inf_nan=False)
     supersedes: Optional[str] = Field(None, min_length=1, max_length=128, pattern=r"^[A-Za-z0-9._:-]+$")
     superseded_by: Optional[str] = Field(None, min_length=1, max_length=128, pattern=r"^[A-Za-z0-9._:-]+$")
+    source_type: Optional[Literal["unspecified", "user", "tool", "document", "system", "import"]] = None
+    source_id: Optional[str] = Field(None, min_length=1, max_length=256, pattern=r"^[A-Za-z0-9._:-]+$")
+    observed_at: Optional[float] = Field(None, ge=0, allow_inf_nan=False)
+    valid_from: Optional[float] = Field(None, ge=0, allow_inf_nan=False)
+    valid_until: Optional[float] = Field(None, ge=0, allow_inf_nan=False)
+    trust_level: Optional[Literal["unverified", "low", "medium", "high", "authoritative"]] = None
+    supersession_reason: Optional[str] = Field(None, min_length=1, max_length=128, pattern=r"^[a-z][a-z0-9_]*$")
+    retracted_at: Optional[float] = Field(None, ge=0, allow_inf_nan=False)
+    retraction_reason: Optional[str] = Field(None, min_length=1, max_length=128, pattern=r"^[a-z][a-z0-9_]*$")
 
 
 class AgentRunEventRequest(SynapseAPIModel):
@@ -511,6 +531,7 @@ class AgentRunEventRequest(SynapseAPIModel):
     reason: Optional[str] = Field(None, min_length=1, max_length=128, pattern=r"^[a-z][a-z0-9_]*$")
     error_type: Optional[str] = Field(None, min_length=1, max_length=128, pattern=r"^[A-Za-z][A-Za-z0-9_.:-]*$")
     retrieval_id: Optional[str] = Field(None, min_length=1, max_length=128, pattern=r"^[A-Za-z0-9._:-]+$")
+    retrieval_as_of: Optional[float] = Field(None, ge=0, allow_inf_nan=False)
     memory_evidence: List[MemoryEvidenceRequest] = Field(default_factory=list, max_length=100)
 
     @field_validator("timestamp")
@@ -525,7 +546,7 @@ class AgentRunEventRequest(SynapseAPIModel):
         if self.event_type is RunEventType.MEMORY_RETRIEVAL:
             if not self.retrieval_id:
                 raise ValueError("memory.retrieval requires retrieval_id")
-        elif self.retrieval_id is not None or self.memory_evidence:
+        elif self.retrieval_id is not None or self.retrieval_as_of is not None or self.memory_evidence:
             raise ValueError("retrieval metadata is only valid for memory.retrieval")
         return self
 
@@ -763,10 +784,19 @@ def query_memory(
     and packs candidate nodes optimally into context budget using 0/1 Knapsack DP.
     """
     query_text = payload.prompt or payload.query or ""
+    retrieval_as_of = time.time() if payload.as_of is None else payload.as_of
     if not query_text.strip():
-        return envelope(QueryResponse(fused_context="", injected_nodes_count=0, injected_nodes=[], active_storage_backend=ACTIVE_BACKEND).model_dump(), request)
+        return envelope(QueryResponse(
+            fused_context="", injected_nodes_count=0, injected_nodes=[],
+            active_storage_backend=ACTIVE_BACKEND, retrieval_as_of=retrieval_as_of,
+        ).model_dump(), request)
 
     effective_tenant = resolve_tenant(principal, payload.tenant_id)
+    if payload.run_id and "agent-runs:write" not in principal.scopes:
+        raise HTTPException(
+            status_code=403,
+            detail="Agent retrieval tracing requires the agent-runs:write scope.",
+        )
     query_vector = embedder.embed_query(query_text)
 
     # 1. Candidate retrieval. On the pgvector backend, hybrid search (dense HNSW
@@ -780,6 +810,7 @@ def query_memory(
             top_k=25,
             category=payload.category,
             tenant_id=effective_tenant,
+            temporal_as_of=retrieval_as_of,
         )
 
     if not candidates:
@@ -788,13 +819,15 @@ def query_memory(
             query_vec=query_vector,
             top_k=100,
             category=payload.category,
-            tenant_id=effective_tenant
+            tenant_id=effective_tenant,
+            temporal_as_of=retrieval_as_of,
         )
         lexical_candidates = store.lexical_search(
             query=query_text,
             top_k=100,
             category=payload.category,
-            tenant_id=effective_tenant
+            tenant_id=effective_tenant,
+            temporal_as_of=retrieval_as_of,
         )
 
         candidate_map = {m["id"]: m for m in dense_candidates}
@@ -805,9 +838,16 @@ def query_memory(
         candidate_docs = list(candidate_map.values())
         if not candidate_docs:
             candidate_docs = store.get_all_memories(tenant_id=effective_tenant)
+        candidate_docs = [
+            memory for memory in candidate_docs
+            if is_retrieval_eligible(memory, retrieval_as_of)
+        ]
 
         if not candidate_docs:
-            return envelope(QueryResponse(fused_context="", injected_nodes_count=0, injected_nodes=[], active_storage_backend=ACTIVE_BACKEND).model_dump(), request)
+            return envelope(QueryResponse(
+                fused_context="", injected_nodes_count=0, injected_nodes=[],
+                active_storage_backend=ACTIVE_BACKEND, retrieval_as_of=retrieval_as_of,
+            ).model_dump(), request)
 
         # 2. Reciprocal Rank Fusion (RRF) in Python for the non-pgvector backends.
         candidates = searcher.fused_search(
@@ -820,7 +860,10 @@ def query_memory(
         )
 
     if not candidates:
-        return envelope(QueryResponse(fused_context="", injected_nodes_count=0, injected_nodes=[], active_storage_backend=ACTIVE_BACKEND).model_dump(), request)
+        return envelope(QueryResponse(
+            fused_context="", injected_nodes_count=0, injected_nodes=[],
+            active_storage_backend=ACTIVE_BACKEND, retrieval_as_of=retrieval_as_of,
+        ).model_dump(), request)
 
     # 2. Dynamic temporal decay adjustment: S(m,q,t) = R(m,q) * D(m,t).
     # Preserve retrieval relevance; decay only re-weights priority.
@@ -843,6 +886,95 @@ def query_memory(
 
     # 3. Dynamic programming 0/1 Knapsack optimal budget packing
     packed_nodes = packer.pack(decayed_candidates, payload.max_token_budget)
+    retrieval_id: Optional[str] = None
+    if payload.run_id:
+        import uuid as _uuid
+
+        retrieval_id = "ret_" + _uuid.uuid4().hex
+        packed_ids = {node["id"] for node in packed_nodes}
+        evidence: List[Dict[str, Any]] = []
+        for rank, node in enumerate(decayed_candidates[:100], start=1):
+            explanation = node.get("explanation") or {}
+            if not isinstance(explanation, dict):
+                explanation = {}
+            scores: Dict[str, float] = {}
+            score_sources = {
+                "relevance_score": node.get("relevance_score"),
+                "retrieval_score": node.get("retrieval_score"),
+                "decay_multiplier": node.get("decay_multiplier"),
+                "lexical_rank": explanation.get("sparse_rank", node.get("lexical_rank")),
+                "dense_rank": explanation.get("dense_rank"),
+                "fused_score": explanation.get("fused_score"),
+                "bm25_score": explanation.get("lexical_score", node.get("bm25_score")),
+                "semantic_score": explanation.get("semantic_score", node.get("semantic_score")),
+            }
+            for key, value in score_sources.items():
+                if isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value):
+                    scores[key] = float(value)
+            item: Dict[str, Any] = {
+                "memory_id": node["id"],
+                "rank": rank,
+                "score_components": scores,
+                "token_cost": max(0, int(node.get("token_cost", 0) or 0)),
+                "packed": node["id"] in packed_ids,
+            }
+            for field_name in (
+                "created_at", "supersedes", "superseded_by", "source_type",
+                "source_id", "observed_at", "valid_from", "valid_until",
+                "trust_level", "supersession_reason", "retracted_at",
+                "retraction_reason",
+            ):
+                value = node.get(field_name)
+                if value is None:
+                    continue
+                if field_name in {"supersedes", "superseded_by"}:
+                    if not isinstance(value, str) or not re.fullmatch(r"[A-Za-z0-9._:-]{1,128}", value):
+                        continue
+                elif field_name == "source_id":
+                    if not isinstance(value, str) or not re.fullmatch(r"[A-Za-z0-9._:-]{1,256}", value):
+                        continue
+                elif field_name == "source_type":
+                    if value not in {"unspecified", "user", "tool", "document", "system", "import"}:
+                        continue
+                elif field_name == "trust_level":
+                    if value not in {"unverified", "low", "medium", "high", "authoritative"}:
+                        continue
+                elif field_name in {"supersession_reason", "retraction_reason"}:
+                    # Older rows may contain free-form legacy values. Persist
+                    # controlled codes only; never copy arbitrary text into traces.
+                    if not isinstance(value, str) or not re.fullmatch(r"[a-z][a-z0-9_]{0,127}", value):
+                        continue
+                elif field_name in {"created_at", "observed_at", "valid_from", "valid_until", "retracted_at"}:
+                    if (
+                        isinstance(value, bool)
+                        or not isinstance(value, (int, float))
+                        or not math.isfinite(value)
+                        or value < 0
+                    ):
+                        continue
+                item[field_name] = value
+            evidence.append(item)
+
+        try:
+            run_trace_store.append_event(effective_tenant, payload.run_id, {
+                "schema_version": 1,
+                "event_id": "evt_" + _uuid.uuid4().hex,
+                "run_id": payload.run_id,
+                "event_type": RunEventType.MEMORY_RETRIEVAL.value,
+                "timestamp": datetime.datetime.now(datetime.timezone.utc),
+                "run_status": RunStatus.RUNNING.value,
+                "retrieval_id": retrieval_id,
+                "retrieval_as_of": retrieval_as_of,
+                "memory_evidence": evidence,
+            })
+        except RunNotFoundError as exc:
+            raise HTTPException(status_code=404, detail="Run not found for the authenticated tenant.") from exc
+        except RunConflictError as exc:
+            raise HTTPException(status_code=409, detail="Run cannot accept another retrieval event.") from exc
+        except RunTraceError as exc:
+            raise HTTPException(status_code=503, detail="Retrieval trace storage unavailable.") from exc
+        except (ValueError, TypeError) as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
 
     global _retrieval_success, _last_candidate_count, _last_packed_tokens
     with _metrics_lock:
@@ -867,6 +999,8 @@ def query_memory(
             "injected_nodes_count": len(packed_nodes),
             "injected_nodes": packed_nodes,
             "active_storage_backend": ACTIVE_BACKEND,
+            "retrieval_as_of": retrieval_as_of,
+            "retrieval_id": retrieval_id,
         },
         request,
     )
@@ -1042,6 +1176,50 @@ def delete_memory(
     effective_tenant = resolve_tenant(principal, tenant_id)
     store.delete_memory(memory_id, tenant_id=effective_tenant)
     return envelope({"status": "DELETED", "id": memory_id}, request)
+
+
+@app.post("/api/memories/{memory_id}/retract", tags=["Memory Operations"])
+def retract_memory(
+    request: Request,
+    payload: RetractionRequest,
+    memory_id: str = Path(..., min_length=1, max_length=128, pattern=r"^[A-Za-z0-9._:-]+$"),
+    tenant_id: Optional[str] = None,
+    principal: APIKeyRecord = Depends(require_scope("memories:delete")),
+):
+    """Retract evidence while retaining its record and provenance lineage."""
+    effective_tenant = resolve_tenant(principal, tenant_id)
+    try:
+        changed = store.retract_memory(
+            memory_id, tenant_id=effective_tenant, reason=payload.reason,
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail="Memory retraction unavailable.") from exc
+    if not changed:
+        existing = store.get_memory_by_id(memory_id, tenant_id=effective_tenant)
+        if existing is None:
+            raise HTTPException(status_code=404, detail="Memory not found for the authenticated tenant.")
+        return envelope({
+            "id": memory_id,
+            "status": "ALREADY_RETRACTED" if existing.get("retracted_at") is not None else "NOT_RETRACTED",
+            "retracted_at": existing.get("retracted_at"),
+            "retraction_reason": existing.get("retraction_reason"),
+        }, request)
+
+    existing = store.get_memory_by_id(memory_id, tenant_id=effective_tenant)
+    security_manager.log_audit_action(
+        actor_key_id=principal.key_id,
+        tenant_id=effective_tenant,
+        action="MEMORY_RETRACT",
+        resource=memory_id,
+        status="SUCCESS",
+        metadata={"reason": payload.reason},
+    )
+    return envelope({
+        "id": memory_id,
+        "status": "RETRACTED",
+        "retracted_at": existing.get("retracted_at") if existing else None,
+        "retraction_reason": payload.reason,
+    }, request)
 
 
 @app.post("/api/memories/clear", tags=["Memory Operations"])

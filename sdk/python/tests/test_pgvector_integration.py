@@ -1,3 +1,4 @@
+import math
 import os
 import time
 import unittest
@@ -328,10 +329,12 @@ class TestHybridSearchSQLPlaceholderOrder(unittest.TestCase):
     def _expected_param_types(self, with_category: bool) -> List[str]:
         # Mirror of the CTE placeholder layout in hybrid_search_sql.
         types = ["emb"]  # dense rank
+        types += ["as_of", "as_of", "as_of"]  # dense observation + validity filters
         if with_category:
             types.append("cat")  # dense filter
         types += ["emb", "limit"]  # dense order + limit
         types += ["query", "query"]  # lexical rank + where
+        types += ["as_of", "as_of", "as_of"]  # lexical observation + validity filters
         if with_category:
             types.append("cat")  # lexical filter
         types += ["query", "limit", "limit"]  # lexical order + limits
@@ -357,6 +360,10 @@ class TestHybridSearchSQLPlaceholderOrder(unittest.TestCase):
                     value.startswith("[") and value.endswith("]"),
                     f"embedding slot got non-vector value: {value!r}",
                 )
+            elif kind == "as_of":
+                self.assertIsInstance(value, (int, float))
+                self.assertTrue(math.isfinite(value))
+                self.assertGreaterEqual(value, 0)
             elif kind == "query":
                 self.assertEqual(value, "hybrid retrieval marker")
             elif kind == "cat":

@@ -65,7 +65,6 @@ class TestMigrations(unittest.TestCase):
             "source_type", "source_id", "observed_at", "valid_from", "valid_until",
             "trust_level", "supersession_reason", "retracted_at", "retraction_reason",
         } <= cols)
-
         conn = self._get_conn()
         try:
             tables = {

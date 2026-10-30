@@ -31,7 +31,7 @@ compatibility shims returning identical envelopes.
 | `GET /api/memories` (+ alias) | `memories:read` | Tenant-scoped list |
 | `POST /ingest`, `/api/memories/create`, `/api/memories/add` | `memories:write` | 201 on success |
 | `POST /api/memories/bulk` | `memories:write` | max 100 items, 500KB text |
-| `POST /query`, `/api/memories/query`, `/api/retrieval/knapsack-pack` | `memories:read` | Retrieval + packing |
+| `POST /query`, `/api/memories/query`, `/api/retrieval/knapsack-pack` | `memories:read` | Retrieval + packing; optional run correlation also requires `agent-runs:write` |
 | `POST /feedback` | `memories:write` | Reinforcement signal |
 | `DELETE /api/memories/{memory_id}` | `memories:delete` | Ownership enforced |
 | `POST /api/memories/clear` | `memories:delete` | Real `deleted_count`; audited |
@@ -69,7 +69,7 @@ IDs run_id and event_id must match the pattern ^[A-Za-z0-9._:-]{1,128}$. Support
 
 The event contract includes event_id, run_id, schema_version, event_type, timezone-aware timestamp, and run_status, plus optional step/tool metadata, a 64-character hexadecimal argument fingerprint, a short reason/error type, and retrieval metadata. Supported event types are run.started, step.started, tool_call.started, tool_call.succeeded, tool_call.failed, tool_call.blocked, run.limit_exceeded, run.finished, and memory.retrieval.
 
-For memory.retrieval, provide a retrieval_id and up to 100 memory_evidence entries. Each entry supports memory_id, positive rank, allowlisted numeric score_components, non-negative token_cost, boolean packed, optional created_at, and optional supersedes/superseded_by IDs. The persistence layer rejects arbitrary evidence fields; prompts, queries, raw tool arguments, tool results, and memory content are not stored. Evidence is recorded only when the application explicitly instruments the retrieval pipeline; the API does not automatically attach all /query calls to a run.
+For memory.retrieval, provide a retrieval_id and up to 100 memory_evidence entries. Each entry supports memory_id, positive rank, allowlisted numeric score_components, non-negative token_cost, boolean packed, optional created_at, supersedes/superseded_by, source classification and opaque source ID, observed/validity timestamps, trust classification, and controlled supersession/retraction reason codes. The event may also include retrieval_as_of. The persistence layer rejects arbitrary evidence fields; prompts, queries, raw tool arguments, tool results, and memory content are not stored. A /query request with run_id automatically appends one memory.retrieval event and requires both memories:read and agent-runs:write; query calls without run_id remain unlinked and applications may continue to instrument events manually.
 
 Event sequence numbers are assigned transactionally per run. Duplicate event IDs are accepted only when the persisted event fields match; conflicting reuse returns HTTP 409. Missing runs return 404; invalid payloads return 422; database failures return 503. Event listing defaults to 100 and caps at 500; run listing defaults to 50 and caps at 100. The API rate limiter uses a normalized run-route bucket so arbitrary run IDs do not create unlimited rate-limit entries.
 
@@ -125,8 +125,14 @@ encryption, semantic deduplication, token-cost calculation.
 | `category` | No | `"interaction"` | `^[a-z0-9_\-]+$`, ≤64 chars |
 | `confidence` | No | 0.95 | 0.0–1.0 |
 | `tenant_id` (`tenantId` alias) | No | from principal | tenant pattern, ≤128 chars |
+| `source_type` | No | `unspecified` | `unspecified`, `user`, `tool`, `document`, `system`, or `import` |
+| `source_id` | No | null | 1–256 character opaque identifier (letters, digits, period, underscore, colon, hyphen) |
+| `observed_at` | No | ingestion time | finite Unix timestamp ≥ 0 |
+| `valid_from` / `valid_until` | No | unbounded | finite Unix timestamps; when both supplied, `valid_until` must be later than `valid_from` |
+| `trust_level` | No | `unverified` | `unverified`, `low`, `medium`, `high`, or `authoritative` |
 
 Response `data`: `{id, status: "SUCCESS_<action>", token_cost, tenant_id}`.
+Trust is caller-declared metadata, not an independent authenticity check. Do not put prompts, PII, secrets, or raw source text in `source_id`; use an opaque identifier.
 
 
 ### POST /api/memories/bulk
@@ -140,6 +146,13 @@ Scope: `memories:delete`. Ownership enforced — a principal cannot delete
 another tenant's node. Optional `tenant_id` query param.
 Response `data`: `{status: "DELETED", id}`. Idempotent: success envelope even
 when the row did not exist.
+
+### POST /api/memories/{memory_id}/retract
+Scope: `memories:delete`. Body: `{"reason":"source_corrected"}`, where the
+reason is a controlled lowercase snake_case code (1–128 chars). Retraction is
+tenant-scoped, idempotent, audited, and preserves the memory row/provenance
+lineage. The record is excluded from retrieval immediately.
+Response `data`: `{id, status: "RETRACTED"|"ALREADY_RETRACTED", retracted_at, retraction_reason}`.
 
 ### POST /api/memories/clear
 Scope: `memories:delete`. Optional body `{"tenant_id": ...}`.
@@ -159,12 +172,23 @@ Scope: `memories:read`. Hybrid vector + lexical RRF fusion, Ebbinghaus decay
 | `max_token_budget` (`maxTokens` alias) | No | 1500 | 50–8000 |
 | `category` | No | null | `^[a-z0-9_\-]+$`, ≤64 chars |
 | `tenant_id` (`tenantId` alias) | No | from principal | tenant pattern, ≤128 chars |
+| `as_of` (`asOf` alias) | No | request time | finite Unix timestamp ≥ 0 |
+| `run_id` | No | null | active tenant-scoped run ID; requires `agent-runs:write` |
+
+Retrieval filters future-observed, not-yet-valid, expired, superseded, and
+retracted memories **before** dense/lexical ranking and top-K selection. Validity
+uses the half-open interval `valid_from <= as_of < valid_until`; legacy rows
+without `observed_at` use `created_at`. The response includes `retrieval_as_of`
+so an evaluation or replay can reproduce the time boundary.
 
 \* At least one of `prompt`/`query` should be non-empty; an empty query
 returns an empty packed context, not an error.
 
 Response `data`: `{fused_context, injected_nodes_count, injected_nodes,
-active_storage_backend}`. Packed nodes preserve `retrieval_score` and
+active_storage_backend, retrieval_as_of, retrieval_id}`. When `run_id` is
+provided, `/query` appends a metadata-only `memory.retrieval` event to that
+active run (rank, scores, token cost, packed flag, memory IDs, and safe
+provenance only); query text and memory contents are not recorded. Packed nodes preserve `retrieval_score` and
 `decay_multiplier`; access counts increment per node; every packed response
 respects the token budget.
 

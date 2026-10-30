@@ -42,10 +42,13 @@ _TERMINAL_STATUSES = {
 _ALLOWED_SCORE_KEYS = {
     "relevance_score", "retrieval_score", "lexical_rank", "dense_score",
     "rrf_score", "decay_multiplier", "bm25_score", "semantic_score",
+    "sparse_rank", "dense_rank", "fused_score",
 }
 _ALLOWED_EVIDENCE_KEYS = {
     "memory_id", "rank", "score_components", "token_cost", "packed",
-    "created_at", "supersedes", "superseded_by",
+    "created_at", "supersedes", "superseded_by", "source_type", "source_id",
+    "observed_at", "valid_from", "valid_until", "trust_level",
+    "supersession_reason", "retracted_at", "retraction_reason",
 }
 
 
@@ -208,11 +211,19 @@ class RunTraceStore:
 
     def _safe_metadata(self, event: Mapping[str, Any], event_type: str) -> str:
         retrieval_id = event.get("retrieval_id")
+        retrieval_as_of = event.get("retrieval_as_of")
         evidence = event.get("memory_evidence") or []
         if event_type != RunEventType.MEMORY_RETRIEVAL.value:
-            if retrieval_id is not None or evidence:
+            if retrieval_id is not None or retrieval_as_of is not None or evidence:
                 raise ValueError("retrieval metadata is only valid on memory.retrieval events")
             return "{}"
+        if retrieval_as_of is not None and (
+            isinstance(retrieval_as_of, bool)
+            or not isinstance(retrieval_as_of, (int, float))
+            or not math.isfinite(retrieval_as_of)
+            or retrieval_as_of < 0
+        ):
+            raise ValueError("retrieval_as_of must be a finite non-negative timestamp")
         if not isinstance(retrieval_id, str) or not _ID_RE.fullmatch(retrieval_id):
             raise ValueError("memory.retrieval events require a non-empty retrieval_id")
         if not isinstance(evidence, list) or len(evidence) > 100:
@@ -263,9 +274,46 @@ class RunTraceStore:
                     if not isinstance(lineage_id, str) or not _ID_RE.fullmatch(lineage_id):
                         raise ValueError("memory lineage ID is invalid")
                     normalized[lineage_key] = lineage_id
+            source_type = item.get("source_type")
+            if source_type is not None:
+                if source_type not in {"unspecified", "user", "tool", "document", "system", "import"}:
+                    raise ValueError("memory source_type is invalid")
+                normalized["source_type"] = source_type
+            source_id = item.get("source_id")
+            if source_id is not None:
+                if not isinstance(source_id, str) or not re.fullmatch(r"[A-Za-z0-9._:-]{1,256}", source_id):
+                    raise ValueError("memory source_id is invalid")
+                normalized["source_id"] = source_id
+            trust_level = item.get("trust_level")
+            if trust_level is not None:
+                if trust_level not in {"unverified", "low", "medium", "high", "authoritative"}:
+                    raise ValueError("memory trust_level is invalid")
+                normalized["trust_level"] = trust_level
+            for timestamp_key in ("observed_at", "valid_from", "valid_until", "retracted_at"):
+                timestamp_value = item.get(timestamp_key)
+                if timestamp_value is not None:
+                    if (
+                        isinstance(timestamp_value, bool)
+                        or not isinstance(timestamp_value, (int, float))
+                        or not math.isfinite(timestamp_value)
+                        or timestamp_value < 0
+                    ):
+                        raise ValueError(f"memory {timestamp_key} must be a finite non-negative timestamp")
+                    normalized[timestamp_key] = float(timestamp_value)
+            for reason_key in ("supersession_reason", "retraction_reason"):
+                reason_value = item.get(reason_key)
+                if reason_value is not None:
+                    if not isinstance(reason_value, str) or not re.fullmatch(r"[a-z][a-z0-9_]{0,127}", reason_value):
+                        raise ValueError(f"memory {reason_key} is invalid")
+                    normalized[reason_key] = reason_value
             safe_evidence.append(normalized)
+        metadata_object: Dict[str, Any] = {
+            "retrieval_id": retrieval_id, "memory_evidence": safe_evidence,
+        }
+        if retrieval_as_of is not None:
+            metadata_object["retrieval_as_of"] = float(retrieval_as_of)
         metadata = json.dumps(
-            {"retrieval_id": retrieval_id, "memory_evidence": safe_evidence},
+            metadata_object,
             ensure_ascii=False, sort_keys=True, separators=(",", ":"), allow_nan=False,
         )
         if len(metadata.encode("utf-8")) > 65536:
