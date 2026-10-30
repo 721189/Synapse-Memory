@@ -200,6 +200,26 @@ class TestProtectedRunConstraints:
         assert event["memory_evidence"] == []
         assert constraint_text not in json.dumps(event)
 
+    def test_multilingual_constraints_use_a_conservative_tokenizer_fallback(self):
+        # Force the optional tiktoken import to fail. A character-count heuristic
+        # would undercount this CJK text by a wide margin.
+        constraint_text = "漢" * 1000
+        with patch.dict("sys.modules", {"tiktoken": None}):
+            response = self.client.post(
+                "/query",
+                json={
+                    "prompt": " ",
+                    "maxTokens": 1500,
+                    "protected_constraints": [
+                        {"kind": "goal", "text": constraint_text},
+                    ],
+                },
+                headers=self.headers,
+            )
+
+        assert response.status_code == 422, response.text
+        assert "Protected context requires" in response.json()["error"]
+
     def test_constraint_count_and_total_text_are_bounded(self):
         too_many = [
             {"kind": "goal", "text": "Required goal"}
