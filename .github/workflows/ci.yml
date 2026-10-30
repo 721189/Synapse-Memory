@@ -439,7 +439,7 @@ jobs:
         run: |
           python -m pip install --upgrade pip setuptools wheel
           python -m pip install -e sdk/python
-          python -m pip install "httpx2==2.14.0"
+          python -m pip install "httpx==0.28.1" "httpx2==2.14.0"
 
       - name: Run deterministic fault-injection suite and write report
         env:
