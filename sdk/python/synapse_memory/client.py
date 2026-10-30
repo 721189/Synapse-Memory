@@ -170,8 +170,36 @@ class SynapseClient:
 
         raise last_error or SynapseError("Request failed")
 
-    def create_memory(self, content: str, category: str = "interaction", confidence: float = 0.95) -> CreateResult:
-        data = self._request("POST", "/ingest", {"content": content, "category": category, "confidence": confidence})
+    def create_memory(
+        self,
+        content: str,
+        category: str = "interaction",
+        confidence: float = 0.95,
+        *,
+        source_type: str = "unspecified",
+        source_id: Optional[str] = None,
+        observed_at: Optional[float] = None,
+        valid_from: Optional[float] = None,
+        valid_until: Optional[float] = None,
+        trust_level: str = "unverified",
+    ) -> CreateResult:
+        """Create a memory with optional source and temporal provenance metadata."""
+        payload: Dict[str, Any] = {
+            "content": content,
+            "category": category,
+            "confidence": confidence,
+            "source_type": source_type,
+            "trust_level": trust_level,
+        }
+        for key, value in (
+            ("source_id", source_id),
+            ("observed_at", observed_at),
+            ("valid_from", valid_from),
+            ("valid_until", valid_until),
+        ):
+            if value is not None:
+                payload[key] = value
+        data = self._request("POST", "/ingest", payload)
         return CreateResult(id=data["id"], status=data["status"], token_cost=data["token_cost"], tenant_id=data["tenant_id"])
 
     def retrieve(self, query: str, max_tokens: int = 1500) -> QueryResult:
