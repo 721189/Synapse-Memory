@@ -438,6 +438,18 @@ class IngestRequest(SynapseAPIModel):
     category: str = Field("interaction", min_length=1, max_length=64, pattern=r"^[a-z0-9_\-]+$", description="Cognitive category (e.g., interaction, preference, system)")
     confidence: float = Field(0.95, ge=0.0, le=1.0, description="Confidence alignment coefficient")
     tenant_id: Optional[str] = Field(None, alias="tenantId", min_length=1, max_length=128, pattern=r"^[A-Za-z0-9_\-\.]+$", description="Target tenant ID for isolation")
+    source_type: Literal["unspecified", "user", "tool", "document", "system", "import"] = "unspecified"
+    source_id: Optional[str] = Field(None, min_length=1, max_length=256, pattern=r"^[A-Za-z0-9._:-]+$")
+    observed_at: Optional[float] = Field(None, ge=0, allow_inf_nan=False)
+    valid_from: Optional[float] = Field(None, ge=0, allow_inf_nan=False)
+    valid_until: Optional[float] = Field(None, ge=0, allow_inf_nan=False)
+    trust_level: Literal["unverified", "low", "medium", "high", "authoritative"] = "unverified"
+
+    @model_validator(mode="after")
+    def validate_provenance_window(self):
+        if self.valid_from is not None and self.valid_until is not None and self.valid_until <= self.valid_from:
+            raise ValueError("valid_until must be later than valid_from")
+        return self
 
 
 class IngestResponse(SynapseAPIModel):
@@ -712,7 +724,13 @@ def ingest_memory(
             content=payload.content,
             category=payload.category,
             confidence=payload.confidence,
-            tenant_id=effective_tenant
+            tenant_id=effective_tenant,
+            source_type=payload.source_type,
+            source_id=payload.source_id,
+            observed_at=payload.observed_at,
+            valid_from=payload.valid_from,
+            valid_until=payload.valid_until,
+            trust_level=payload.trust_level,
         )
     except Exception:
         with _metrics_lock:
