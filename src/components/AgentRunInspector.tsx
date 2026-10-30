@@ -3,14 +3,11 @@ import {
   Activity,
   AlertCircle,
   ArrowDownToLine,
-  CheckCircle2,
   ChevronDown,
   Clock3,
   Loader2,
   RefreshCw,
   ShieldCheck,
-  Timer,
-  XCircle,
 } from 'lucide-react';
 import { apiGet } from '../lib/api';
 
@@ -283,9 +280,10 @@ export const AgentRunInspector: React.FC = () => {
     const url = URL.createObjectURL(blob);
     const anchor = document.createElement('a');
     anchor.href = url;
-    anchor.download = 'synapse-run-' + selectedRun.run_id + '-redacted.json';
+    const safeRunId = selectedRun.run_id.replace(/[^A-Za-z0-9._-]/g, '_');
+    anchor.download = 'synapse-run-' + safeRunId + '-redacted.json';
     anchor.click();
-    URL.revokeObjectURL(url);
+    window.setTimeout(() => URL.revokeObjectURL(url), 1000);
   };
 
   return (
