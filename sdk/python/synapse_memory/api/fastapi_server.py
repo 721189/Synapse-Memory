@@ -4,6 +4,7 @@ import time
 import datetime
 import hashlib
 import logging
+import re
 import threading
 from typing import List, Dict, Any, Optional, Tuple, Literal
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
@@ -924,8 +925,14 @@ def query_memory(
                 "retraction_reason",
             ):
                 value = node.get(field_name)
-                if value is not None:
-                    item[field_name] = value
+                if value is None:
+                    continue
+                if field_name in {"supersession_reason", "retraction_reason"}:
+                    # Older v1.4.0 rows may contain human-readable legacy reason
+                    # strings. Only persist controlled codes in trace metadata.
+                    if not isinstance(value, str) or not re.fullmatch(r"[a-z][a-z0-9_]{0,127}", value):
+                        continue
+                item[field_name] = value
             evidence.append(item)
 
         try:
