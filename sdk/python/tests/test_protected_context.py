@@ -98,6 +98,23 @@ class TestProtectedRunConstraints:
         )
         assert created.status_code == 200, created.text
 
+        # Retrieval correlation requires an active run, not merely a created summary.
+        started = self.client.post(
+            f"/api/agent-runs/{run_id}/events",
+            json={
+                "schema_version": 1,
+                "event_id": "evt-start-" + uuid.uuid4().hex,
+                "run_id": run_id,
+                "event_type": "run.started",
+                "timestamp": __import__("datetime").datetime.now(
+                    __import__("datetime").timezone.utc
+                ).isoformat(),
+                "run_status": "running",
+            },
+            headers=self.headers,
+        )
+        assert started.status_code == 200, started.text
+
         now = time.time()
         candidate = {
             "id": "mem_protected_context",
