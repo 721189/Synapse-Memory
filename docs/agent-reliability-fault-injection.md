@@ -65,7 +65,7 @@ Do not combine these into a single reliability percentage. Keep raw LongMemEval-
 
 - SynapseRun guards only calls explicitly routed through it. It is not a sandbox and does not intercept arbitrary framework/tool invocations.
 - call_tool_with_retry(..., retry_safe=True) is an application assertion, not automatic proof of idempotency. Use it only for idempotent operations or tools protected by a downstream idempotency key.
-- Retries are bounded by max_retry_attempts, repeated-failure limits, run step/tool budgets, a maximum 30-second backoff, and the cooperative run deadline. A synchronous tool already in progress cannot be forcibly stopped.
+- Retries are bounded by max_retry_attempts, repeated-failure limits, run step/tool budgets, and the cooperative run deadline. Backoff is capped to the remaining deadline, so a long requested delay cannot keep the run alive beyond its budget. A synchronous tool already in progress cannot be forcibly stopped.
 - call_tool_verified records a metadata-only verification result. The application supplies the postcondition; Synapse cannot independently prove that the condition reflects the user's real-world objective.
 - Trust levels supplied directly to the in-process MemoryManager remain caller assertions. The HTTP API enforces memories:trust; applications integrating the manager directly must enforce their own trusted control plane.
 - SQLite fixtures validate application tenant filtering. Production PostgreSQL isolation must still be validated using the least-privilege runtime role and row-level security, as covered by the dedicated integration workflow.
