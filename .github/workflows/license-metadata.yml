@@ -11,6 +11,12 @@ on:
       - "package-lock.json"
       - "requirements*.txt"
       - "pyproject.toml"
+      - "README.md"
+      - "CONTRIBUTING.md"
+      - "CHANGELOG.md"
+      - "TRADEMARKS.md"
+      - "DCO"
+      - "docs/**"
       - ".github/workflows/license-metadata.yml"
   push:
     branches: [main]
