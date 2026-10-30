@@ -186,7 +186,7 @@ def run_fault_injection_suite() -> Dict[str, Any]:
     max_budget_overshoot = 0
     evidence_relevant = {"memory-0", "memory-1"}
     relevant_packed: set[str] = set()
-    last_packed: List[Dict[str, Any]] = []
+    last_packed: List[Any] = []
     with long_run:
         for _turn in range(40):
             packed = packer.pack(
