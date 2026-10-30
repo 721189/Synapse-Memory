@@ -825,7 +825,10 @@ def query_memory(
         ]
 
         if not candidate_docs:
-            return envelope(QueryResponse(fused_context="", injected_nodes_count=0, injected_nodes=[], active_storage_backend=ACTIVE_BACKEND).model_dump(), request)
+            return envelope(QueryResponse(
+                fused_context="", injected_nodes_count=0, injected_nodes=[],
+                active_storage_backend=ACTIVE_BACKEND, retrieval_as_of=retrieval_as_of,
+            ).model_dump(), request)
 
         # 2. Reciprocal Rank Fusion (RRF) in Python for the non-pgvector backends.
         candidates = searcher.fused_search(
@@ -838,7 +841,10 @@ def query_memory(
         )
 
     if not candidates:
-        return envelope(QueryResponse(fused_context="", injected_nodes_count=0, injected_nodes=[], active_storage_backend=ACTIVE_BACKEND).model_dump(), request)
+        return envelope(QueryResponse(
+            fused_context="", injected_nodes_count=0, injected_nodes=[],
+            active_storage_backend=ACTIVE_BACKEND, retrieval_as_of=retrieval_as_of,
+        ).model_dump(), request)
 
     # 2. Dynamic temporal decay adjustment: S(m,q,t) = R(m,q) * D(m,t).
     # Preserve retrieval relevance; decay only re-weights priority.
