@@ -33,8 +33,7 @@ compatibility shims returning identical envelopes.
 | `POST /api/memories/bulk` | `memories:write` | max 100 items, 500KB text |
 | `POST /query`, `/api/memories/query`, `/api/retrieval/knapsack-pack` | `memories:read` | Retrieval + packing; optional run correlation also requires `agent-runs:write` |
 | `POST /feedback` | `memories:write` | Reinforcement signal |
-| `DELETE /api/memories/{memory_id}` | `memories:delete` | Hard delete; ownership enforced |
-| `POST /api/memories/{memory_id}/retract` | `memories:delete` | Soft-retract evidence; retains provenance; audited |
+| `DELETE /api/memories/{memory_id}` | `memories:delete` | Ownership enforced |
 | `POST /api/memories/clear` | `memories:delete` | Real `deleted_count`; audited |
 | `POST /api/security/gdpr-delete` | `memories:delete` | Right-to-erasure; audited |
 | `POST /api/security/scrub` (+ alias) | `memories:read` | PII scrubber |
@@ -160,10 +159,9 @@ compatibility shims returning identical envelopes.
 | `GET /api/memories` (+ alias) | `memories:read` | Tenant-scoped list |
 | `POST /ingest`, `/api/memories/create`, `/api/memories/add` | `memories:write` | 201 on success |
 | `POST /api/memories/bulk` | `memories:write` | max 100 items, 500KB text |
-| `POST /query`, `/api/memories/query`, `/api/retrieval/knapsack-pack` | `memories:read` | Retrieval + packing |
+| `POST /query`, `/api/memories/query`, `/api/retrieval/knapsack-pack` | `memories:read` | Retrieval + packing; optional run correlation also requires `agent-runs:write` |
 | `POST /feedback` | `memories:write` | Reinforcement signal |
-| `DELETE /api/memories/{memory_id}` | `memories:delete` | Hard delete; ownership enforced |
-| `POST /api/memories/{memory_id}/retract` | `memories:delete` | Soft-retract evidence; retains provenance; audited |
+| `DELETE /api/memories/{memory_id}` | `memories:delete` | Ownership enforced |
 | `POST /api/memories/clear` | `memories:delete` | Real `deleted_count`; audited |
 | `POST /api/security/gdpr-delete` | `memories:delete` | Right-to-erasure; audited |
 | `POST /api/security/scrub` (+ alias) | `memories:read` | PII scrubber |
@@ -256,7 +254,7 @@ encryption, semantic deduplication, token-cost calculation.
 | `confidence` | No | 0.95 | 0.0–1.0 |
  |
 | `observed_at` | No | ingestion time | finite Unix timestamp ≥ 0 |
-| `valid_from` / `valid_until` | No | unbounded | finite Unix timestamps; if both supplied, `valid_until > valid_from` |
+| `valid_from` / `valid_until` | No | unbounded | finite Unix timestamps; when both supplied, `valid_until > valid_from` |
 | `trust_level` | No | `unverified` | `unverified|low|medium|high|authoritative` |
 
 Response `data`: `{id, status: "SUCCESS_<action>", token_cost, tenant_id}`.
@@ -276,7 +274,10 @@ Response `data`: `{status: "DELETED", id}`. Idempotent: success envelope even
 when the row did not exist.
 
 ### POST /api/memories/{memory_id}/retract
-Scope: `memories:delete`. Body: `{"reason":"source_corrected"}`, where the reason is a controlled lowercase snake_case code (1–128 chars). Retraction is tenant-scoped, idempotent, audited, and preserves the memory row/provenance lineage. The record is excluded from retrieval immediately.
+Scope: `memories:delete`. Body: `{"reason":"source_corrected"}`, where the
+reason is a controlled lowercase snake_case code (1–128 chars). Retraction is
+tenant-scoped, idempotent, audited, and preserves the memory row/provenance
+lineage. The record is excluded from retrieval immediately.
 Response `data`: `{id, status: "RETRACTED"|"ALREADY_RETRACTED", retracted_at, retraction_reason}`.
 
 ### POST /api/memories/clear
@@ -300,7 +301,11 @@ Scope: `memories:read`. Hybrid vector + lexical RRF fusion, Ebbinghaus decay
 | `as_of` (`asOf` alias) | No | request time | finite Unix timestamp ≥ 0 |
 | `run_id` | No | null | active tenant-scoped run ID; requires `agent-runs:write` |
 
-Retrieval filters future-observed, not-yet-valid, expired, superseded, and retracted memories **before** dense/lexical ranking and top-K selection. Validity uses the half-open interval `valid_from <= as_of < valid_until`; legacy rows without `observed_at` use `created_at`. The response includes `retrieval_as_of` so an evaluation or replay can reproduce the time boundary.
+Retrieval filters future-observed, not-yet-valid, expired, superseded, and
+retracted memories **before** dense/lexical ranking and top-K selection. Validity
+uses the half-open interval `valid_from <= as_of < valid_until`; legacy rows
+without `observed_at` use `created_at`. The response includes `retrieval_as_of`
+so an evaluation or replay can reproduce the time boundary.
 
 \* At least one of `prompt`/`query` should be non-empty; an empty query
 returns an empty packed context, not an error.
