@@ -278,6 +278,8 @@ def _m7_memory_provenance(cur: Any) -> None:
     )
     for column, coltype in columns:
         _add_column_if_missing(cur, "memories", column, coltype)
+
+
 MIGRATIONS: List[Migration] = [
     Migration(1, "embedding_metadata", _m1_embedding_metadata, _m1_embedding_metadata),
     Migration(2, "migration_ledger", _m2_migration_ledger, _m2_migration_ledger),
