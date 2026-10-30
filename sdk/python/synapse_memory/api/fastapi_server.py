@@ -21,6 +21,7 @@ from synapse_memory.core.memory_manager import DEFAULT_MAX_RECORD_LIMIT, MemoryM
 from synapse_memory.core.knapsack_packer import KnapsackPacker
 from synapse_memory.core.decay_engine import DecayEngine
 from synapse_memory.core.hybrid_search import HybridSearch
+from synapse_memory.core.temporal import is_retrieval_eligible
 from synapse_memory.runtime import RunEventType, RunStatus
 from synapse_memory.core.run_trace_store import (
     RunTraceStore, RunTraceError, RunNotFoundError, RunConflictError,
@@ -465,6 +466,7 @@ class QueryRequest(SynapseAPIModel):
     max_token_budget: int = Field(1500, ge=50, le=8000, description="Max token window allowed for context packing", alias="maxTokens")
     category: Optional[str] = Field(None, min_length=1, max_length=64, pattern=r"^[a-z0-9_\-]+$", description="Optional category filter")
     tenant_id: Optional[str] = Field(None, alias="tenantId", min_length=1, max_length=128, pattern=r"^[A-Za-z0-9_\-\.]+$", description="Target tenant ID")
+    as_of: Optional[float] = Field(None, ge=0, allow_inf_nan=False, alias="asOf", description="Evaluate temporal validity at this Unix timestamp")
 
 
 class QueryResponse(SynapseAPIModel):
@@ -472,6 +474,11 @@ class QueryResponse(SynapseAPIModel):
     injected_nodes_count: int
     injected_nodes: List[Dict[str, Any]]
     active_storage_backend: str
+    retrieval_as_of: Optional[float] = None
+
+
+class RetractionRequest(SynapseAPIModel):
+    reason: str = Field(..., min_length=1, max_length=128, pattern=r"^[a-z][a-z0-9_]*$")
 
 
 class RunCreateRequest(SynapseAPIModel):
