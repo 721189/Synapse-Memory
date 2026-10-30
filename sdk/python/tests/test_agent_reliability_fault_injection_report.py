@@ -11,6 +11,12 @@ def test_fault_injection_report_covers_all_ten_scenarios_and_separates_evidence(
     assert all(scenario["passed"] for scenario in report["scenarios"])
     assert report["metrics"]["budget_enforcement"]["tool_call_limit_enforced"] is True
     assert report["metrics"]["budget_enforcement"]["cooperative_deadline_enforced"] is True
+    assert report["metrics"]["tenant_isolation"]["cross_tenant_memory_read_denied"] is True
+    assert report["metrics"]["tenant_isolation"]["cross_tenant_trace_read_denied"] is True
+    assert report["metrics"]["retrieval_evidence"]["protected_context_api_turns"] == 40
+    assert report["metrics"]["retrieval_evidence"]["protected_context_api_trace_events"] == 40
+    assert report["metrics"]["true_negative"] == 1
+    assert report["metrics"]["false_positive_stop_rate"] == 0.0
     assert report["evidence_sources"]["synthetic_fault_injection"]["included"] is True
     assert report["evidence_sources"]["longmemeval_s_evidence_retrieval"]["included"] is False
     assert report["evidence_sources"]["developer_human_relevance_review"]["status"] == (
