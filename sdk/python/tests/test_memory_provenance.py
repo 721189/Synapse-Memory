@@ -1,7 +1,9 @@
 """Versioned memory provenance metadata persistence and validation."""
 
 import unittest
+from unittest.mock import patch
 
+from synapse_memory.client import SynapseClient
 from synapse_memory.core.memory_manager import MemoryManager
 from synapse_memory.core.sqlite_db import SQLiteMemoryStore
 
@@ -71,6 +73,32 @@ class TestMemoryProvenance(unittest.TestCase):
                 valid_until=100.0,
             )
         self.assertEqual(self.store.get_all_memories(tenant_id="provenance-test"), [])
+
+    def test_python_client_forwards_provenance_fields(self):
+        client = SynapseClient()
+        try:
+            with patch.object(client, "_request", return_value={
+                "id": "mem_test", "status": "CREATED", "token_cost": 20,
+                "tenant_id": "default",
+            }) as request:
+                client.create_memory(
+                    "A source-backed fact",
+                    source_type="document",
+                    source_id="doc:source-1",
+                    observed_at=100.0,
+                    valid_from=90.0,
+                    valid_until=110.0,
+                    trust_level="high",
+                )
+            payload = request.call_args.args[2]
+            self.assertEqual(payload["source_type"], "document")
+            self.assertEqual(payload["source_id"], "doc:source-1")
+            self.assertEqual(payload["observed_at"], 100.0)
+            self.assertEqual(payload["valid_from"], 90.0)
+            self.assertEqual(payload["valid_until"], 110.0)
+            self.assertEqual(payload["trust_level"], "high")
+        finally:
+            client.close()
 
     def test_source_id_rejects_free_form_content(self):
         with self.assertRaisesRegex(ValueError, "source_id"):
