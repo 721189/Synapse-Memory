@@ -115,4 +115,12 @@ PYTHONPATH=sdk/python pytest sdk/python/tests -v
 
 Database-gated tests require a disposable PostgreSQL/pgvector database and explicitly documented environment flags. Passing the offline suite alone is not production verification.
 
-**Licence:** proprietary. Installation does not grant unrestricted usage or deployment rights; obtain written permission under [`../../LICENSE`](../../LICENSE) before using this package outside the permissions granted by the copyright holder.
+
+## License
+
+The Synapse Memory SDK source in this distribution is licensed under the
+[Apache License, Version 2.0](LICENSE). This permits use, modification, and
+redistribution subject to the license conditions. Third-party dependencies
+remain under their respective licenses. The Synapse name and logos are not
+licensed by the Apache 2.0 grant; see the repository
+[trademark policy](https://github.com/721189/Synapse-Memory/blob/main/TRADEMARKS.md).

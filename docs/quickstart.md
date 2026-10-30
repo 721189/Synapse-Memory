@@ -22,8 +22,13 @@ python -m pip install synapse-memory-engine==1.3.1
 ```
 
 The package is named `synapse-memory-engine`; the Python import is
-`synapse_memory`. The package is proprietary; installation does not grant
-unrestricted use or deployment rights. See [LICENSE](../LICENSE).
+`synapse_memory`. Note that PyPI version `1.3.1` predates this repository's
+Apache 2.0 migration and is **not** retroactively relicensed by it; the license
+terms accompanying that published artifact continue to apply. The Apache 2.0
+license applies to the original source in this repository at this revision and
+to subsequent artifacts that include the Apache license notice. Third-party
+dependencies retain their own licenses. See [LICENSE](../LICENSE) and the
+[licensing policy](licensing.md).
 
 ### 2. Start a local engine
 

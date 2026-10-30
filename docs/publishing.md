@@ -26,6 +26,32 @@ A user must never be able to `pip install synapse-memory` and believe they got
 this project — that name resolves to someone else's package. Always show
 install commands as `pip install synapse-memory-engine[...]`.
 
+## License metadata and distribution checks
+
+The SDK is distributed under Apache License 2.0. Its build metadata declares
+`license = "Apache-2.0"` and includes `sdk/python/LICENSE` through
+`license-files`. Keep the root `LICENSE`, SDK copy, `pyproject.toml`, and
+legacy `setup.py` metadata in sync.
+
+Before publishing, build both artifacts and verify that their metadata and
+license file are present:
+
+```bash
+python -m build --sdist --wheel sdk/python
+python -m twine check --strict sdk/python/dist/*
+python -m zipfile -l sdk/python/dist/*.whl
+tar -tf sdk/python/dist/*.tar.gz | grep -E '(^|/)LICENSE$|\.dist-info/licenses/'
+```
+
+Also generate and review the resolved Python and Node dependency license
+inventories described in [the licensing policy](licensing.md). Do not infer
+that dependencies are Apache-licensed merely because Synapse is.
+
+The Apache 2.0 license applies only to revisions and artifacts that contain
+this licensing change. Previously published package versions are not
+retroactively relicensed. Do not overwrite or relabel an existing PyPI
+release; publish the next version through the normal signed-tag workflow.
+
 ## One-time setup (operator / maintainer)
 
 1. **PyPI — pending trusted publisher.** On PyPI → Account settings →

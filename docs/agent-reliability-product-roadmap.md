@@ -88,7 +88,7 @@ Tasks:
 - Find 3–5 concrete failure traces or create clearly labeled synthetic cases; distinguish observed incidents from hypothetical examples.
 - Test whether budget/loop containment plus memory-context diagnostics is more urgent than memory quality alone.
 - Inventory the existing React UI, API schemas, auth/tenant middleware, migration mechanism, and test fixtures before proposing endpoints or database tables.
-- Review package license and pilot permissions. The current repo license is proprietary; clarify what pilot users may install, run, modify, and deploy.
+- Complete the Apache-2.0 transition and review the resolved Python/Node dependency license inventories. Keep pilot authorization, data-processing terms, and hosted-service terms separate from the open-source software license.
 - Establish the current security boundary and data-flow map: authoritative encrypted content vs plaintext search projections/embeddings/telemetry.
 
 **Deliverables:** 1-page ICP/problem statement, competitor/tool substitution map, 3 candidate pilots, schema/architecture note, privacy threat model, and baseline metrics.
