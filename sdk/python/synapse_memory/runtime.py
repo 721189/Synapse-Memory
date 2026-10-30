@@ -513,6 +513,7 @@ class SynapseRun:
                 reason="postcondition_failed",
                 error_type=type(exc).__name__,
             )
+            self._status = RunStatus.FAILED
             raise PostconditionFailed("Tool result failed its independent postcondition.") from None
         if verified is not True:
             self._emit(
@@ -523,6 +524,7 @@ class SynapseRun:
                 reason="postcondition_failed",
                 error_type="PostconditionFailed",
             )
+            self._status = RunStatus.FAILED
             raise PostconditionFailed("Tool result failed its independent postcondition.")
         self._emit(
             RunEventType.TOOL_CALL_VERIFICATION_PASSED,
