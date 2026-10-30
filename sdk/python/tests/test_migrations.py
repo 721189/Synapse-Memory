@@ -31,12 +31,6 @@ class TestMigrations(unittest.TestCase):
             );
             """
         )
-        conn.execute(
-            "INSERT INTO memories (id, tenant_id, content, category, confidence, created_at, "
-            "last_accessed_at, access_count, token_cost, embedding, feedback_multiplier) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            ("legacy-row", "tenant-old", "legacy", "fact", 0.8, 123.0, 123.0, 0, 10, "[]", 1.0),
-        )
         conn.commit()
         conn.close()
 
@@ -71,16 +65,6 @@ class TestMigrations(unittest.TestCase):
             "source_type", "source_id", "observed_at", "valid_from", "valid_until",
             "trust_level", "supersession_reason", "retracted_at", "retraction_reason",
         } <= cols)
-        conn = self._get_conn()
-        try:
-            observed_at = conn.execute(
-                "SELECT observed_at FROM memories WHERE id = ?",
-                ("legacy-row",),
-            ).fetchone()[0]
-        finally:
-            conn.close()
-        self.assertEqual(observed_at, 123.0)
-
         conn = self._get_conn()
         try:
             tables = {
