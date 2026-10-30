@@ -29,10 +29,11 @@ compatibility shims returning identical envelopes.
 |---|---|---|
 | `GET /liveness`, `GET /readiness`, `GET /health`, `GET /metrics` | none | Unauthenticated probes |
 | `GET /api/memories` (+ alias) | `memories:read` | Tenant-scoped list |
-| `POST /ingest`, `/api/memories/create`, `/api/memories/add` | `memories:write` | 201 on success |
+| `POST /ingest`, `/api/memories/create`, `/api/memories/add` | `memories:write` | 201 on success; medium/high/authoritative provenance additionally requires `memories:trust` |
 | `POST /api/memories/bulk` | `memories:write` | max 100 items, 500KB text |
 | `POST /query`, `/api/memories/query`, `/api/retrieval/knapsack-pack` | `memories:read` | Retrieval + packing; optional run correlation also requires `agent-runs:write` |
 | `POST /feedback` | `memories:write` | Reinforcement signal |
+| trust elevation on `POST /ingest` | `memories:trust` in addition to `memories:write` | `medium`, `high`, and `authoritative` provenance only; not implied by legacy `admin`; platform-admin-only key delegation |
 | `DELETE /api/memories/{memory_id}` | `memories:delete` | Ownership enforced |
 | `POST /api/memories/clear` | `memories:delete` | Real `deleted_count`; audited |
 | `POST /api/security/gdpr-delete` | `memories:delete` | Right-to-erasure; audited |
