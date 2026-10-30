@@ -452,7 +452,7 @@ jobs:
 
           report = build_fault_injection_report()
           output = Path("artifacts/agent-reliability-fault-injection.json")
-          output.write_text(json.dumps(report, indent=2, sort_keys=True) + "\\n")
+          output.write_text(json.dumps(report, indent=2, sort_keys=True) + chr(10))
           print(json.dumps(report["summary"], sort_keys=True))
           if not report["summary"]["all_passed"]:
               raise SystemExit(1)
