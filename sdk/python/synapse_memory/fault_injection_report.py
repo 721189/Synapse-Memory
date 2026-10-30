@@ -320,7 +320,7 @@ def build_fault_injection_report() -> Dict[str, Any]:
         scenario for scenario in report["scenarios"]
         if scenario["scenario"] == "explicit-safe-transient-retry"
     )
-    safe_control_false_alarm = not safe_retry_scenario["passed"]
+    safe_control_false_alarm = safe_retry_scenario.get("succeeded") is not True
     report["metrics"]["true_negative"] = int(not safe_control_false_alarm)
     report["metrics"]["false_positive_stop_count"] = int(safe_control_false_alarm)
     report["metrics"]["false_positive_stop_rate"] = 1.0 if safe_control_false_alarm else 0.0
