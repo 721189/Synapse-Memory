@@ -1,4 +1,5 @@
 import json
+import math
 import re
 import sqlite3
 import time
@@ -400,7 +401,7 @@ class SQLiteMemoryStore:
         if not isinstance(reason, str) or not re.fullmatch(r"[a-z][a-z0-9_]{0,127}", reason):
             raise ValueError("reason must be a controlled lowercase snake_case code")
         timestamp = time.time() if retracted_at is None else retracted_at
-        if isinstance(timestamp, bool) or not isinstance(timestamp, (int, float)) or not time.isfinite(timestamp) or timestamp < 0:
+        if isinstance(timestamp, bool) or not isinstance(timestamp, (int, float)) or not math.isfinite(timestamp) or timestamp < 0:
             raise ValueError("retracted_at must be a finite non-negative timestamp")
         with self._get_connection() as conn:
             cursor = conn.cursor()
