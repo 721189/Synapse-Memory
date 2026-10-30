@@ -67,6 +67,71 @@ class TestProtectedRunConstraints:
         assert response.status_code == 422, response.text
         assert "Protected context requires" in response.json()["error"]
 
+    def test_empty_memory_result_still_records_protected_retrieval_metadata(self):
+        run_id = "protected-empty-" + uuid.uuid4().hex[:12]
+        created = self.client.post(
+            "/api/agent-runs",
+            json={"run_id": run_id},
+            headers=self.headers,
+        )
+        assert created.status_code == 200, created.text
+        started = self.client.post(
+            f"/api/agent-runs/{run_id}/events",
+            json={
+                "schema_version": 1,
+                "event_id": "evt-start-" + uuid.uuid4().hex,
+                "run_id": run_id,
+                "event_type": "run.started",
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "run_status": "running",
+            },
+            headers=self.headers,
+        )
+        assert started.status_code == 200, started.text
+
+        constraint_text = "Do not perform writes outside this workspace."
+        with (
+            patch.object(server.embedder, "embed_query", return_value=[0.1] * server.embedding_dimension),
+            patch.object(server.store, "vector_search", return_value=[]),
+            patch.object(server.store, "lexical_search", return_value=[]),
+            patch.object(server.store, "get_all_memories", return_value=[]),
+            patch.object(server, "ACTIVE_BACKEND", "sqlite"),
+        ):
+            response = self.client.post(
+                "/query",
+                json={
+                    "prompt": "find workspace context",
+                    "maxTokens": 500,
+                    "run_id": run_id,
+                    "protected_constraints": [
+                        {"kind": "authorization", "text": constraint_text},
+                    ],
+                },
+                headers=self.headers,
+            )
+
+        assert response.status_code == 200, response.text
+        data = response.json()["data"]
+        assert data["retrieval_id"]
+        assert data["injected_nodes_count"] == 0
+        assert constraint_text in data["fused_context"]
+
+        trace_response = self.client.get(
+            f"/api/agent-runs/{run_id}/events",
+            headers=self.headers,
+        )
+        assert trace_response.status_code == 200, trace_response.text
+        events = trace_response.json()["data"]["events"]
+        retrieval_events = [
+            event for event in events if event["event_type"] == "memory.retrieval"
+        ]
+        assert len(retrieval_events) == 1
+        event = retrieval_events[0]
+        assert event["protected_constraints_count"] == 1
+        assert event["protected_constraints_token_cost"] == data["protected_constraints_token_cost"]
+        assert event["memory_evidence"] == []
+        assert constraint_text not in json.dumps(event)
+
     def test_constraint_count_and_total_text_are_bounded(self):
         too_many = [
             {"kind": "goal", "text": "Required goal"}
