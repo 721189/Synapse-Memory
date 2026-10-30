@@ -459,7 +459,11 @@ class SynapseRun:
                     tool_name, arguments, tool, retry_authorized=retry_safe
                 )
             except BaseException as exc:
-                retryable = isinstance(exc, Exception) and isinstance(exc, retry_on)
+                retryable = (
+                    isinstance(exc, Exception)
+                    and not isinstance(exc, RunGuardError)
+                    and isinstance(exc, retry_on)
+                )
                 if not retryable:
                     raise
                 if not retry_safe:
