@@ -20,6 +20,7 @@ import synapse_memory.api.fastapi_server as server
 from synapse_memory.fault_injection import run_fault_injection_suite
 from synapse_memory.core.memory_manager import MemoryManager
 from synapse_memory.core.sqlite_db import SQLiteMemoryStore
+from synapse_memory.core.run_trace_store import RunNotFoundError, RunTraceStore
 from synapse_memory.core.temporal import is_retrieval_eligible
 from synapse_memory.runtime import (
     RunDeadlineExceeded,
@@ -79,6 +80,49 @@ def _storage_correction_scenario() -> bool:
     )
     store.close()
     return bool(success)
+
+
+def _tenant_isolation_scenario() -> Dict[str, bool]:
+    """Check tenant-scoped memory and trace reads on the SQLite test backend."""
+    store = SQLiteMemoryStore(db_path=":memory:")
+    manager = MemoryManager(
+        store=store,
+        embedder=cast(Any, _FixtureEmbedder()),
+        max_record_limit=10,
+    )
+    memory_id, action, _ = manager.ingest_with_deduplication(
+        content="Private fact for tenant alpha.",
+        category="fact",
+        tenant_id="tenant-alpha",
+        source_type="document",
+        source_id="doc:tenant-alpha",
+        trust_level="low",
+    )
+    tenant_b_memory_hidden = store.get_memory_by_id(
+        memory_id, tenant_id="tenant-beta"
+    ) is None
+
+    traces = RunTraceStore(store)
+    traces.append_event("tenant-alpha", "fi-tenant-run", {
+        "schema_version": 1,
+        "event_id": "evt-fi-tenant-start",
+        "run_id": "fi-tenant-run",
+        "event_type": "run.started",
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "run_status": "running",
+    })
+    tenant_b_trace_hidden = False
+    try:
+        traces.get_run("tenant-beta", "fi-tenant-run")
+    except RunNotFoundError:
+        tenant_b_trace_hidden = True
+
+    store.close()
+    return {
+        "memory_created": action == "CREATED",
+        "cross_tenant_memory_read_denied": tenant_b_memory_hidden,
+        "cross_tenant_trace_read_denied": tenant_b_trace_hidden,
+    }
 
 
 def _protected_context_api_scenario(goal: str, token_budget: int, turns: int = 40) -> Dict[str, Any]:
@@ -220,6 +264,19 @@ def build_fault_injection_report() -> Dict[str, Any]:
             except RunDeadlineExceeded:
                 deadline_fired = True
 
+    tenant_scenario = next(
+        scenario for scenario in report["scenarios"]
+        if scenario["scenario"] == "cross-tenant-trace-read-denied"
+    )
+    tenant_result = _tenant_isolation_scenario()
+    tenant_scenario.update(tenant_result)
+    tenant_scenario["passed"] = bool(
+        tenant_scenario["passed"]
+        and tenant_result["memory_created"]
+        and tenant_result["cross_tenant_memory_read_denied"]
+        and tenant_result["cross_tenant_trace_read_denied"]
+    )
+
     correction_scenario = next(
         scenario for scenario in report["scenarios"]
         if scenario["scenario"] == "new-fact-supersedes-old-evidence"
@@ -255,6 +312,20 @@ def build_fault_injection_report() -> Dict[str, Any]:
         "protected_context_api_trace_events": api_assembly["trace_event_count"],
         "protected_context_api_max_overshoot_tokens": api_assembly["max_token_overshoot"],
     })
+    report["metrics"]["tenant_isolation"] = tenant_result
+
+    # The safe transient retry is a labeled negative control: the guard should
+    # not classify a recoverable, explicitly idempotent operation as a stop.
+    safe_retry_scenario = next(
+        scenario for scenario in report["scenarios"]
+        if scenario["scenario"] == "explicit-safe-transient-retry"
+    )
+    safe_control_false_alarm = not safe_retry_scenario["passed"]
+    report["metrics"]["true_negative"] = int(not safe_control_false_alarm)
+    report["metrics"]["false_positive_stop_count"] = int(safe_control_false_alarm)
+    report["metrics"]["false_positive_stop_rate"] = 1.0 if safe_control_false_alarm else 0.0
+    report["metrics"]["safe_control_cases"] = 1
+    report["metrics"]["labeled_guard_cases"] += 1
 
     budget_scenario = next(
         scenario for scenario in report["scenarios"]
