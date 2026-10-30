@@ -405,7 +405,7 @@ class SynapseRun:
         tool: Callable[..., T],
     ) -> T:
         """Execute one tool call once; ambiguous failures are never replayed."""
-        return self._call_tool(tool_name, arguments, tool, retry_authorized=False)
+        return self._call_tool(tool_name, arguments, tool)
 
     def call_tool_with_retry(
         self,
@@ -459,9 +459,7 @@ class SynapseRun:
 
         for attempt in range(1, attempts + 1):
             try:
-                return self._call_tool(
-                    tool_name, arguments, tool, retry_authorized=retry_safe
-                )
+                return self._call_tool(tool_name, arguments, tool)
             except BaseException as exc:
                 retryable = (
                     isinstance(exc, Exception)
@@ -564,8 +562,6 @@ class SynapseRun:
         tool_name: str,
         arguments: Mapping[str, Any],
         tool: Callable[..., T],
-        *,
-        retry_authorized: bool,
     ) -> T:
         """Execute one admitted attempt while preserving normal run budgets.
 
@@ -600,10 +596,7 @@ class SynapseRun:
                 tool_name,
                 fingerprint,
             )
-        if (
-            not retry_authorized
-            and self._failure_counts.get(fingerprint, 0) >= self.policy.max_repeated_failures
-        ):
+        if self._failure_counts.get(fingerprint, 0) >= self.policy.max_repeated_failures:
             self._block_call(
                 RepeatedToolCallError("Equivalent tool call blocked after repeated failures."),
                 "repeated_tool_call_failures",
