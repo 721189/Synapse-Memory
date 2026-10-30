@@ -1,9 +1,10 @@
 import json
+import re
 import sqlite3
 import time
 from typing import Any, Dict, List, Optional
 
-from synapse_memory.core.temporal import is_retrieval_eligible
+from synapse_memory.core.temporal import is_retrieval_eligible, validate_as_of
 from synapse_memory.core.encryption import (
     FernetEncryptionProvider,
     KeyManagementProvider,
@@ -396,7 +397,11 @@ class SQLiteMemoryStore:
         retracted_at: Optional[float] = None,
     ) -> bool:
         """Mark a memory retracted without erasing its audit lineage."""
-        timestamp = time.time() if retracted_at is None else float(retracted_at)
+        if not isinstance(reason, str) or not re.fullmatch(r"[a-z][a-z0-9_]{0,127}", reason):
+            raise ValueError("reason must be a controlled lowercase snake_case code")
+        timestamp = time.time() if retracted_at is None else retracted_at
+        if isinstance(timestamp, bool) or not isinstance(timestamp, (int, float)) or not time.isfinite(timestamp) or timestamp < 0:
+            raise ValueError("retracted_at must be a finite non-negative timestamp")
         with self._get_connection() as conn:
             cursor = conn.cursor()
             cursor.execute(
@@ -408,6 +413,7 @@ class SQLiteMemoryStore:
             changed = cursor.rowcount > 0
             conn.commit()
             return changed
+
     def delete_memory(self, memory_id: str, tenant_id: Optional[str] = None) -> None:
         with self._get_connection() as conn:
             cursor = conn.cursor()
@@ -478,7 +484,7 @@ class SQLiteMemoryStore:
         Results match the PGVectorMemoryStore.vector_search contract:
         each node carries `cosine_similarity` and `relevance_score`.
         """
-        as_of = time.time() if temporal_as_of is None else temporal_as_of
+        as_of = validate_as_of(time.time() if temporal_as_of is None else temporal_as_of)
         memories = (
             self.get_memories_by_category(category, tenant_id=tenant_id)
             if category
