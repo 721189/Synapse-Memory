@@ -196,10 +196,12 @@ UI: the first metadata-only run inspector is now implemented in the existing Rea
 **Planning window:** Weeks 8–12+, only after earlier gates pass.  
 **Owners:** Product/founder + all workstreams.
 
+Use the [design-partner pilot runbook](design-partner-pilot-runbook.md) for partner qualification, baseline/treatment protocol, success metrics, data boundaries, independent security-review evidence, and pilot decision records. The runbook is preparation material; completing it does not satisfy the pilot or independent-review acceptance criteria.
+
 Tasks:
 - Onboard 2–3 design partners on non-critical or staging workloads first.
 - Agree on a baseline period and a fixed success measure with each pilot (for example, fewer repeated tool invocations, shorter time-to-diagnosis, fewer unverified completions, or lower spend for the same task success rate).
-- Run in observe-only mode first for policies that could block actions; enable enforcement only after reviewing false positives.
+- For a telemetry-only observation period, leave the existing agent execution path unchanged and record tenant-scoped metadata events through the run/event API; the current SDK has no observe-only `RunPolicy` mode, so do not route calls through `SynapseRun` during this stage. Review traces retrospectively, then test hard guard behavior in an isolated staging sandbox with stubbed/read-only tools before considering any partner-workload enforcement.
 - Load-test event ingestion, exercise backups/restore, retention and tenant deletion, and verify access boundaries with the actual production runtime role.
 - Review auth, tenant isolation, key handling, plain-text search derivatives, PII controls, secrets in telemetry, dependency risk, retention/export/deletion, and incident response with an independent reviewer.
 - Make self-healing a future feature only after checkpoint consistency and external-side-effect/idempotency behavior are verified under injected failures.
