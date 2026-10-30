@@ -7,6 +7,7 @@ time and tool-call admission checks.
 """
 from __future__ import annotations
 
+import json
 import time
 import uuid
 from datetime import datetime, timezone
