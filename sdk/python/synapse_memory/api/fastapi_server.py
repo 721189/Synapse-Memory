@@ -867,6 +867,7 @@ def query_memory(
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
     effective_tenant = resolve_tenant(principal, payload.tenant_id)
+    retrieval_id: Optional[str] = None
     if payload.run_id and "agent-runs:write" not in principal.scopes:
         raise HTTPException(
             status_code=403,
@@ -874,7 +875,6 @@ def query_memory(
         )
 
     if not query_text.strip():
-        retrieval_id: Optional[str] = None
         if payload.run_id:
             import uuid as _uuid
 
@@ -1006,7 +1006,6 @@ def query_memory(
         )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
-    retrieval_id: Optional[str] = None
     if payload.run_id:
         import uuid as _uuid
 
