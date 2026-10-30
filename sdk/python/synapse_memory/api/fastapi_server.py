@@ -790,6 +790,11 @@ def query_memory(
         ).model_dump(), request)
 
     effective_tenant = resolve_tenant(principal, payload.tenant_id)
+    if payload.run_id and "agent-runs:write" not in principal.scopes:
+        raise HTTPException(
+            status_code=403,
+            detail="Agent retrieval tracing requires the agent-runs:write scope.",
+        )
     query_vector = embedder.embed_query(query_text)
 
     # 1. Candidate retrieval. On the pgvector backend, hybrid search (dense HNSW
