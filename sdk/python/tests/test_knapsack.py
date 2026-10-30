@@ -25,6 +25,31 @@ class TestKnapsackPacker(unittest.TestCase):
         total_cost = sum(m["token_cost"] for m in self.memories if m["id"] in packed_ids)
         self.assertLessEqual(total_cost, 10)
 
+    def test_reserved_context_is_subtracted_before_memory_selection(self):
+        packed = self.packer.pack(self.memories, token_budget=100, reserved_token_cost=60)
+        total_memory_cost = sum(int(memory["token_cost"]) for memory in packed)
+        self.assertLessEqual(total_memory_cost, 40)
+
+    def test_reservation_can_consume_entire_budget_without_dropping_reserved_context(self):
+        packed = self.packer.pack(self.memories, token_budget=100, reserved_token_cost=100)
+        self.assertEqual(packed, [])
+
+    def test_reservation_over_budget_fails_even_when_there_are_no_memories(self):
+        with self.assertRaisesRegex(ValueError, "Protected context requires"):
+            self.packer.pack([], token_budget=50, reserved_token_cost=51)
+
+    def test_invalid_reservation_is_rejected(self):
+        for value in (-1, 1.5, True):
+            with self.subTest(value=value):
+                with self.assertRaisesRegex(ValueError, "reserved_token_cost"):
+                    self.packer.pack(self.memories, token_budget=100, reserved_token_cost=value)
+
+    def test_greedy_fallback_uses_only_the_unreserved_budget(self):
+        packer = KnapsackPacker(token_budget=100)
+        packer.DP_OPS_THRESHOLD = 1
+        packed = packer.pack(self.memories, token_budget=100, reserved_token_cost=60)
+        self.assertLessEqual(sum(int(memory["token_cost"]) for memory in packed), 40)
+
 
 if __name__ == '__main__':
     unittest.main()
