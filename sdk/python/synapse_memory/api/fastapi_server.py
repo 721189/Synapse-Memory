@@ -3,6 +3,7 @@ import os
 import time
 import datetime
 import hashlib
+import json
 import logging
 import math
 import re
@@ -19,7 +20,9 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(
 from synapse_memory.core.sqlite_db import SQLiteMemoryStore
 from synapse_memory.core.pgvector_db import PGVectorMemoryStore
 from synapse_memory.core.embedder import SynapseEmbedder
-from synapse_memory.core.memory_manager import DEFAULT_MAX_RECORD_LIMIT, MemoryManager
+from synapse_memory.core.memory_manager import (
+    DEFAULT_MAX_RECORD_LIMIT, MemoryManager, estimate_token_cost_upper_bound,
+)
 from synapse_memory.core.knapsack_packer import KnapsackPacker
 from synapse_memory.core.decay_engine import DecayEngine
 from synapse_memory.core.hybrid_search import HybridSearch
@@ -462,6 +465,23 @@ class IngestResponse(SynapseAPIModel):
     tenant_id: str
 
 
+class ProtectedConstraint(SynapseAPIModel):
+    """Caller-supplied mandatory context, kept separate from ranked memories."""
+
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+    kind: Literal["goal", "authorization", "safety", "invariant"] = Field(
+        ..., description="Constraint classification; not an authorization proof"
+    )
+    text: str = Field(..., min_length=1, max_length=2000, description="Constraint text")
+
+    @field_validator("text")
+    @classmethod
+    def text_must_not_be_blank(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("protected constraint text must not be blank")
+        return value
+
+
 class QueryRequest(SynapseAPIModel):
     prompt: Optional[str] = Field(None, min_length=1, max_length=8000, description="Active user prompt")
     query: Optional[str] = Field(None, min_length=1, max_length=8000, description="Alternative alias for prompt")
@@ -470,6 +490,18 @@ class QueryRequest(SynapseAPIModel):
     tenant_id: Optional[str] = Field(None, alias="tenantId", min_length=1, max_length=128, pattern=r"^[A-Za-z0-9_\-\.]+$", description="Target tenant ID")
     as_of: Optional[float] = Field(None, ge=0, allow_inf_nan=False, alias="asOf", description="Evaluate temporal validity at this Unix timestamp")
     run_id: Optional[str] = Field(None, min_length=1, max_length=128, pattern=r"^[A-Za-z0-9._:-]+$", description="Optionally attach this retrieval to an active tenant-scoped agent run")
+    protected_constraints: List[ProtectedConstraint] = Field(
+        default_factory=list,
+        max_length=8,
+        description="Mandatory caller-supplied context, reserved before optional memory packing",
+    )
+
+    @model_validator(mode="after")
+    def protected_constraint_payload_is_bounded(self):
+        total_chars = sum(len(item.text) for item in self.protected_constraints)
+        if total_chars > 8000:
+            raise ValueError("protected_constraints may contain at most 8000 characters in total")
+        return self
 
 
 class QueryResponse(SynapseAPIModel):
@@ -479,6 +511,25 @@ class QueryResponse(SynapseAPIModel):
     active_storage_backend: str
     retrieval_as_of: Optional[float] = None
     retrieval_id: Optional[str] = None
+    protected_constraints_count: int = 0
+    protected_constraints_token_cost: int = 0
+
+
+def _format_protected_constraints(constraints: List[ProtectedConstraint]) -> str:
+    """Serialize required caller context as a separate, bounded context section."""
+    if not constraints:
+        return ""
+    records = [
+        {"kind": item.kind, "text": item.text}
+        for item in constraints
+    ]
+    return (
+        "## Protected task constraints\n"
+        "The following caller-supplied items are mandatory context, separate from "
+        "optional memories. Synapse preserves them but does not independently "
+        "authenticate their authority.\n"
+        + json.dumps(records, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    )
 
 
 class RetractionRequest(SynapseAPIModel):
@@ -532,6 +583,8 @@ class AgentRunEventRequest(SynapseAPIModel):
     error_type: Optional[str] = Field(None, min_length=1, max_length=128, pattern=r"^[A-Za-z][A-Za-z0-9_.:-]*$")
     retrieval_id: Optional[str] = Field(None, min_length=1, max_length=128, pattern=r"^[A-Za-z0-9._:-]+$")
     retrieval_as_of: Optional[float] = Field(None, ge=0, allow_inf_nan=False)
+    protected_constraints_count: Optional[int] = Field(None, ge=0, le=8)
+    protected_constraints_token_cost: Optional[int] = Field(None, ge=0, le=8000)
     memory_evidence: List[MemoryEvidenceRequest] = Field(default_factory=list, max_length=100)
 
     @field_validator("timestamp")
@@ -543,10 +596,21 @@ class AgentRunEventRequest(SynapseAPIModel):
 
     @model_validator(mode="after")
     def retrieval_metadata_must_match_event_type(self):
+        protected_metadata = (
+            self.protected_constraints_count,
+            self.protected_constraints_token_cost,
+        )
+        if (protected_metadata[0] is None) != (protected_metadata[1] is None):
+            raise ValueError("protected constraint count and token cost must be supplied together")
         if self.event_type is RunEventType.MEMORY_RETRIEVAL:
             if not self.retrieval_id:
                 raise ValueError("memory.retrieval requires retrieval_id")
-        elif self.retrieval_id is not None or self.retrieval_as_of is not None or self.memory_evidence:
+        elif (
+            self.retrieval_id is not None
+            or self.retrieval_as_of is not None
+            or self.memory_evidence
+            or any(value is not None for value in protected_metadata)
+        ):
             raise ValueError("retrieval metadata is only valid for memory.retrieval")
         return self
 
@@ -785,18 +849,75 @@ def query_memory(
     """
     query_text = payload.prompt or payload.query or ""
     retrieval_as_of = time.time() if payload.as_of is None else payload.as_of
-    if not query_text.strip():
-        return envelope(QueryResponse(
-            fused_context="", injected_nodes_count=0, injected_nodes=[],
-            active_storage_backend=ACTIVE_BACKEND, retrieval_as_of=retrieval_as_of,
-        ).model_dump(), request)
+    protected_context_block = _format_protected_constraints(payload.protected_constraints)
+    protected_constraints_count = len(payload.protected_constraints)
+    # Include formatting/separator overhead in the reserved estimate so optional
+    # memories cannot consume budget needed to retain the required context.
+    protected_constraints_token_cost = (
+        estimate_token_cost_upper_bound(protected_context_block + "\n\n---\n\n")
+        if protected_context_block else 0
+    )
+    try:
+        # Validate the mandatory reservation before retrieval or empty-query exits.
+        packer.pack(
+            [], payload.max_token_budget,
+            reserved_token_cost=protected_constraints_token_cost,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
 
     effective_tenant = resolve_tenant(principal, payload.tenant_id)
+    retrieval_id: Optional[str] = None
     if payload.run_id and "agent-runs:write" not in principal.scopes:
         raise HTTPException(
             status_code=403,
             detail="Agent retrieval tracing requires the agent-runs:write scope.",
         )
+
+    if not query_text.strip():
+        if payload.run_id:
+            import uuid as _uuid
+
+            retrieval_id = "ret_" + _uuid.uuid4().hex
+            try:
+                run_trace_store.append_event(effective_tenant, payload.run_id, {
+                    "schema_version": 1,
+                    "event_id": "evt_" + _uuid.uuid4().hex,
+                    "run_id": payload.run_id,
+                    "event_type": RunEventType.MEMORY_RETRIEVAL.value,
+                    "timestamp": datetime.datetime.now(datetime.timezone.utc),
+                    "run_status": RunStatus.RUNNING.value,
+                    "retrieval_id": retrieval_id,
+                    "retrieval_as_of": retrieval_as_of,
+                    "protected_constraints_count": protected_constraints_count,
+                    "protected_constraints_token_cost": protected_constraints_token_cost,
+                    "memory_evidence": [],
+                })
+            except RunNotFoundError as exc:
+                raise HTTPException(
+                    status_code=404,
+                    detail="Run not found for the authenticated tenant.",
+                ) from exc
+            except RunConflictError as exc:
+                raise HTTPException(
+                    status_code=409,
+                    detail="Run cannot accept another retrieval event.",
+                ) from exc
+            except RunTraceError as exc:
+                raise HTTPException(
+                    status_code=503,
+                    detail="Retrieval trace storage unavailable.",
+                ) from exc
+            except (ValueError, TypeError) as exc:
+                raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+        return envelope(QueryResponse(
+            fused_context=protected_context_block, injected_nodes_count=0, injected_nodes=[],
+            active_storage_backend=ACTIVE_BACKEND, retrieval_as_of=retrieval_as_of,
+            retrieval_id=retrieval_id,
+            protected_constraints_count=protected_constraints_count,
+            protected_constraints_token_cost=protected_constraints_token_cost,
+        ).model_dump(), request)
     query_vector = embedder.embed_query(query_text)
 
     # 1. Candidate retrieval. On the pgvector backend, hybrid search (dense HNSW
@@ -843,27 +964,19 @@ def query_memory(
             if is_retrieval_eligible(memory, retrieval_as_of)
         ]
 
-        if not candidate_docs:
-            return envelope(QueryResponse(
-                fused_context="", injected_nodes_count=0, injected_nodes=[],
-                active_storage_backend=ACTIVE_BACKEND, retrieval_as_of=retrieval_as_of,
-            ).model_dump(), request)
-
-        # 2. Reciprocal Rank Fusion (RRF) in Python for the non-pgvector backends.
-        candidates = searcher.fused_search(
-            query_text,
-            candidate_docs,
-            query_vector=query_vector,
-            top_k=25,
-            category_filter=payload.category,
-            tenant_filter=effective_tenant
-        )
-
-    if not candidates:
-        return envelope(QueryResponse(
-            fused_context="", injected_nodes_count=0, injected_nodes=[],
-            active_storage_backend=ACTIVE_BACKEND, retrieval_as_of=retrieval_as_of,
-        ).model_dump(), request)
+        # Empty candidate sets still pass through packing and trace correlation.
+        # This preserves an explainable retrieval event even when no eligible
+        # memories were found for the query.
+        if candidate_docs:
+            # 2. Reciprocal Rank Fusion (RRF) in Python for the non-pgvector backends.
+            candidates = searcher.fused_search(
+                query_text,
+                candidate_docs,
+                query_vector=query_vector,
+                top_k=25,
+                category_filter=payload.category,
+                tenant_filter=effective_tenant
+            )
 
     # 2. Dynamic temporal decay adjustment: S(m,q,t) = R(m,q) * D(m,t).
     # Preserve retrieval relevance; decay only re-weights priority.
@@ -884,9 +997,15 @@ def query_memory(
         m_copy["relevance_score"] = combined
         decayed_candidates.append(m_copy)
 
-    # 3. Dynamic programming 0/1 Knapsack optimal budget packing
-    packed_nodes = packer.pack(decayed_candidates, payload.max_token_budget)
-    retrieval_id: Optional[str] = None
+    # 3. Reserve required context first; relevance-ranked memories use only the remainder.
+    try:
+        packed_nodes = packer.pack(
+            decayed_candidates,
+            payload.max_token_budget,
+            reserved_token_cost=protected_constraints_token_cost,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     if payload.run_id:
         import uuid as _uuid
 
@@ -965,6 +1084,8 @@ def query_memory(
                 "run_status": RunStatus.RUNNING.value,
                 "retrieval_id": retrieval_id,
                 "retrieval_as_of": retrieval_as_of,
+                "protected_constraints_count": protected_constraints_count,
+                "protected_constraints_token_cost": protected_constraints_token_cost,
                 "memory_evidence": evidence,
             })
         except RunNotFoundError as exc:
@@ -980,7 +1101,9 @@ def query_memory(
     with _metrics_lock:
         _retrieval_success += 1
         _last_candidate_count = len(candidates)
-        _last_packed_tokens = sum(int(n.get("token_cost", 0) or 0) for n in packed_nodes)
+        _last_packed_tokens = protected_constraints_token_cost + sum(
+            int(n.get("token_cost", 0) or 0) for n in packed_nodes
+        )
 
     # Increment access counts for Ebbinghaus stabilization
     for node in packed_nodes:
@@ -991,7 +1114,11 @@ def query_memory(
     for n in packed_nodes:
         context_lines.append(f"[{n.get('category', 'MEMORY').upper()}] (Confidence: {n.get('confidence', 0.9):.2f}): {n.get('content', '')}")
 
-    fused_context_block = "\n---\n".join(context_lines)
+    memory_context_block = "\n---\n".join(context_lines)
+    context_sections = [
+        section for section in (protected_context_block, memory_context_block) if section
+    ]
+    fused_context_block = "\n\n---\n\n".join(context_sections)
 
     return envelope(
         {
@@ -1001,6 +1128,8 @@ def query_memory(
             "active_storage_backend": ACTIVE_BACKEND,
             "retrieval_as_of": retrieval_as_of,
             "retrieval_id": retrieval_id,
+            "protected_constraints_count": protected_constraints_count,
+            "protected_constraints_token_cost": protected_constraints_token_cost,
         },
         request,
     )

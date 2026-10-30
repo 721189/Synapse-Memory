@@ -1,6 +1,6 @@
 # Synapse Memory API Contract
 
-**Engine version:** 1.2.0 — **HTTP API compat:** v1
+**Engine version:** 1.4.0 — **HTTP API compat:** v1
 **Base URL:** `http://<host>:8008` (engine); the gateway proxies `/api/*` to it.
 **Auth:** `X-Synapse-API-Key` header (or `Authorization: Bearer <key>`) on all
 endpoints except the unauthenticated telemetry probes (`/liveness`, `/readiness`,
@@ -174,6 +174,18 @@ Scope: `memories:read`. Hybrid vector + lexical RRF fusion, Ebbinghaus decay
 | `tenant_id` (`tenantId` alias) | No | from principal | tenant pattern, ≤128 chars |
 | `as_of` (`asOf` alias) | No | request time | finite Unix timestamp ≥ 0 |
 | `run_id` | No | null | active tenant-scoped run ID; requires `agent-runs:write` |
+| `protected_constraints` | No | empty list | Up to 8 required items; each has `kind` (`goal`, `authorization`, `safety`, `invariant`) and non-blank `text` (≤2000 chars); 8000 chars total |
+
+Protected constraints are serialized into a separate **Protected task constraints**
+section before optional memories. Their estimated token cost (including section
+formatting) is reserved first; optional memories are packed only into the remaining
+budget. When the required section alone exceeds `max_token_budget`, the request
+fails with HTTP 422. Constraints are never truncated or omitted to make room.
+The API returns `protected_constraints_count` and
+`protected_constraints_token_cost`. These values are caller-supplied context:
+Synapse preserves and budgets them but does not authenticate that the caller is
+authorized to assert a policy. Applications must authenticate/derive policy
+constraints from their own trusted control plane.
 
 Retrieval filters future-observed, not-yet-valid, expired, superseded, and
 retracted memories **before** dense/lexical ranking and top-K selection. Validity
@@ -182,15 +194,18 @@ without `observed_at` use `created_at`. The response includes `retrieval_as_of`
 so an evaluation or replay can reproduce the time boundary.
 
 \* At least one of `prompt`/`query` should be non-empty; an empty query
-returns an empty packed context, not an error.
+returns any supplied protected section (and no memories), not an error.
 
 Response `data`: `{fused_context, injected_nodes_count, injected_nodes,
-active_storage_backend, retrieval_as_of, retrieval_id}`. When `run_id` is
-provided, `/query` appends a metadata-only `memory.retrieval` event to that
-active run (rank, scores, token cost, packed flag, memory IDs, and safe
-provenance only); query text and memory contents are not recorded. Packed nodes preserve `retrieval_score` and
-`decay_multiplier`; access counts increment per node; every packed response
-respects the token budget.
+active_storage_backend, retrieval_as_of, retrieval_id,
+protected_constraints_count, protected_constraints_token_cost}`. When
+`run_id` is provided, `/query` appends a metadata-only `memory.retrieval`
+event to that active run (rank, scores, token cost, packed flag, memory IDs,
+safe provenance, protected-constraint count, and reserved token cost only);
+constraint text, query text, and memory contents are not recorded. Packed nodes
+preserve `retrieval_score` and `decay_multiplier`; access counts increment per
+node; total protected plus optional-memory token estimates never exceed the
+requested budget.
 
 ## Reinforcement
 

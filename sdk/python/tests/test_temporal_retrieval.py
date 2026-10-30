@@ -63,12 +63,21 @@ class TestPythonClientTemporalMethods(unittest.TestCase):
                 "active_storage_backend": "sqlite",
                 "retrieval_as_of": 100.0,
                 "retrieval_id": "ret_test",
+                "protected_constraints_count": 1,
+                "protected_constraints_token_cost": 27,
             }) as request:
-                result = client.retrieve("project deployment", as_of=100.0, run_id="run_123")
+                constraints = [{"kind": "authorization", "text": "Do not access another tenant."}]
+                result = client.retrieve(
+                    "project deployment", as_of=100.0, run_id="run_123",
+                    protected_constraints=constraints,
+                )
             self.assertEqual(request.call_args.args[2]["asOf"], 100.0)
             self.assertEqual(request.call_args.args[2]["run_id"], "run_123")
+            self.assertEqual(request.call_args.args[2]["protected_constraints"], constraints)
             self.assertEqual(result.retrieval_as_of, 100.0)
             self.assertEqual(result.retrieval_id, "ret_test")
+            self.assertEqual(result.protected_constraints_count, 1)
+            self.assertEqual(result.protected_constraints_token_cost, 27)
         finally:
             client.close()
 
@@ -139,6 +148,8 @@ class TestTemporalEligibility(unittest.TestCase):
             "run_status": RunStatus.RUNNING.value,
             "retrieval_id": "ret-temporal",
             "retrieval_as_of": 100.0,
+            "protected_constraints_count": 2,
+            "protected_constraints_token_cost": 44,
             "memory_evidence": [{
                 "memory_id": "mem-source",
                 "rank": 1,
@@ -158,6 +169,8 @@ class TestTemporalEligibility(unittest.TestCase):
         retrieval = events[1]
         self.assertEqual(retrieval["retrieval_id"], "ret-temporal")
         self.assertEqual(retrieval["retrieval_as_of"], 100.0)
+        self.assertEqual(retrieval["protected_constraints_count"], 2)
+        self.assertEqual(retrieval["protected_constraints_token_cost"], 44)
         self.assertEqual(retrieval["memory_evidence"][0]["source_type"], "document")
         self.assertEqual(retrieval["memory_evidence"][0]["valid_until"], 120.0)
         self.assertNotIn("content", retrieval["memory_evidence"][0])
