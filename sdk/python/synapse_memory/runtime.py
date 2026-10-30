@@ -504,7 +504,7 @@ class SynapseRun:
         result = self.call_tool(tool_name, arguments, tool)
         try:
             verified = postcondition(result)
-        except BaseException as exc:
+        except Exception as exc:
             self._emit(
                 RunEventType.TOOL_CALL_VERIFICATION_FAILED,
                 step_index=self._steps,
