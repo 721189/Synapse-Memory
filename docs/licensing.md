@@ -70,6 +70,40 @@ This is a snapshot of lockfile metadata, not a completed legal compatibility
 or binary-redistribution audit. The Python dependency graph has no checked-in
 lockfile and still requires a resolved-environment inventory.
 
+### Dependency report findings (initial resolved inventory, 2026-10-30)
+
+The first CI-generated report resolved 89 Python distributions and 185 Node
+packages. The raw reports are attached to the PR workflow run as the
+`third-party-license-inventory` artifact.
+
+Items requiring explicit notice/redistribution review include:
+
+- `psycopg2-binary 2.9.13` is LGPL v3 or later with an OpenSSL linking
+  exception. It is pulled by the optional PostgreSQL integration extra and
+  must be considered when redistributing an image or bundle that includes it.
+- `certifi 2026.10.23` includes an MPL-2.0 certificate bundle. `orjson
+  3.13.0` and `tqdm 4.70.1` report mixed MPL/MIT license expressions; review
+  the exact covered files and preserve the corresponding notices.
+- Node's `lightningcss` packages (1.32.0 and 1.33.0) report MPL-2.0.
+  `caniuse-lite 1.0.30001819` reports CC-BY-4.0 and is marked development-only
+  in the lockfile; verify whether its data is incorporated into distributed
+  build output and preserve attribution where required.
+- `dirtyjson 1.0.8` reports an AFL/MIT dual-license expression. Select and
+  record the applicable license basis when distributing it.
+
+The initial Node report also marked the local gateway package `UNLICENSED`
+because the lockfile root package metadata lacked its license field. The
+lockfile root entry has since been aligned with `package.json` as
+`Apache-2.0`; the refreshed report must confirm that the stale `UNLICENSED`
+entry is gone.
+
+This inventory is a useful triage result, not a legal sign-off. For binary
+container releases, check the exact packages that make it into each image,
+include the applicable license texts and attributions, and assess LGPL/MPL
+source or relinking obligations for the shipped artifacts. The package-level
+report alone does not determine whether a specific deployment image redistributes
+a given dependency.
+
 ### Reproducible inventory commands
 
 Run these in clean environments from the repository root and retain the
