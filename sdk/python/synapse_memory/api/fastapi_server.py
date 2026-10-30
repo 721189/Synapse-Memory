@@ -907,7 +907,6 @@ def query_memory(
                 "fused_score": explanation.get("fused_score"),
                 "bm25_score": explanation.get("lexical_score", node.get("bm25_score")),
                 "semantic_score": explanation.get("semantic_score", node.get("semantic_score")),
-                "dense_score": node.get("cosine_similarity"),
             }
             for key, value in score_sources.items():
                 if isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value):
@@ -928,10 +927,30 @@ def query_memory(
                 value = node.get(field_name)
                 if value is None:
                     continue
-                if field_name in {"supersession_reason", "retraction_reason"}:
-                    # Older v1.4.0 rows may contain human-readable legacy reason
-                    # strings. Only persist controlled codes in trace metadata.
+                if field_name in {"supersedes", "superseded_by"}:
+                    if not isinstance(value, str) or not re.fullmatch(r"[A-Za-z0-9._:-]{1,128}", value):
+                        continue
+                elif field_name == "source_id":
+                    if not isinstance(value, str) or not re.fullmatch(r"[A-Za-z0-9._:-]{1,256}", value):
+                        continue
+                elif field_name == "source_type":
+                    if value not in {"unspecified", "user", "tool", "document", "system", "import"}:
+                        continue
+                elif field_name == "trust_level":
+                    if value not in {"unverified", "low", "medium", "high", "authoritative"}:
+                        continue
+                elif field_name in {"supersession_reason", "retraction_reason"}:
+                    # Older rows may contain free-form legacy values. Persist
+                    # controlled codes only; never copy arbitrary text into traces.
                     if not isinstance(value, str) or not re.fullmatch(r"[a-z][a-z0-9_]{0,127}", value):
+                        continue
+                elif field_name in {"created_at", "observed_at", "valid_from", "valid_until", "retracted_at"}:
+                    if (
+                        isinstance(value, bool)
+                        or not isinstance(value, (int, float))
+                        or not math.isfinite(value)
+                        or value < 0
+                    ):
                         continue
                 item[field_name] = value
             evidence.append(item)
