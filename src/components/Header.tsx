@@ -1,10 +1,10 @@
 import React from 'react';
-import { Brain, Sparkles, ShieldCheck, Zap, Database, Code, Activity, Cpu, Award, Settings2 } from 'lucide-react';
+import { Brain, Sparkles, ShieldCheck, Zap, Database, Code, Activity, Cpu, Award, Settings2, ListChecks } from 'lucide-react';
 import { getApiKey, getTenant } from '../lib/api';
 
 interface HeaderProps {
   activeTab: string;
-  setActiveTab: (tab: 'gateway' | 'memories' | 'poisoning' | 'security' | 'retrieval' | 'decay' | 'graph' | 'knapsack' | 'multimodal' | 'rlaif' | 'differentiation' | 'infrastructure' | 'docs') => void;
+  setActiveTab: (tab: 'gateway' | 'memories' | 'poisoning' | 'security' | 'retrieval' | 'decay' | 'graph' | 'knapsack' | 'multimodal' | 'rlaif' | 'differentiation' | 'infrastructure' | 'docs' | 'runs') => void;
   stats: {
     totalMemories: number;
     quarantinedCount: number;
@@ -91,6 +91,18 @@ export const Header: React.FC<HeaderProps> = ({ activeTab, setActiveTab, stats, 
           >
             <Sparkles className="w-4 h-4" />
             <span>LLM Gateway & Test Bench</span>
+          </button>
+
+          <button
+            onClick={() => setActiveTab('runs')}
+            className={`flex items-center space-x-2 px-4 py-2 rounded-lg text-sm font-medium transition-all ${
+              activeTab === 'runs'
+                ? 'bg-indigo-600 text-white shadow-md shadow-indigo-600/30'
+                : 'text-slate-400 hover:text-white hover:bg-slate-800/60'
+            }`}
+          >
+            <ListChecks className="w-4 h-4 text-emerald-400" />
+            <span>Agent Run Traces</span>
           </button>
 
           <button
