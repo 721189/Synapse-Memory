@@ -16,7 +16,7 @@ Database-level tenant isolation (PostgreSQL RLS) Â· Fail-closed paths are cove
 [![PostgreSQL](https://img.shields.io/badge/postgres-16%20%2B%20pgvector%20HNSW-336791.svg)](https://github.com/pgvector/pgvector)
 [![Tests](https://img.shields.io/badge/tests-unit%20%2B%20integration-blue.svg)](sdk/python/tests)
 [![Security](https://img.shields.io/badge/security-bandit%20%C2%B7%20Trivy%20%C2%B7%20TruffleHog%20clean-red.svg)](SECURITY.md)
-[![License: Proprietary](https://img.shields.io/badge/license-Proprietary-red.svg)](LICENSE)
+[![License: Apache 2.0](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
 
 </div>
 
@@ -1044,7 +1044,18 @@ flowchart LR
 
 ## 20. License
 
-Proprietary â€” see [`LICENSE`](LICENSE). Publishing this repository or the PyPI package does **not** grant unrestricted use, deployment, modification, redistribution or hosted-service rights. Obtain written permission or a commercial licence before external use. Licensing contact: `singhshivam20009@gmail.com`.
+The Synapse Memory source code in this repository is licensed under the
+[Apache License, Version 2.0](LICENSE).
+
+This grant covers the original project code and documentation in this
+repository unless a file or directory carries a separate license notice.
+Third-party dependencies, model weights, and other externally supplied assets
+remain under their own licenses; they are not relicensed by this project
+license. See [the licensing policy](docs/licensing.md) for the open-core
+boundary and dependency-audit procedure.
+
+The Apache License does not grant rights to use the Synapse name, logos, or
+other project trademarks. See [TRADEMARKS.md](TRADEMARKS.md).
 
 ---
 
