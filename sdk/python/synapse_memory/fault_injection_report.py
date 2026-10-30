@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from typing import Any, Dict
 from unittest.mock import patch
+import time
 
 from synapse_memory.fault_injection import run_fault_injection_suite
 from synapse_memory.core.memory_manager import MemoryManager
@@ -17,7 +18,6 @@ from synapse_memory.core.temporal import is_retrieval_eligible
 from synapse_memory.runtime import (
     RunDeadlineExceeded,
     RunPolicy,
-    RunStatus,
     RunToolCallLimitExceeded,
     SynapseRun,
 )
