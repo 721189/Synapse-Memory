@@ -68,7 +68,9 @@ for event in run.events:
     print(event.event_type.value, event.reason, event.tool_fingerprint)
 ```
 
-Limits are checked before admitting each step/tool call. The deadline is cooperative: a synchronous tool already in progress cannot be forcibly interrupted. A run guard is not a sandbox, does not authorize tools, does not intercept unwrapped calls, or enforce provider token/cost budgets. Repeated-call blocking applies after the configured number of consecutive failures for the same tool and equivalent JSON arguments; a successful call resets that failure count. No automatic retries are performed.
+Limits are checked before admitting each step/tool call. The deadline is cooperative: a synchronous tool already in progress cannot be forcibly interrupted. A run guard is not a sandbox, does not authorize tools, does not intercept unwrapped calls, or enforce provider token/cost budgets. Repeated-call blocking applies after the configured number of consecutive failures for the same tool and equivalent JSON arguments; a successful call resets that failure count.
+
+Use `call_tool_with_retry(..., retry_safe=True)` only when the operation is idempotent or protected by a downstream idempotency key. Transient exception types and the maximum attempt count are bounded; each attempt consumes the normal run budgets. Non-idempotent calls default to one attempt and record when replay is blocked. Use `call_tool_verified(..., postcondition=...)` when a successful tool response must be checked against an independent, externally observable condition. A failed postcondition emits a verification-failed event and raises `PostconditionFailed`; verifier output and tool results are never added to traces.
 
 ## Persistent run traces and retrieval provenance
 
