@@ -7,7 +7,7 @@ time and tool-call admission checks.
 """
 from __future__ import annotations
 
-from typing import Any, Dict
+from typing import Any, Dict, cast
 from unittest.mock import patch
 import time
 
@@ -35,7 +35,7 @@ def _storage_correction_scenario() -> bool:
     store = SQLiteMemoryStore(db_path=":memory:")
     manager = MemoryManager(
         store=store,
-        embedder=_FixtureEmbedder(),
+        embedder=cast(Any, _FixtureEmbedder()),
         max_record_limit=20,
     )
     tenant = "report-correction-fixture"
@@ -59,6 +59,9 @@ def _storage_correction_scenario() -> bool:
     )
     old_record = store.get_memory_by_id(old_id, tenant_id=tenant)
     corrected_record = store.get_memory_by_id(corrected_id, tenant_id=tenant)
+    if old_record is None or corrected_record is None:
+        store.close()
+        return False
     as_of = max(time.time(), float(corrected_record["observed_at"]) + 1.0)
     success = (
         old_status == "CREATED"
