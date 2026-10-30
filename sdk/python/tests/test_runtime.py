@@ -5,6 +5,7 @@ import pytest
 
 from synapse_memory.runtime import (
     RepeatedToolCallError,
+    PostconditionFailed,
     RunDeadlineExceeded,
     RunPolicy,
     RunStateError,
@@ -23,6 +24,7 @@ from synapse_memory.runtime import (
         {"max_steps": True},
         {"max_tool_calls": 0},
         {"max_repeated_failures": -1},
+        {"max_retry_attempts": 0},
         {"timeout_seconds": 0},
         {"timeout_seconds": float("inf")},
         {"timeout_seconds": float("nan")},
@@ -278,3 +280,138 @@ def test_memory_retrieval_rejects_more_than_one_hundred_candidates():
 def test_run_id_must_match_persistence_contract():
     with pytest.raises(ValueError, match="run_id"):
         SynapseRun(run_id="invalid run id")
+
+
+def test_safe_transient_retry_requires_opt_in_and_respects_attempt_ceiling():
+    attempts = 0
+
+    def transient_then_success(**_kwargs):
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            raise ConnectionError("upstream connection reset")
+        return {"receipt": "committed"}
+
+    with SynapseRun(policy=RunPolicy(max_tool_calls=3, max_retry_attempts=2)) as run:
+        result = run.call_tool_with_retry(
+            "read_status",
+            {"operation_id": "op-001"},
+            transient_then_success,
+            retry_safe=True,
+            retry_on=(ConnectionError,),
+        )
+
+    assert result == {"receipt": "committed"}
+    assert attempts == 2
+    assert run.tool_calls == 2
+    assert run.status is RunStatus.SUCCEEDED
+    assert any(event.event_type is RunEventType.TOOL_CALL_RETRYING for event in run.events)
+    assert sum(
+        event.event_type is RunEventType.TOOL_CALL_STARTED for event in run.events
+    ) == 2
+
+
+def test_ambiguous_non_idempotent_write_timeout_is_never_replayed():
+    side_effects = []
+
+    def write_then_lose_response(**_kwargs):
+        side_effects.append("write may have committed")
+        raise TimeoutError("response lost after request was accepted")
+
+    with SynapseRun() as run:
+        with pytest.raises(TimeoutError):
+            run.call_tool_with_retry(
+                "create_payment",
+                {"payment_id": "pay-001"},
+                write_then_lose_response,
+                retry_safe=False,
+            )
+
+    assert len(side_effects) == 1
+    assert run.tool_calls == 1
+    assert any(
+        event.event_type is RunEventType.TOOL_CALL_RETRY_BLOCKED
+        and event.reason == "retry_not_safe"
+        for event in run.events
+    )
+    assert not any(event.event_type is RunEventType.TOOL_CALL_RETRYING for event in run.events)
+
+
+def test_retry_configuration_cannot_exceed_policy_or_bypass_idempotency():
+    calls = []
+
+    with SynapseRun(policy=RunPolicy(max_retry_attempts=2)) as run:
+        with pytest.raises(ValueError, match="idempotent"):
+            run.call_tool_with_retry(
+                "write",
+                {},
+                lambda: calls.append("executed"),
+                retry_safe=False,
+                max_attempts=2,
+            )
+        with pytest.raises(ValueError, match="ceiling"):
+            run.call_tool_with_retry(
+                "read",
+                {},
+                lambda: calls.append("executed"),
+                retry_safe=True,
+                max_attempts=3,
+            )
+
+    assert calls == []
+
+
+def test_tool_success_is_not_task_success_until_postcondition_passes():
+    with SynapseRun() as run:
+        with pytest.raises(PostconditionFailed):
+            run.call_tool_verified(
+                "publish_release",
+                {"release_id": "rel-001"},
+                lambda **_kwargs: {"api_status": "accepted", "persisted": False},
+                postcondition=lambda result: result["persisted"] is True,
+            )
+
+    assert run.status is RunStatus.FAILED
+    event_types = [event.event_type for event in run.events]
+    assert RunEventType.TOOL_CALL_SUCCEEDED in event_types
+    assert RunEventType.TOOL_CALL_VERIFICATION_FAILED in event_types
+    verification = next(
+        event for event in run.events
+        if event.event_type is RunEventType.TOOL_CALL_VERIFICATION_FAILED
+    )
+    assert verification.reason == "postcondition_failed"
+    assert "rel-001" not in repr(run.events)
+    assert "persisted" not in repr(run.events)
+
+
+def test_independent_postcondition_success_is_recorded():
+    with SynapseRun() as run:
+        result = run.call_tool_verified(
+            "write_document",
+            {"document_id": "doc-001"},
+            lambda **_kwargs: {"ok": True},
+            postcondition=lambda response: response["ok"] is True,
+        )
+
+    assert result == {"ok": True}
+    assert run.status is RunStatus.SUCCEEDED
+    assert any(
+        event.event_type is RunEventType.TOOL_CALL_VERIFICATION_PASSED
+        and event.reason == "postcondition_passed"
+        for event in run.events
+    )
+
+
+@pytest.mark.parametrize("cancellation", [KeyboardInterrupt, __import__("asyncio").CancelledError])
+def test_interruption_and_async_cancellation_leave_aborted_terminal_state(cancellation):
+    run = SynapseRun()
+    with pytest.raises(cancellation):
+        with run:
+            raise cancellation("operator interruption")
+
+    assert run.status is RunStatus.ABORTED
+    finished = run.events[-1]
+    assert finished.event_type is RunEventType.RUN_FINISHED
+    assert finished.reason == "aborted"
+    assert finished.error_type == cancellation.__name__
+    assert "operator interruption" not in repr(run.events)
