@@ -12,7 +12,7 @@ ingestion API.
 | `valid_from` / `valid_until` | Optional half-open validity interval [from, until) | unbounded |
 | `trust_level` | Caller-declared classification: `unverified`, `low`, `medium`, `high`, or `authoritative` | `unverified` |
 | `supersession_reason` | Reason recorded when a new memory supersedes an existing one | null |
-| `retracted_at` / `retraction_reason` | Reserved persisted fields for explicit retraction workflows | null |
+| `retracted_at` / `retraction_reason` | Soft-retraction time and controlled reason code; retained for audit lineage | null |
 
 Example:
 
