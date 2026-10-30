@@ -454,6 +454,8 @@ jobs:
           output = Path("artifacts/agent-reliability-fault-injection.json")
           output.write_text(json.dumps(report, indent=2, sort_keys=True) + chr(10))
           print(json.dumps(report["summary"], sort_keys=True))
+          if report["diagnostics"]["failed_scenarios"]:
+              print(json.dumps(report["diagnostics"]["failed_scenarios"], indent=2, sort_keys=True))
           if not report["summary"]["all_passed"]:
               raise SystemExit(1)
           PY
@@ -475,6 +477,7 @@ jobs:
           PY
 
       - name: Upload deterministic fault-injection report
+        if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: agent-reliability-fault-injection-${{ github.sha }}
