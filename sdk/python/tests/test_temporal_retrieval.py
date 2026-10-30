@@ -4,6 +4,8 @@ import unittest
 from unittest.mock import patch
 
 from synapse_memory.client import SynapseClient
+from synapse_memory.core import pgvector_db
+from synapse_memory.core.pgvector_db import PGVectorMemoryStore
 from synapse_memory.core.run_trace_store import RunTraceStore
 from synapse_memory.runtime import RunEventType, RunStatus
 from synapse_memory.core.sqlite_db import SQLiteMemoryStore
@@ -160,6 +162,71 @@ class TestTemporalEligibility(unittest.TestCase):
         self.assertEqual(retrieval["memory_evidence"][0]["valid_until"], 120.0)
         self.assertNotIn("content", retrieval["memory_evidence"][0])
         self.assertNotIn("query", retrieval)
+
+class _CaptureCursor:
+    def __init__(self):
+        self.sql = None
+        self.params = None
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_args):
+        return None
+
+    def execute(self, sql, params):
+        self.sql = sql
+        self.params = tuple(params)
+
+    def fetchall(self):
+        return []
+
+
+class _CaptureConnection:
+    def __init__(self):
+        self.cursor_instance = _CaptureCursor()
+
+    def cursor(self, **_kwargs):
+        return self.cursor_instance
+
+
+class TestPostgresTemporalQueryContract(unittest.TestCase):
+    def test_hybrid_sql_filters_both_candidate_channels_before_top_k(self):
+        store = object.__new__(PGVectorMemoryStore)
+        store._connected = True
+        store.dimension = 3
+        connection = _CaptureConnection()
+        store._get_connection = lambda: connection
+        store._set_tenant_context = lambda _cursor, _tenant: None
+        store._return_connection = lambda _connection: None
+
+        with patch.object(pgvector_db, "HAS_PSYCOPG2", True):
+            result = store.hybrid_search_sql(
+                query="project deployment",
+                query_vec=[0.1, 0.2, 0.3],
+                top_k=7,
+                category="fact",
+                tenant_id="tenant-a",
+                candidate_pool=11,
+                temporal_as_of=100.0,
+            )
+
+        self.assertEqual(result, [])
+        sql = connection.cursor_instance.sql
+        params = connection.cursor_instance.params
+        self.assertEqual(sql.count("retracted_at IS NULL"), 2)
+        self.assertEqual(sql.count("COALESCE(observed_at, created_at) <= %s"), 2)
+        self.assertEqual(sql.count("(valid_from IS NULL OR valid_from <= %s)"), 2)
+        self.assertEqual(sql.count("(valid_until IS NULL OR valid_until > %s)"), 2)
+        self.assertEqual(
+            params,
+            (
+                "[0.1,0.2,0.3]", 100.0, 100.0, 100.0, "fact",
+                "[0.1,0.2,0.3]", 11, "project deployment", "project deployment",
+                100.0, 100.0, 100.0, "fact", "project deployment", 11, 7,
+            ),
+        )
+
 
 class TestSQLiteTemporalRetrievalAndRetraction(unittest.TestCase):
     def setUp(self):
