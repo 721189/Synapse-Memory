@@ -43,6 +43,7 @@ class QueryResult:
     injected_nodes: List[Dict[str, Any]]
     storage_backend: str
     retrieval_as_of: Optional[float] = None
+    retrieval_id: Optional[str] = None
 
 
 class SynapseClient:
