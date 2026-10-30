@@ -382,7 +382,7 @@ def run_fault_injection_suite() -> Dict[str, Any]:
 
     plain_started = time.perf_counter_ns()
     for value in range(plain_count):
-        arguments = {"index": value, "secret": redaction_probe}
+        arguments: Dict[str, Any] = {"index": value, "secret": redaction_probe}
         local_noop(**arguments)
     plain_ns = time.perf_counter_ns() - plain_started
 
