@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- **Memory provenance foundation:** add schema v7 source, observation-time, validity-window, trust-classification, supersession-reason, and retraction metadata for SQLite and PostgreSQL. Retrieval enforcement and retraction APIs remain follow-up work.
+
 ## 1.4.0 — prepared 2026-10-29
 
 - **Persistent agent-run traces:** add schema migration v6, SQLite/PostgreSQL persistence, chronological event sequencing, idempotent uploads, and authenticated run/event APIs.
