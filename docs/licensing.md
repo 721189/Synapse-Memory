@@ -55,8 +55,8 @@ python -m venv .venv-license-audit
 python -m pip install --upgrade pip
 python -m pip install -e "sdk/python[all]"
 python -m pip install pip-licenses
-pip-licenses --format=markdown --with-urls --with-license-file \
-  > python-third-party-licenses.md
+pip-licenses --format=json --with-urls --with-license-file \
+  > python-third-party-licenses.json
 ```
 
 Node production dependency tree:
