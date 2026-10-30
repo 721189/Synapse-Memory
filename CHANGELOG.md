@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- **Open-core licensing:** license the current Synapse Memory developer repository and Python SDK source under Apache License 2.0; include the license in SDK distributions and define separate terms for future managed-cloud/enterprise services. This change applies only to repository revisions and package artifacts that include it; previously published versions and tagged releases retain their existing license terms.
+
 - **Agent run trace inspector:** add a tenant-scoped dashboard view for run status/duration, chronological tool/retrieval/verification events, memory provenance and packing evidence, partial trace pagination, and metadata-allowlisted redacted JSON export. Gateway proxy forwards caller credentials to the engine; raw content remains unavailable by design.
 - **Agent fault-injection runtime:** add explicit idempotent-only bounded transient retries, retry-blocked trace events for ambiguous writes, independent tool postcondition verification, interruption-state regressions, and a deterministic ten-scenario report harness.
 - **Memory trust boundary:** require the explicit `memories:trust` scope to assign medium/high/authoritative provenance; broad memory-admin scope does not imply trust elevation.
