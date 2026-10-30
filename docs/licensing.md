@@ -42,6 +42,34 @@ license expression, source URL, and any attribution or redistribution
 obligations. Review the full resolved dependency graph, not only direct
 dependencies in `pyproject.toml`, `requirements*.txt`, or `package.json`.
 
+### Observed Node lockfile metadata snapshot (2026-10-30)
+
+The checked-in `package-lock.json` currently contains 275 package entries with
+a populated `license` field. Its raw metadata groups as follows:
+
+| License expression | Package entries |
+|---|---:|
+| MIT | 199 |
+| Apache-2.0 | 30 |
+| MPL-2.0 | 24 |
+| BSD-3-Clause | 13 |
+| ISC | 6 |
+| CC-BY-4.0 | 1 |
+| BSD-2-Clause | 1 |
+| 0BSD | 1 |
+
+The 24 MPL-2.0 entries are the platform-specific `lightningcss` packages
+(versions 1.32.0 and 1.33.0). The single CC-BY-4.0 entry is
+`caniuse-lite@1.0.30001819`, which the lockfile marks as a development
+dependency. These dependencies retain their own licenses; they are not
+covered by Synapse's Apache grant. Check the resolved production dependency
+report and deployment image contents before release, and preserve required
+third-party license texts and attributions.
+
+This is a snapshot of lockfile metadata, not a completed legal compatibility
+or binary-redistribution audit. The Python dependency graph has no checked-in
+lockfile and still requires a resolved-environment inventory.
+
 ### Reproducible inventory commands
 
 Run these in clean environments from the repository root and retain the
