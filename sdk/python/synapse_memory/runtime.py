@@ -57,6 +57,10 @@ class RunEventType(str, Enum):
     TOOL_CALL_SUCCEEDED = "tool_call.succeeded"
     TOOL_CALL_FAILED = "tool_call.failed"
     TOOL_CALL_BLOCKED = "tool_call.blocked"
+    TOOL_CALL_RETRYING = "tool_call.retrying"
+    TOOL_CALL_RETRY_BLOCKED = "tool_call.retry_blocked"
+    TOOL_CALL_VERIFICATION_PASSED = "tool_call.verification_passed"
+    TOOL_CALL_VERIFICATION_FAILED = "tool_call.verification_failed"
     LIMIT_EXCEEDED = "run.limit_exceeded"
     RUN_FINISHED = "run.finished"
     MEMORY_RETRIEVAL = "memory.retrieval"
@@ -76,9 +80,12 @@ class RunPolicy:
     max_tool_calls: int = 20
     timeout_seconds: float = 120.0
     max_repeated_failures: int = 2
+    max_retry_attempts: int = 2
 
     def __post_init__(self) -> None:
-        for field_name in ("max_steps", "max_tool_calls", "max_repeated_failures"):
+        for field_name in (
+            "max_steps", "max_tool_calls", "max_repeated_failures", "max_retry_attempts"
+        ):
             value = getattr(self, field_name)
             if isinstance(value, bool) or not isinstance(value, int) or value < 1:
                 raise ValueError(f"{field_name} must be a positive integer")
@@ -186,6 +193,10 @@ class RunDeadlineExceeded(RunLimitExceeded):
 
 class RepeatedToolCallError(RunLimitExceeded):
     """Raised when an equivalent tool call has failed too many times."""
+
+
+class PostconditionFailed(RunGuardError):
+    """Raised when a successful tool result fails its independent postcondition."""
 
 
 def _normalize_json(value: Any, path: str = "arguments") -> Any:
