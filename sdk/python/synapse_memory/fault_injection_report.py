@@ -155,4 +155,9 @@ def build_fault_injection_report() -> Dict[str, Any]:
         "failed": failed,
         "all_passed": failed == 0,
     }
+    report["diagnostics"] = {
+        "failed_scenarios": [
+            scenario for scenario in report["scenarios"] if not scenario["passed"]
+        ],
+    }
     return report
