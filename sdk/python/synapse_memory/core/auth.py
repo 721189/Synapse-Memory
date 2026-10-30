@@ -73,7 +73,7 @@ _KEY_MINT_ROLES = frozenset({"platform_admin", "organization_admin", "workspace_
 
 # Scopes a non-platform caller may delegate. "admin" is never delegable
 # except by a platform_admin holding it.
-_ADMIN_ONLY_SCOPES = frozenset({"admin", "security:audit"})
+_ADMIN_ONLY_SCOPES = frozenset({"admin", "security:audit", "memories:trust"})
 
 # Canonical, closed allow-lists (F-01). Authorization is deny-by-default: a
 # role or scope that is not listed here is never granted, never delegated and
@@ -305,8 +305,8 @@ def can_create_api_key(
     if not allowed:
         return False, reason
 
-    # Scopes must be known, and the admin/security:audit scopes may only be
-    # delegated by a platform_admin. The route previously omitted
+    # Scopes must be known. Privileged scopes (admin, security:audit,
+    # memories:trust) may only be delegated by a platform_admin. The route previously omitted
     # requested_scopes entirely, so this guard never ran.
     if requested_scopes:
         unknown = sorted({s for s in requested_scopes if s not in _KNOWN_SCOPES})
