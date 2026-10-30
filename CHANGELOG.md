@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- **Agent run trace inspector:** add a tenant-scoped dashboard view for run status/duration, chronological tool/retrieval/verification events, memory provenance and packing evidence, partial trace pagination, and metadata-allowlisted redacted JSON export. Gateway proxy forwards caller credentials to the engine; raw content remains unavailable by design.
 - **Agent fault-injection runtime:** add explicit idempotent-only bounded transient retries, retry-blocked trace events for ambiguous writes, independent tool postcondition verification, interruption-state regressions, and a deterministic ten-scenario report harness.
 - **Memory trust boundary:** require the explicit `memories:trust` scope to assign medium/high/authoritative provenance; broad memory-admin scope does not imply trust elevation.
 - **Temporal retrieval and retraction:** filter future-observed, not-yet-valid, expired, superseded, and retracted memories before ranking/packing; add as-of retrieval and tenant-scoped audited retraction.

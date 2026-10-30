@@ -369,6 +369,25 @@ async function getActiveMemories(req: express.Request, tenantId?: string): Promi
   return process.env.NODE_ENV === "production" ? [] : INITIAL_DEMO_MEMORIES;
 }
 
+// Tenant-scoped agent-run trace API proxy.
+// The engine remains the authorization and data boundary; the gateway forwards
+// caller credentials, tenant header, HTTP method, path, and query unchanged.
+app.use("/api/agent-runs", async (req, res) => {
+  const endpoint = req.originalUrl;
+  const options: RequestInit = { method: req.method };
+  if (req.method !== "GET" && req.method !== "HEAD") {
+    options.body = JSON.stringify(req.body ?? {});
+  }
+  const result = await callPythonBackend(req, endpoint, options);
+  if (!result || result.error) {
+    return res.status(result?.status || 503).json({
+      success: false,
+      error: result?.detail || "Agent trace service unavailable.",
+    });
+  }
+  return res.json({ success: true, data: result });
+});
+
 // API Routes
 // Liveness: gateway process alive. Does NOT imply engine/DB health.
 app.get("/api/health", async (req, res) => {

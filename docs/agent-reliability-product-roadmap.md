@@ -187,7 +187,7 @@ Metrics:
 - instrumentation latency and storage overhead;
 - dropped/undelivered events and redaction regressions.
 
-UI: after the event contract stabilizes, add a minimal run list/detail view to the existing dashboard: chronological steps, memory retrieval/packing panel, tool input digest/status, budget consumed/remaining when known, reason for abort, verification result, and export of a redacted trace. Prefer integrating/exporting telemetry to an existing observability backend over rebuilding general-purpose dashboards.
+UI: the first metadata-only run inspector is now implemented in the existing React dashboard. It lists tenant-scoped runs, shows chronological events and tool status/fingerprints, exposes retrieval memory IDs/provenance/packing decisions, reports recorded token estimates and protected-context reservation, displays guard/abort reasons and postcondition outcomes, handles loading/empty/error/paginated partial traces, and exports an explicit allowlist of redacted metadata. The current event schema does not persist a total run token/cost ceiling, so the UI explicitly marks remaining budget as unavailable rather than inferring it. Raw content access is not implemented; any future opt-in content view requires a separate audited, permissioned API design. Prefer integrating/exporting telemetry to an existing observability backend over rebuilding general-purpose dashboards.
 
 **Acceptance criteria:** every scenario has a test that fails before the relevant guard is added; artifacts capture a reproducible trace; no benchmark is advertised as proof of production reliability; telemetry overhead and false alarms are measured.
 

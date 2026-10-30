@@ -16,9 +16,10 @@ import { DeveloperDocs } from './components/DeveloperDocs';
 import { MemoryNode, SystemStats } from './types';
 import { apiGet } from './lib/api';
 import { ConnectionSettings } from './components/ConnectionSettings';
+import { AgentRunInspector } from './components/AgentRunInspector';
 
 export default function App() {
-  const [activeTab, setActiveTab] = useState<'gateway' | 'memories' | 'poisoning' | 'security' | 'retrieval' | 'decay' | 'graph' | 'knapsack' | 'multimodal' | 'rlaif' | 'differentiation' | 'infrastructure' | 'docs'>('gateway');
+  const [activeTab, setActiveTab] = useState<'gateway' | 'memories' | 'poisoning' | 'security' | 'retrieval' | 'decay' | 'graph' | 'knapsack' | 'multimodal' | 'rlaif' | 'differentiation' | 'infrastructure' | 'docs' | 'runs'>('gateway');
   const [memories, setMemories] = useState<MemoryNode[]>([]);
   const [stats, setStats] = useState<SystemStats>({
     totalMemories: 4,
@@ -56,6 +57,7 @@ export default function App() {
 
       <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-8">
         {activeTab === 'gateway' && <GatewayPlayground onRefreshStats={fetchAppData} />}
+        {activeTab === 'runs' && <AgentRunInspector />}
         {activeTab === 'memories' && <MemoryManager memories={memories} onRefresh={fetchAppData} />}
         {activeTab === 'poisoning' && <PoisoningLab onRefresh={fetchAppData} />}
         {activeTab === 'security' && <EnterpriseSecurityTab onRefresh={fetchAppData} />}
