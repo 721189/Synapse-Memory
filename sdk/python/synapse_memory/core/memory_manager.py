@@ -30,6 +30,24 @@ except (TypeError, ValueError):
     )
 
 
+def estimate_token_cost_upper_bound(content: str) -> int:
+    """Estimate context tokens without undercounting when optional tokenizers are absent.
+
+    When tiktoken is installed, use the same cl100k tokenizer as the standard
+    estimator. The fallback uses UTF-8 byte length: a tokenizer cannot emit more
+    tokens than the number of bytes in its input, so this is conservative for
+    multilingual text, combining marks, and emoji (at the cost of lower packing
+    density when no tokenizer is installed).
+    """
+    try:
+        import tiktoken  # type: ignore
+
+        enc = tiktoken.get_encoding("cl100k_base")
+        return max(15, len(enc.encode(content)) + 8)
+    except Exception:
+        return max(15, len(content.encode("utf-8")) + 10)
+
+
 def estimate_token_cost(content: str) -> int:
     """Production token estimator: prefers tiktoken when installed, else safe heuristic.
     Heuristic calibrated to ~4 chars/token (OpenAI/Gemini average for English).
