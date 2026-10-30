@@ -1,34 +1,56 @@
 # Contributing to Synapse Memory
 
-We welcome contributions to Synapse Memory! To maintain engineering rigor, please follow these guidelines.
+Contributions are welcome. By contributing, you agree that your contribution
+will be made available under the repository's [Apache License 2.0](LICENSE).
+
+## Developer Certificate of Origin
+
+Every contribution must include a Developer Certificate of Origin (DCO)
+sign-off. Add a `Signed-off-by` trailer to each commit:
+
+```bash
+git commit -s -m "fix: describe the change"
+```
+
+The sign-off certifies that you have the right to submit the contribution
+under the [DCO](DCO). Do not sign off on code, documentation, assets, or other
+material that you did not author or are not authorized to contribute.
+
+We do not require a separate Contributor License Agreement at this time.
+Contributions are accepted under Apache License 2.0; no contribution grants
+the project owner a separate right to relicense your work under proprietary
+terms.
 
 ## Development Workflow
 
-1. **Fork and Clone**: Fork the repository and clone it to your local machine.
-2. **Setup Environment**:
-   ```bash
-   python3 -m venv venv
-   source venv/bin/activate
-   pip install -r requirements.txt -r requirements-dev.txt
-   pip install -e .
-   ```
-3. **Branching**: Use descriptive branch names (e.g., `feature/add-new-provider` or `fix/sqlite-locking-issue`).
-4. **Code Standards**:
-   - Follow PEP 8 guidelines.
-   - Run `flake8` to check for style issues.
-   - Run `mypy` to verify type annotations.
-5. **Testing**:
-   - Write unit tests for new features.
-   - Run `pytest` to execute the full test suite. Ensure all tests pass before submitting a PR.
-6. **Documentation**: Update documentation if you change an API or add a new feature.
+1. Fork and clone the repository.
+2. Create an isolated Python environment and install the SDK development
+   dependencies as described in the repository documentation.
+3. Create a focused branch with a descriptive name.
+4. Follow the existing code style and type annotations.
+5. Add or update tests for behavior changes.
+6. Update documentation when changing an API, configuration, or user-facing
+   behavior.
+7. Run the relevant tests, linting, type checks, and packaging checks locally.
 
 ## Pull Request Process
 
-1. Ensure your code passes all tests and linting.
-2. Submit a Pull Request with a clear description of the changes.
-3. Link any relevant issues.
-4. Your PR will be reviewed and merged upon approval.
+1. Explain the problem, implementation, compatibility impact, and test results.
+2. Link related issues and include relevant screenshots or logs with secrets
+   and personal data removed.
+3. Ensure all commits carry the required DCO sign-off.
+4. Ensure required CI checks pass.
+5. Disclose any new dependencies, copied material, generated assets, or
+   licensing restrictions in the pull request description.
+
+## Third-Party Material
+
+Do not copy code, documentation, model weights, datasets, fonts, icons, or
+other assets into the repository unless their license permits the intended
+use and redistribution. Preserve required notices and record new third-party
+materials in the licensing inventory. Linking to a dependency does not
+relicense that dependency.
 
 ## Code of Conduct
 
-Please be respectful and professional in all interactions.
+Be respectful and professional in all project interactions.
