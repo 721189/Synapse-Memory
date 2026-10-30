@@ -111,20 +111,23 @@ Record:
 
 Do not compare unrelated tasks or use a changed success definition between baseline and treatment.
 
-### Stage 2 — Staging instrumentation, observe-only
+### Stage 2 — Telemetry-only staging observation (no guard enforcement)
 
-1. Integrate the existing SDK/API and tenant-scoped run trace inspector.
-2. Verify that the partner's API key has only the scopes needed for the pilot.
-3. Confirm the trace contains metadata only and does not capture prompts, memory text, raw tool arguments, tool results, credentials, or unnecessary personal data.
-4. Create known-good and known-bad test runs; verify the expected event sequence and redaction.
-5. Run policies in observe-only mode where a false positive could interrupt work.
-6. Verify export, retention, and deletion behavior using test data before any partner data is introduced.
+The current Python SDK does **not** provide an observe-only mode for `RunPolicy`: `SynapseRun` applies hard admission limits to calls routed through it. Do not describe or configure a `RunPolicy` as shadow/observe-only.
 
-Do not enable blocking controls merely because the dashboard displays events. First adjudicate whether the proposed block would have been correct.
+1. Keep the partner's existing agent execution path unchanged. Do not route tool calls through `SynapseRun` or apply a `RunPolicy` during this telemetry-only stage.
+2. Use the existing tenant-scoped run/event API to create run summaries and append allowlisted metadata events with stable event IDs (the Python client exposes `create_agent_run()` and `append_agent_run_event()`).
+3. Verify that the partner's API key has only the scopes needed for the pilot.
+4. Confirm that events contain no prompts, queries, memory text, raw tool arguments, tool results, credentials, or unnecessary personal data.
+5. Create known-good and known-bad **test** runs; verify event ordering, tenant authorization, redaction, export, and deletion.
+6. Review collected traces retrospectively with the partner's engineer against pre-agreed failure labels. This is human-adjudicated trace review, not an automated prediction of what `RunPolicy` would block.
+7. Verify export, retention, and deletion behavior using test data before any partner data is introduced.
+
+Do not claim false-positive rates for guard decisions from telemetry-only traces. The current SDK has no non-enforcing `RunPolicy` decision evaluator. If a pilot requires automated would-block analysis, implement and test a separate non-enforcing evaluator before promising that capability.
 
 ### Stage 3 — Controlled treatment
 
-Enable only the specific controls agreed for the workflow. Keep the first treatment non-critical and reversible.
+Test `SynapseRun`/`RunPolicy` first in an isolated staging sandbox using stubbed tools or read-only/idempotent operations, with no production credentials or irreversible side effects. Its limits are hard admission controls, not advisory signals. Enable only the specific controls agreed for the workflow after the sandbox results and false-positive review are accepted in writing. Keep any initial partner workload non-critical, reversible, and separately authorized.
 
 For each relevant run, capture:
 - run identifier and environment;
