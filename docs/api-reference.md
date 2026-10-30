@@ -134,9 +134,10 @@ encryption, semantic deduplication, token-cost calculation.
 Response `data`: `{id, status: "SUCCESS_<action>", token_cost, tenant_id}`.
 Trust is caller-declared metadata, not an independent authenticity check. Ordinary
 `memories:write` keys may only set `unverified` or `low`; medium/high/authoritative
-classification requires a separate `memories:trust` capability. The legacy
-`admin` scope does not imply this trust-elevation capability. Do not put prompts,
-PII, secrets, or raw source text in `source_id`; use an opaque identifier.
+classification requires a separate `memories:trust` capability, which only a
+`platform_admin` may delegate to another key. The legacy `admin` scope neither
+implies nor delegates trust elevation. Do not put prompts, PII, secrets, or raw
+source text in `source_id`; use an opaque identifier.
 
 
 ### POST /api/memories/bulk
