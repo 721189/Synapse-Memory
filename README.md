@@ -681,7 +681,8 @@ participates in tenant resolution.
 | `memories:read` | list, query, scrub |
 | `memories:write` | ingest, bulk (â‰¤100 items, 500KB), feedback |
 | `memories:delete` | delete, clear, `gdpr-delete` |
-| `admin` | key create/list/revoke/rotate, audit read/export/prune |
+| `memories:trust` | assign `medium`, `high`, or `authoritative` provenance; platform-admin-only delegation |
+| `admin` | key create/list/revoke/rotate, audit read/export/prune; does not imply `memories:trust` |
 
 ### Error taxonomy
 
