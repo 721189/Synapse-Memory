@@ -5,12 +5,13 @@ and PostgreSQL Row-Level Security (RLS).
 
 import json
 import logging
+import math
 import os
 import re
 import time
 from typing import Any, Dict, List, Optional
 
-from synapse_memory.core.temporal import is_retrieval_eligible
+from synapse_memory.core.temporal import is_retrieval_eligible, validate_as_of
 from synapse_memory.core.encryption import (
     FernetEncryptionProvider,
     KeyManagementProvider,
@@ -1013,7 +1014,7 @@ class PGVectorMemoryStore:
         Executes native pgvector cosine distance search using HNSW index:
         ORDER BY embedding <=> query_vec::vector LIMIT top_k
         """
-        as_of = time.time() if temporal_as_of is None else temporal_as_of
+        as_of = validate_as_of(time.time() if temporal_as_of is None else temporal_as_of)
         if not self._connected or not HAS_PSYCOPG2:
             results = []
             for mem in self._fallback_cache.values():
@@ -1423,7 +1424,11 @@ class PGVectorMemoryStore:
         retracted_at: Optional[float] = None,
     ) -> bool:
         """Mark a memory retracted without erasing its audit lineage."""
-        timestamp = time.time() if retracted_at is None else float(retracted_at)
+        if not isinstance(reason, str) or not re.fullmatch(r"[a-z][a-z0-9_]{0,127}", reason):
+            raise ValueError("reason must be a controlled lowercase snake_case code")
+        timestamp = time.time() if retracted_at is None else retracted_at
+        if isinstance(timestamp, bool) or not isinstance(timestamp, (int, float)) or not math.isfinite(timestamp) or timestamp < 0:
+            raise ValueError("retracted_at must be a finite non-negative timestamp")
         cached = self._fallback_cache.get(memory_id)
         if cached is not None and cached.get("tenant_id") == tenant_id:
             if cached.get("retracted_at") is not None:
@@ -1450,6 +1455,7 @@ class PGVectorMemoryStore:
             raise
         finally:
             self._return_connection(conn)
+
     def delete_memory(self, memory_id: str, tenant_id: Optional[str] = None) -> None:
         self._fallback_cache.pop(memory_id, None)
         if not self._connected or not HAS_PSYCOPG2:
