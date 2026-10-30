@@ -247,7 +247,6 @@ class SynapseClient:
             retry_safe=True,
         )
 
-
     def feedback(self, memory_id: str, feedback_type: str) -> Dict[str, Any]:
         return self._request("POST", "/feedback", {"memory_id": memory_id, "feedback_type": feedback_type})
 
