@@ -1,7 +1,9 @@
 """Temporal retrieval eligibility and explicit retraction regressions."""
 
 import unittest
+from unittest.mock import patch
 
+from synapse_memory.client import SynapseClient
 from synapse_memory.core.sqlite_db import SQLiteMemoryStore
 from synapse_memory.core.temporal import is_retrieval_eligible
 
@@ -44,6 +46,44 @@ def memory(
         "retracted_at": retracted_at,
         "retraction_reason": "source_corrected" if retracted_at is not None else None,
     }
+
+
+class TestPythonClientTemporalMethods(unittest.TestCase):
+    def test_retrieve_forwards_as_of_and_returns_effective_timestamp(self):
+        client = SynapseClient()
+        try:
+            with patch.object(client, "_request", return_value={
+                "fused_context": "current evidence",
+                "injected_nodes_count": 1,
+                "injected_nodes": [],
+                "active_storage_backend": "sqlite",
+                "retrieval_as_of": 100.0,
+            }) as request:
+                result = client.retrieve("project deployment", as_of=100.0)
+            self.assertEqual(request.call_args.args[2]["asOf"], 100.0)
+            self.assertEqual(result.retrieval_as_of, 100.0)
+        finally:
+            client.close()
+
+    def test_retract_memory_uses_idempotent_authenticated_mutation(self):
+        client = SynapseClient()
+        try:
+            with patch.object(client, "_request", return_value={"status": "RETRACTED"}) as request:
+                result = client.retract_memory("mem_123", "source_corrected")
+            self.assertEqual(result["status"], "RETRACTED")
+            self.assertEqual(request.call_args.args[0:2], ("POST", "/api/memories/mem_123/retract"))
+            self.assertEqual(request.call_args.args[2], {"reason": "source_corrected"})
+            self.assertTrue(request.call_args.kwargs["retry_safe"])
+        finally:
+            client.close()
+
+    def test_retraction_reason_is_a_controlled_code(self):
+        client = SynapseClient()
+        try:
+            with self.assertRaises(ValueError):
+                client.retract_memory("mem_123", "Sensitive customer details")
+        finally:
+            client.close()
 
 
 class TestTemporalEligibility(unittest.TestCase):
