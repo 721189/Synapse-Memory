@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- **Agent fault-injection runtime:** add explicit idempotent-only bounded transient retries, retry-blocked trace events for ambiguous writes, independent tool postcondition verification, interruption-state regressions, and a deterministic ten-scenario report harness.
+- **Memory trust boundary:** require the explicit `memories:trust` scope to assign medium/high/authoritative provenance; broad memory-admin scope does not imply trust elevation.
 - **Temporal retrieval and retraction:** filter future-observed, not-yet-valid, expired, superseded, and retracted memories before ranking/packing; add as-of retrieval and tenant-scoped audited retraction.
 - **Automatic retrieval evidence correlation:** optionally attach `/query` to an active run via `run_id`, requiring `agent-runs:write`; persist ranked IDs, score components, token costs, packing outcomes, safe provenance, and the as-of boundary without query or memory text.
 - **Protected run constraints:** preserve bounded caller-supplied goals, authorization, safety, and invariant context in a separate required section; reserve its estimated token cost before packing optional memories, reject over-budget requests with HTTP 422, and record only constraint count/token cost in run traces.
