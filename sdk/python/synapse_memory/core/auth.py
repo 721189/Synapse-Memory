@@ -98,6 +98,7 @@ _KNOWN_SCOPES = frozenset({
     "memories:write",
     "memories:delete",
     "memories:list",
+    "memories:trust",
     "agent-runs:read",
     "agent-runs:write",
     "agent-runs:delete",
@@ -223,7 +224,28 @@ def scope_satisfied(principal: APIKeyRecord, required_scope: Optional[str]) -> b
     scopes = set(principal.scopes or ())
     if required_scope in scopes:
         return True
-    return "admin" in scopes and required_scope.startswith("memories:")
+    # Legacy admin is a memory-domain superuser, but trust elevation remains
+    # an explicit capability: callers cannot self-promote evidence to medium,
+    # high, or authoritative merely by holding the broad memory admin scope.
+    return (
+        "admin" in scopes
+        and required_scope.startswith("memories:")
+        and required_scope != "memories:trust"
+    )
+
+
+def can_assign_memory_trust(principal: APIKeyRecord, trust_level: str) -> bool:
+    """Allow ordinary writers to submit unverified/low trust only.
+
+    Elevating a memory to medium/high/authoritative requires an explicit
+    memories:trust grant. The content itself is never inspected for instructions
+    that might change its provenance classification.
+    """
+    if trust_level in {"unverified", "low"}:
+        return True
+    if trust_level in {"medium", "high", "authoritative"}:
+        return "memories:trust" in set(principal.scopes or ())
+    return False
 
 
 def canonicalize_role(role: Optional[str]) -> str:
