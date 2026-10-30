@@ -246,6 +246,8 @@ export const AgentRunInspector: React.FC = () => {
   }, [selectedRunId]);
 
   const selectRun = (runId: string) => {
+    // Clicking the active run is a no-op; preserve the already-loaded trace.
+    if (selectedRunId === runId) return;
     setSelectedRunId(runId);
     setSelectedRun(null);
   };
