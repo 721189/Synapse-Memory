@@ -467,6 +467,7 @@ class QueryRequest(SynapseAPIModel):
     category: Optional[str] = Field(None, min_length=1, max_length=64, pattern=r"^[a-z0-9_\-]+$", description="Optional category filter")
     tenant_id: Optional[str] = Field(None, alias="tenantId", min_length=1, max_length=128, pattern=r"^[A-Za-z0-9_\-\.]+$", description="Target tenant ID")
     as_of: Optional[float] = Field(None, ge=0, allow_inf_nan=False, alias="asOf", description="Evaluate temporal validity at this Unix timestamp")
+    run_id: Optional[str] = Field(None, min_length=1, max_length=128, pattern=r"^[A-Za-z0-9._:-]+$", description="Optionally attach this retrieval to an active tenant-scoped agent run")
 
 
 class QueryResponse(SynapseAPIModel):
@@ -475,6 +476,7 @@ class QueryResponse(SynapseAPIModel):
     injected_nodes: List[Dict[str, Any]]
     active_storage_backend: str
     retrieval_as_of: Optional[float] = None
+    retrieval_id: Optional[str] = None
 
 
 class RetractionRequest(SynapseAPIModel):
@@ -501,6 +503,15 @@ class MemoryEvidenceRequest(SynapseAPIModel):
     created_at: Optional[float] = Field(None, ge=0, allow_inf_nan=False)
     supersedes: Optional[str] = Field(None, min_length=1, max_length=128, pattern=r"^[A-Za-z0-9._:-]+$")
     superseded_by: Optional[str] = Field(None, min_length=1, max_length=128, pattern=r"^[A-Za-z0-9._:-]+$")
+    source_type: Optional[Literal["unspecified", "user", "tool", "document", "system", "import"]] = None
+    source_id: Optional[str] = Field(None, min_length=1, max_length=256, pattern=r"^[A-Za-z0-9._:-]+$")
+    observed_at: Optional[float] = Field(None, ge=0, allow_inf_nan=False)
+    valid_from: Optional[float] = Field(None, ge=0, allow_inf_nan=False)
+    valid_until: Optional[float] = Field(None, ge=0, allow_inf_nan=False)
+    trust_level: Optional[Literal["unverified", "low", "medium", "high", "authoritative"]] = None
+    supersession_reason: Optional[str] = Field(None, min_length=1, max_length=128, pattern=r"^[a-z][a-z0-9_]*$")
+    retracted_at: Optional[float] = Field(None, ge=0, allow_inf_nan=False)
+    retraction_reason: Optional[str] = Field(None, min_length=1, max_length=128, pattern=r"^[a-z][a-z0-9_]*$")
 
 
 class AgentRunEventRequest(SynapseAPIModel):
@@ -518,6 +529,7 @@ class AgentRunEventRequest(SynapseAPIModel):
     reason: Optional[str] = Field(None, min_length=1, max_length=128, pattern=r"^[a-z][a-z0-9_]*$")
     error_type: Optional[str] = Field(None, min_length=1, max_length=128, pattern=r"^[A-Za-z][A-Za-z0-9_.:-]*$")
     retrieval_id: Optional[str] = Field(None, min_length=1, max_length=128, pattern=r"^[A-Za-z0-9._:-]+$")
+    retrieval_as_of: Optional[float] = Field(None, ge=0, allow_inf_nan=False)
     memory_evidence: List[MemoryEvidenceRequest] = Field(default_factory=list, max_length=100)
 
     @field_validator("timestamp")
@@ -532,7 +544,7 @@ class AgentRunEventRequest(SynapseAPIModel):
         if self.event_type is RunEventType.MEMORY_RETRIEVAL:
             if not self.retrieval_id:
                 raise ValueError("memory.retrieval requires retrieval_id")
-        elif self.retrieval_id is not None or self.memory_evidence:
+        elif self.retrieval_id is not None or self.retrieval_as_of is not None or self.memory_evidence:
             raise ValueError("retrieval metadata is only valid for memory.retrieval")
         return self
 
