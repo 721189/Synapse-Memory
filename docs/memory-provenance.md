@@ -42,11 +42,20 @@ email addresses, credentials, or other sensitive content in `source_id`.
 - SQLite and PostgreSQL use the same field names and defaults. PostgreSQL
   continues to apply the existing tenant RLS boundary; the new columns do not
   change tenant authorization.
-- Validity timestamps are validated and persisted, but this schema-only
-  increment does **not yet change retrieval ranking or exclude expired/future
-  evidence**. That behavior requires the follow-up temporal retrieval work and
-  tests before these fields can be treated as an enforcement mechanism.
-- Retraction columns are persisted for forward compatibility; a tenant-scoped
-  retraction API and deletion semantics are not part of this change.
+- Retrieval applies the half-open interval `valid_from <= as_of < valid_until`.
+  Evidence with an observation timestamp later than `as_of`, a retraction
+  timestamp, or a supersession successor is excluded before dense/lexical
+  ranking and context packing. Legacy rows use `created_at` as their
+  observation-time fallback.
+- The query API accepts optional `asOf` (Unix seconds). Without it, the
+  server evaluates validity at request time and returns `retrieval_as_of` in
+  the response. The Python client exposes this as `retrieve(..., as_of=...)`.
+- Use the authenticated `POST /api/memories/{memory_id}/retract` endpoint
+  with `memories:delete` scope and a controlled lowercase reason code. It is
+  tenant-scoped, idempotent, audited, and preserves the memory row and its
+  provenance lineage. Use the existing hard-delete route only when actual
+  erasure is intended.
+- Trust remains caller-declared metadata, not independent verification. A
+  source's trust label does not override validity bounds or retraction.
 - The migration is additive and forward-only. Existing v1–v6 migrations are
   unchanged.
