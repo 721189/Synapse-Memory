@@ -3,6 +3,8 @@ import time
 import logging
 import asyncio
 import uuid
+import math
+import re
 from typing import Dict, Any, Tuple, Optional, Union
 from synapse_memory.core.sqlite_db import SQLiteMemoryStore
 from synapse_memory.core.pgvector_db import PGVectorMemoryStore
@@ -77,7 +79,13 @@ class MemoryManager:
         content: str,
         category: str = "interaction",
         confidence: float = 0.95,
-        tenant_id: str = "default"
+        tenant_id: str = "default",
+        source_type: str = "unspecified",
+        source_id: Optional[str] = None,
+        observed_at: Optional[float] = None,
+        valid_from: Optional[float] = None,
+        valid_until: Optional[float] = None,
+        trust_level: str = "unverified",
     ) -> Tuple[str, str, int]:
         """
         Ingests a new memory node.
@@ -95,6 +103,40 @@ class MemoryManager:
         still recorded as a separate row so no information is lost; the caller can
         decide how to resolve the conflict.
         """
+        # Validate provenance metadata before embedding or writing anything.
+        allowed_sources = {"unspecified", "user", "tool", "document", "system", "import"}
+        allowed_trust = {"unverified", "low", "medium", "high", "authoritative"}
+        if source_type not in allowed_sources:
+            raise ValueError("source_type must be one of: " + ", ".join(sorted(allowed_sources)))
+        if trust_level not in allowed_trust:
+            raise ValueError("trust_level must be one of: " + ", ".join(sorted(allowed_trust)))
+        if source_id is not None and (
+            not isinstance(source_id, str)
+            or not re.fullmatch(r"[A-Za-z0-9._:-]{1,256}", source_id)
+        ):
+            raise ValueError("source_id must be a safe 1-256 character identifier")
+        for field_name, value in (("observed_at", observed_at), ("valid_from", valid_from), ("valid_until", valid_until)):
+            if value is not None and (
+                isinstance(value, bool)
+                or not isinstance(value, (int, float))
+                or not math.isfinite(value)
+                or value < 0
+            ):
+                raise ValueError(field_name + " must be a finite non-negative timestamp")
+        if valid_from is not None and valid_until is not None and valid_until <= valid_from:
+            raise ValueError("valid_until must be later than valid_from")
+        provenance = {
+            "source_type": source_type,
+            "source_id": source_id,
+            "observed_at": float(observed_at) if observed_at is not None else time.time(),
+            "valid_from": float(valid_from) if valid_from is not None else None,
+            "valid_until": float(valid_until) if valid_until is not None else None,
+            "trust_level": trust_level,
+            "supersession_reason": None,
+            "retracted_at": None,
+            "retraction_reason": None,
+        }
+
         # 1. Generate dense vector representation
         new_vector = self.embedder.embed_query(content)
         existing_memories = self.store.get_memories_by_category(category, tenant_id=tenant_id)
@@ -135,6 +177,7 @@ class MemoryManager:
                 "model_version": getattr(self.embedder, "model_name", "unknown"),
                 "supersedes": match_id,
                 "superseded_by": None,
+                **{**provenance, "supersession_reason": result.reason},
             }
             self.store.insert_memory(new_node)
 
@@ -174,6 +217,7 @@ class MemoryManager:
                 "model_version": getattr(self.embedder, "model_name", "unknown"),
                 "supersedes": None,
                 "superseded_by": None,
+                **provenance,
             }
             self.store.insert_memory(new_node)
             self.auto_prune_store(tenant_id=tenant_id)
@@ -200,6 +244,7 @@ class MemoryManager:
             "model_version": getattr(self.embedder, "model_name", "unknown"),
             "supersedes": None,
             "superseded_by": None,
+            **provenance,
         }
         self.store.insert_memory(new_node)
 

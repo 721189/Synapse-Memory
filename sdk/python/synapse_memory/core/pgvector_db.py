@@ -474,6 +474,15 @@ class PGVectorMemoryStore:
                         feedback_multiplier REAL NOT NULL DEFAULT 1.0,
                         supersedes VARCHAR(128),
                         superseded_by VARCHAR(128),
+                        source_type VARCHAR(64) NOT NULL DEFAULT 'unspecified',
+                        source_id VARCHAR(256),
+                        observed_at DOUBLE PRECISION,
+                        valid_from DOUBLE PRECISION,
+                        valid_until DOUBLE PRECISION,
+                        trust_level VARCHAR(32) NOT NULL DEFAULT 'unverified',
+                        supersession_reason VARCHAR(128),
+                        retracted_at DOUBLE PRECISION,
+                        retraction_reason VARCHAR(128),
                         embedding vector({self.dimension})
                     );
                 """)
@@ -783,8 +792,10 @@ class PGVectorMemoryStore:
                         id, tenant_id, content, content_plain, category, confidence, created_at,
                         last_accessed_at, access_count, token_cost,
                         feedback_multiplier, embedding, embedding_dimension, model_version,
-                        supersedes, superseded_by
-                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                        supersedes, superseded_by, source_type, source_id, observed_at,
+                        valid_from, valid_until, trust_level, supersession_reason,
+                        retracted_at, retraction_reason
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                     ON CONFLICT (id) DO UPDATE SET
                         tenant_id = EXCLUDED.tenant_id,
                         content = EXCLUDED.content,
@@ -799,7 +810,16 @@ class PGVectorMemoryStore:
                         embedding_dimension = EXCLUDED.embedding_dimension,
                         model_version = EXCLUDED.model_version,
                         supersedes = EXCLUDED.supersedes,
-                        superseded_by = EXCLUDED.superseded_by;
+                        superseded_by = EXCLUDED.superseded_by,
+                        source_type = EXCLUDED.source_type,
+                        source_id = EXCLUDED.source_id,
+                        observed_at = EXCLUDED.observed_at,
+                        valid_from = EXCLUDED.valid_from,
+                        valid_until = EXCLUDED.valid_until,
+                        trust_level = EXCLUDED.trust_level,
+                        supersession_reason = EXCLUDED.supersession_reason,
+                        retracted_at = EXCLUDED.retracted_at,
+                        retraction_reason = EXCLUDED.retraction_reason;
                 """, (
                     memory["id"],
                     tenant_id,
@@ -816,7 +836,16 @@ class PGVectorMemoryStore:
                     memory.get("embedding_dimension", len(emb or [])),
                     memory.get("model_version", "unknown"),
                     memory.get("supersedes"),
-                    memory.get("superseded_by")
+                    memory.get("superseded_by"),
+                    memory.get("source_type", "unspecified"),
+                    memory.get("source_id"),
+                    memory.get("observed_at"),
+                    memory.get("valid_from"),
+                    memory.get("valid_until"),
+                    memory.get("trust_level", "unverified"),
+                    memory.get("supersession_reason"),
+                    memory.get("retracted_at"),
+                    memory.get("retraction_reason")
                 ))
                 conn.commit()
         except Exception as e:
