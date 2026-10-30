@@ -1,0 +1,255 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#080c17">
+  <meta name="description" content="Install Synapse Memory, run the local SQLite quickstart, understand the current package status, and find API, security, and deployment references.">
+  <title>Developer docs — Synapse</title>
+  <link rel="icon" href="../assets/favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="../assets/site.css">
+  <script defer src="../assets/site.js"></script>
+</head>
+<body>
+  <a class="skip-link" href="#main">Skip to content</a>
+  <header class="site-header">
+    <div class="container nav-wrap">
+      <a class="brand" href="../" aria-label="Synapse home"><span class="brand-mark" aria-hidden="true">S</span><span class="brand-name">synapse<span class="brand-dot">.</span></span></a>
+      <button class="nav-toggle" type="button" aria-expanded="false" aria-controls="primary-nav" aria-label="Open navigation"><span></span><span></span></button>
+      <nav class="primary-nav" id="primary-nav" aria-label="Main navigation"><a href="../#why">Why Synapse</a><a href="../#capabilities">Capabilities</a><a class="active" href="./">Docs</a><a href="../#security">Security</a><a href="../feedback/">Feedback</a></nav>
+      <div class="nav-actions"><a class="nav-github" href="https://github.com/721189/Synapse-Memory" target="_blank" rel="noreferrer">GitHub ↗</a><a class="button button-small button-primary" href="#quickstart">Quickstart <span>→</span></a></div>
+    </div>
+  </header>
+
+  <main id="main">
+    <section class="docs-hero">
+      <div class="container">
+        <div class="breadcrumb"><a href="../">Synapse</a><span>/</span><span>Documentation</span></div>
+        <span class="section-kicker">DEVELOPER GUIDE</span>
+        <h1>From first install<br><span class="gradient-text">to a useful integration.</span></h1>
+        <p>Start with a local memory write and retrieval. Then explore the API, runtime controls, deployment model, and the boundaries you should understand before using real data.</p>
+        <div class="docs-hero-meta"><span>Python 3.10+</span><span>HTTP API v1</span><span>Self-hosted</span></div>
+      </div>
+    </section>
+
+    <section class="section section-light docs-body">
+      <div class="container docs-layout">
+        <aside class="docs-sidebar">
+          <b>ON THIS PAGE</b>
+          <a href="#version-status">Version status</a>
+          <a href="#quickstart">Local quickstart</a>
+          <a href="#run-controls">Run controls</a>
+          <a href="#run-traces">Run traces</a>
+          <a href="#production">Production setup</a>
+          <a href="#security-boundaries">Security boundaries</a>
+          <a href="#troubleshooting">Troubleshooting</a>
+          <a href="#reference">Reference docs</a>
+        </aside>
+
+        <div class="docs-content">
+          <section class="docs-section" id="version-status">
+            <span class="docs-index">01 / READ THIS FIRST</span>
+            <h2>Which version should I use?</h2>
+            <div class="version-callout">
+              <div class="version-callout-icon">i</div>
+              <div>
+                <h3>Published package and repository source are on different release stages.</h3>
+                <p><strong>PyPI:</strong> <code>synapse-memory-engine==1.3.1</code> is the published SDK version documented for the quickstart.</p>
+                <p><strong>Repository:</strong> the current source tree targets <code>1.4.0</code> and contains newer run-guard, trace, and provenance work. The 1.4.0 package has not yet been published to PyPI.</p>
+                <p>Do not expect 1.4.0-only APIs to exist when you install the published 1.3.1 package.</p>
+              </div>
+            </div>
+            <p>The repository source is licensed under Apache 2.0. The published PyPI 1.3.1 artifact predates that repository license migration; its original distribution terms were not changed retroactively. See the <a href="https://github.com/721189/Synapse-Memory/blob/main/docs/licensing.md" target="_blank" rel="noreferrer">licensing policy</a>.</p>
+          </section>
+
+          <section class="docs-section" id="quickstart">
+            <span class="docs-index">02 / FIRST SUCCESSFUL WRITE + READ</span>
+            <h2>Local quickstart</h2>
+            <p>This path verifies that the engine can save and retrieve a memory on your machine. It uses SQLite and the built-in deterministic hash embedder. That embedder is <strong>not semantic</strong>; this is a plumbing/evaluation path, not a semantic retrieval quality test or production configuration.</p>
+
+            <div class="step-block">
+              <div class="step-heading"><span>1</span><div><h3>Create a virtual environment</h3><p>Python 3.10 or newer is required.</p></div></div>
+              <div class="code-panel">
+                <div class="code-panel-head"><span>MACOS / LINUX</span><button class="copy-button" type="button" data-copy="#docs-install">Copy</button></div>
+                <pre><code id="docs-install">python -m venv .venv
+source .venv/bin/activate
+python -m pip install --upgrade pip
+python -m pip install synapse-memory-engine==1.3.1</code></pre>
+              </div>
+              <div class="code-panel">
+                <div class="code-panel-head"><span>WINDOWS POWERSHELL</span><button class="copy-button" type="button" data-copy="#docs-install-win">Copy</button></div>
+                <pre><code id="docs-install-win">python -m venv .venv
+.venv\\Scripts\\Activate.ps1
+python -m pip install --upgrade pip
+python -m pip install synapse-memory-engine==1.3.1</code></pre>
+              </div>
+            </div>
+
+            <div class="step-block">
+              <div class="step-heading"><span>2</span><div><h3>Start the local engine</h3><p>Open terminal 1 and keep it running.</p></div></div>
+              <div class="code-panel">
+                <div class="code-panel-head"><span>MACOS / LINUX</span><button class="copy-button" type="button" data-copy="#docs-engine">Copy</button></div>
+                <pre><code id="docs-engine">export SYNAPSE_STORAGE_BACKEND=sqlite
+export SYNAPSE_SQLITE_DB_PATH=./synapse_memory.db
+python -m uvicorn synapse_memory.api.fastapi_server:app --host 127.0.0.1 --port 8008</code></pre>
+              </div>
+              <div class="code-panel">
+                <div class="code-panel-head"><span>WINDOWS POWERSHELL</span><button class="copy-button" type="button" data-copy="#docs-engine-win">Copy</button></div>
+                <pre><code id="docs-engine-win">$env:SYNAPSE_STORAGE_BACKEND = "sqlite"
+$env:SYNAPSE_SQLITE_DB_PATH = "./synapse_memory.db"
+python -m uvicorn synapse_memory.api.fastapi_server:app --host 127.0.0.1 --port 8008</code></pre>
+              </div>
+              <div class="note note-warning"><strong>Local-only configuration:</strong> in a fully unconfigured local setup, authentication is intentionally development-open. Do not expose this engine port to a network or use this configuration in production. Keep the generated <code>.synapse_key</code> safe and stable while the database exists.</div>
+            </div>
+
+            <div class="step-block">
+              <div class="step-heading"><span>3</span><div><h3>Save and retrieve one memory</h3><p>In terminal 2, with the same virtual environment active, run this script.</p></div></div>
+              <div class="code-panel">
+                <div class="code-panel-head"><span>PYTHON · quickstart.py</span><button class="copy-button" type="button" data-copy="#docs-python">Copy</button></div>
+                <pre><code id="docs-python">from synapse_memory import SynapseClient, SynapseError
+
+with SynapseClient(
+    "http://127.0.0.1:8008",
+    tenant_id="local-dev",
+    timeout=10,
+) as client:
+    created = client.create_memory(
+        "The project uses PostgreSQL in production and SQLite for local demos.",
+        category="fact",
+    )
+    print(f"Created memory: {created.id}")
+
+    result = client.retrieve("Which database is used for local demos?")
+    print(result.fused_context or "(No context returned)")
+
+    try:
+        client.retrieve("")
+    except SynapseError as exc:
+        print(f"Request failed: {exc}; retryable={exc.retryable}")</code></pre>
+              </div>
+              <p>Expected result: the script prints a memory ID and retrieved context containing the saved fact. If the context is empty, confirm that the engine is still running and inspect its terminal logs.</p>
+            </div>
+
+            <div class="step-block">
+              <div class="step-heading"><span>4</span><div><h3>Check readiness and stop</h3><p>In a third terminal, check the readiness endpoint.</p></div></div>
+              <div class="code-panel">
+                <div class="code-panel-head"><span>TERMINAL</span><button class="copy-button" type="button" data-copy="#docs-ready">Copy</button></div>
+                <pre><code id="docs-ready">python -c "import urllib.request; print(urllib.request.urlopen('http://127.0.0.1:8008/readiness').read().decode())"</code></pre>
+              </div>
+              <p>Stop the engine with <kbd>Ctrl</kbd> + <kbd>C</kbd> in terminal 1. Keep the local database and encryption key together if you want to reuse the data.</p>
+            </div>
+          </section>
+
+          <section class="docs-section" id="run-controls">
+            <span class="docs-index">03 / SOURCE TREE FEATURE</span>
+            <h2>Opt-in execution controls</h2>
+            <p>The repository's 1.4.0 source includes <code>SynapseRun</code> and <code>RunPolicy</code> for work that an application explicitly routes through the guard. The guard can account for steps and tool calls, check a cooperative deadline, detect repeated failed calls, and record metadata-only events.</p>
+            <div class="code-panel">
+              <div class="code-panel-head"><span>ILLUSTRATIVE SOURCE API · 1.4.0</span><button class="copy-button" type="button" data-copy="#run-policy-code">Copy</button></div>
+              <pre><code id="run-policy-code">from synapse_memory.runtime import RunPolicy, SynapseRun
+
+policy = RunPolicy(
+    max_steps=30,
+    max_tool_calls=20,
+    timeout_seconds=120,
+    max_repeated_failures=2,
+)
+
+with SynapseRun(policy=policy) as run:
+    result = run.call_tool(
+        "lookup_customer",
+        {"customer_id": "example-id"},
+        lookup_customer,
+    )</code></pre>
+            </div>
+            <div class="note note-warning"><strong>Important limits:</strong> this source API is not included in the published 1.3.1 package. Guards apply only to calls explicitly routed through <code>SynapseRun</code>; they do not intercept arbitrary framework/tool calls. Deadlines are cooperative and cannot forcibly interrupt a synchronous tool that is already running. A retry-safe flag is an application assertion, not proof of idempotency.</div>
+            <p>Applications supply their own postconditions for tool outcomes. Synapse records whether that supplied check passed or failed; it cannot independently prove that the check represents the user's real-world objective.</p>
+          </section>
+
+          <section class="docs-section" id="run-traces">
+            <span class="docs-index">04 / SOURCE TREE FEATURE</span>
+            <h2>Persistent run traces and retrieval evidence</h2>
+            <p>The 1.4.0 source includes tenant-scoped run summaries and chronological event APIs. A run can be linked to retrieval evidence: memory IDs, ranks, allowlisted score metadata, token cost, packed/not-packed decisions, and provenance lineage.</p>
+            <div class="endpoint-list">
+              <div><span>POST</span><code>/api/agent-runs</code><small>Create a run summary · agent-runs:write</small></div>
+              <div><span>POST</span><code>/api/agent-runs/{run_id}/events</code><small>Append an event · agent-runs:write</small></div>
+              <div><span>GET</span><code>/api/agent-runs</code><small>List tenant-scoped runs · agent-runs:read</small></div>
+              <div><span>GET</span><code>/api/agent-runs/{run_id}/events</code><small>Read chronological events · agent-runs:read</small></div>
+              <div><span>DELETE</span><code>/api/agent-runs/{run_id}</code><small>Delete a run and its events · agent-runs:delete</small></div>
+            </div>
+            <p>The event contract is allowlisted and metadata-only. Raw prompts, queries, memory contents, tool arguments, and tool results are not part of the run event record. The dashboard provides a bounded inspector and redacted metadata export.</p>
+            <p>Reference: <a href="https://github.com/721189/Synapse-Memory/blob/main/docs/api-reference.md" target="_blank" rel="noreferrer">API contract</a> · <a href="https://github.com/721189/Synapse-Memory/blob/main/docs/memory-provenance.md" target="_blank" rel="noreferrer">Memory provenance</a> · <a href="https://github.com/721189/Synapse-Memory/blob/main/docs/agent-reliability-fault-injection.md" target="_blank" rel="noreferrer">Fault-injection evidence and limits</a>.</p>
+          </section>
+
+          <section class="docs-section" id="production">
+            <span class="docs-index">05 / BEFORE REAL DATA</span>
+            <h2>Production-shaped deployment</h2>
+            <p>The SQLite quickstart is for local evaluation only. A production-shaped deployment needs PostgreSQL with pgvector, a real semantic embedding provider, stable encryption and API secrets, protected network access, and distinct database roles.</p>
+            <div class="checklist-card">
+              <h3>Deployment checklist</h3>
+              <ul class="check-list">
+                <li>Provision PostgreSQL with pgvector and the required schema.</li>
+                <li>Use separate bootstrap, migration, and DML-only runtime database roles.</li>
+                <li>Set <code>SYNAPSE_APPLY_DB_SCHEMA=false</code> for the runtime role.</li>
+                <li>Provide stable <code>SYNAPSE_ENCRYPTION_KEY</code> and non-default <code>SYNAPSE_API_KEY</code> values through a secret manager.</li>
+                <li>Choose a real embedding provider and verify the configured model dimensions.</li>
+                <li>Enable TLS, restrict network access, and protect database volumes and backups.</li>
+                <li>Test backup restoration, key custody, retention, and deletion procedures.</li>
+                <li>Validate the exact workload and threat model before enabling guard enforcement.</li>
+              </ul>
+            </div>
+            <p>Follow the full <a href="https://github.com/721189/Synapse-Memory/blob/main/docs/ops-runbook.md" target="_blank" rel="noreferrer">operations runbook</a>, <a href="https://github.com/721189/Synapse-Memory/blob/main/docs/backup-recovery.md" target="_blank" rel="noreferrer">backup and recovery guide</a>, and <a href="https://github.com/721189/Synapse-Memory/blob/main/SECURITY.md" target="_blank" rel="noreferrer">security policy</a>. Helm deploys the engine and gateway; PostgreSQL is an external dependency.</p>
+          </section>
+
+          <section class="docs-section" id="security-boundaries">
+            <span class="docs-index">06 / SECURITY MODEL</span>
+            <h2>Know the data boundary</h2>
+            <div class="security-detail-grid">
+              <article><h3>What is field-encrypted?</h3><p>The authoritative memory <code>content</code> field is encrypted using Fernet (AES-128-CBC + HMAC-SHA256).</p></article>
+              <article><h3>What remains readable?</h3><p>The <code>content_plain</code> search projection, PostgreSQL text-search derivative, and vector embeddings remain readable by design to support retrieval.</p></article>
+              <article><h3>What is tenant-isolated?</h3><p>PostgreSQL RLS protects memory and trace data when the required forced RLS policies and least-privilege runtime role are correctly configured.</p></article>
+              <article><h3>What is not claimed?</h3><p>Synapse does not claim a compliance certification, universal encryption of all derivatives, or proven reliability on customer workloads.</p></article>
+            </div>
+            <div class="note note-warning">Treat database dumps and backups as sensitive data artifacts. Enable operator-managed volume/database encryption, restrict restore access, and retain encryption keys separately but recoverably.</div>
+          </section>
+
+          <section class="docs-section" id="troubleshooting">
+            <span class="docs-index">07 / COMMON QUESTIONS</span>
+            <h2>Troubleshooting</h2>
+            <div class="faq-list">
+              <details><summary>Connection refused on port 8008</summary><p>Confirm terminal 1 is still running, check the Uvicorn startup output, and verify the host and port used by the client.</p></details>
+              <details><summary>HTTP 403 from the engine</summary><p>Check the configured API key, <code>X-Synapse-API-Key</code> header, and tenant ID. The development-open path applies only to a fully unconfigured local setup; once authentication is configured, anonymous calls are rejected.</p></details>
+              <details><summary>HTTP 429</summary><p>The configured rate limit was reached. Back off and review <code>RATE_LIMIT_PER_MIN</code> and Redis configuration.</p></details>
+              <details><summary>Readiness returns 503</summary><p>Inspect engine logs and verify database connectivity, schema availability, and the runtime database role.</p></details>
+              <details><summary>Retrieval returns an empty context</summary><p>Confirm the memory write succeeded and inspect engine logs. The deterministic hash embedder is not semantic; use a real embedding provider to evaluate semantic retrieval.</p></details>
+              <details><summary>Can I use 1.4.0 from PyPI?</summary><p>Not yet. The published package is 1.3.1. Version 1.4.0 is present in the repository source but has not been published to PyPI.</p></details>
+            </div>
+          </section>
+
+          <section class="docs-section" id="reference">
+            <span class="docs-index">08 / GO DEEPER</span>
+            <h2>Reference documentation</h2>
+            <div class="reference-grid">
+              <a href="https://github.com/721189/Synapse-Memory/blob/main/docs/quickstart.md" target="_blank" rel="noreferrer"><b>Quickstart source</b><span>Full install and first write/read guide ↗</span></a>
+              <a href="https://github.com/721189/Synapse-Memory/blob/main/docs/api-reference.md" target="_blank" rel="noreferrer"><b>API reference</b><span>Routes, envelopes, scopes, run events ↗</span></a>
+              <a href="https://github.com/721189/Synapse-Memory/blob/main/docs/agent-reliability-product-roadmap.md" target="_blank" rel="noreferrer"><b>Product roadmap</b><span>Product boundary, gaps, pilot gates ↗</span></a>
+              <a href="https://github.com/721189/Synapse-Memory/blob/main/docs/design-partner-pilot-runbook.md" target="_blank" rel="noreferrer"><b>Pilot runbook</b><span>Scope, baseline, safe evaluation stages ↗</span></a>
+              <a href="https://github.com/721189/Synapse-Memory/blob/main/docs/performance-baseline.md" target="_blank" rel="noreferrer"><b>Performance baseline</b><span>Benchmarks and evidence boundaries ↗</span></a>
+              <a href="https://github.com/721189/Synapse-Memory/blob/main/docs/licensing.md" target="_blank" rel="noreferrer"><b>Licensing policy</b><span>Apache 2.0 core and open-core boundary ↗</span></a>
+            </div>
+          </section>
+
+          <div class="docs-help">
+            <div><span class="section-kicker">STILL UNCLEAR?</span><h2>Tell us where the docs fell short.</h2><p>You can answer just one question. The feedback page prepares a draft for you; nothing is submitted automatically.</p></div>
+            <a class="button button-primary" href="../feedback/">Share feedback <span>→</span></a>
+          </div>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <footer class="site-footer">
+    <div class="container footer-bottom"><a href="../" class="footer-home">← Back to Synapse</a><span>© 2026 Synapse Memory · Apache 2.0 repository source</span><a href="../feedback/">Feedback →</a></div>
+  </footer>
+</body>
+</html>
