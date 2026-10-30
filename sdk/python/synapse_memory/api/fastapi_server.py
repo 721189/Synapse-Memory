@@ -866,20 +866,58 @@ def query_memory(
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
-    if not query_text.strip():
-        return envelope(QueryResponse(
-            fused_context=protected_context_block, injected_nodes_count=0, injected_nodes=[],
-            active_storage_backend=ACTIVE_BACKEND, retrieval_as_of=retrieval_as_of,
-            protected_constraints_count=protected_constraints_count,
-            protected_constraints_token_cost=protected_constraints_token_cost,
-        ).model_dump(), request)
-
     effective_tenant = resolve_tenant(principal, payload.tenant_id)
     if payload.run_id and "agent-runs:write" not in principal.scopes:
         raise HTTPException(
             status_code=403,
             detail="Agent retrieval tracing requires the agent-runs:write scope.",
         )
+
+    if not query_text.strip():
+        retrieval_id: Optional[str] = None
+        if payload.run_id:
+            import uuid as _uuid
+
+            retrieval_id = "ret_" + _uuid.uuid4().hex
+            try:
+                run_trace_store.append_event(effective_tenant, payload.run_id, {
+                    "schema_version": 1,
+                    "event_id": "evt_" + _uuid.uuid4().hex,
+                    "run_id": payload.run_id,
+                    "event_type": RunEventType.MEMORY_RETRIEVAL.value,
+                    "timestamp": datetime.datetime.now(datetime.timezone.utc),
+                    "run_status": RunStatus.RUNNING.value,
+                    "retrieval_id": retrieval_id,
+                    "retrieval_as_of": retrieval_as_of,
+                    "protected_constraints_count": protected_constraints_count,
+                    "protected_constraints_token_cost": protected_constraints_token_cost,
+                    "memory_evidence": [],
+                })
+            except RunNotFoundError as exc:
+                raise HTTPException(
+                    status_code=404,
+                    detail="Run not found for the authenticated tenant.",
+                ) from exc
+            except RunConflictError as exc:
+                raise HTTPException(
+                    status_code=409,
+                    detail="Run cannot accept another retrieval event.",
+                ) from exc
+            except RunTraceError as exc:
+                raise HTTPException(
+                    status_code=503,
+                    detail="Retrieval trace storage unavailable.",
+                ) from exc
+            except (ValueError, TypeError) as exc:
+                raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+        return envelope(QueryResponse(
+            fused_context=protected_context_block, injected_nodes_count=0, injected_nodes=[],
+            active_storage_backend=ACTIVE_BACKEND, retrieval_as_of=retrieval_as_of,
+            retrieval_id=retrieval_id,
+            protected_constraints_count=protected_constraints_count,
+            protected_constraints_token_cost=protected_constraints_token_cost,
+        ).model_dump(), request)
     query_vector = embedder.embed_query(query_text)
 
     # 1. Candidate retrieval. On the pgvector backend, hybrid search (dense HNSW
