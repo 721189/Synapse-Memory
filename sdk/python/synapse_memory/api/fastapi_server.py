@@ -926,31 +926,19 @@ def query_memory(
             if is_retrieval_eligible(memory, retrieval_as_of)
         ]
 
-        if not candidate_docs:
-            return envelope(QueryResponse(
-                fused_context=protected_context_block, injected_nodes_count=0, injected_nodes=[],
-                active_storage_backend=ACTIVE_BACKEND, retrieval_as_of=retrieval_as_of,
-                protected_constraints_count=protected_constraints_count,
-                protected_constraints_token_cost=protected_constraints_token_cost,
-            ).model_dump(), request)
-
-        # 2. Reciprocal Rank Fusion (RRF) in Python for the non-pgvector backends.
-        candidates = searcher.fused_search(
-            query_text,
-            candidate_docs,
-            query_vector=query_vector,
-            top_k=25,
-            category_filter=payload.category,
-            tenant_filter=effective_tenant
-        )
-
-    if not candidates:
-        return envelope(QueryResponse(
-            fused_context=protected_context_block, injected_nodes_count=0, injected_nodes=[],
-            active_storage_backend=ACTIVE_BACKEND, retrieval_as_of=retrieval_as_of,
-            protected_constraints_count=protected_constraints_count,
-            protected_constraints_token_cost=protected_constraints_token_cost,
-        ).model_dump(), request)
+        # Empty candidate sets still pass through packing and trace correlation.
+        # This preserves an explainable retrieval event even when no eligible
+        # memories were found for the query.
+        if candidate_docs:
+            # 2. Reciprocal Rank Fusion (RRF) in Python for the non-pgvector backends.
+            candidates = searcher.fused_search(
+                query_text,
+                candidate_docs,
+                query_vector=query_vector,
+                top_k=25,
+                category_filter=payload.category,
+                tenant_filter=effective_tenant
+            )
 
     # 2. Dynamic temporal decay adjustment: S(m,q,t) = R(m,q) * D(m,t).
     # Preserve retrieval relevance; decay only re-weights priority.
