@@ -879,6 +879,70 @@ def query_memory(
 
     # 3. Dynamic programming 0/1 Knapsack optimal budget packing
     packed_nodes = packer.pack(decayed_candidates, payload.max_token_budget)
+    retrieval_id: Optional[str] = None
+    if payload.run_id:
+        import uuid as _uuid
+
+        retrieval_id = "ret_" + _uuid.uuid4().hex
+        packed_ids = {node["id"] for node in packed_nodes}
+        evidence: List[Dict[str, Any]] = []
+        for rank, node in enumerate(decayed_candidates[:100], start=1):
+            explanation = node.get("explanation") or {}
+            if not isinstance(explanation, dict):
+                explanation = {}
+            scores: Dict[str, float] = {}
+            score_sources = {
+                "relevance_score": node.get("relevance_score"),
+                "retrieval_score": node.get("retrieval_score"),
+                "decay_multiplier": node.get("decay_multiplier"),
+                "lexical_rank": explanation.get("sparse_rank", node.get("lexical_rank")),
+                "dense_rank": explanation.get("dense_rank"),
+                "fused_score": explanation.get("fused_score"),
+                "bm25_score": explanation.get("lexical_score", node.get("bm25_score")),
+                "semantic_score": explanation.get("semantic_score", node.get("semantic_score")),
+                "dense_score": node.get("cosine_similarity"),
+            }
+            for key, value in score_sources.items():
+                if isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value):
+                    scores[key] = float(value)
+            item: Dict[str, Any] = {
+                "memory_id": node["id"],
+                "rank": rank,
+                "score_components": scores,
+                "token_cost": max(0, int(node.get("token_cost", 0) or 0)),
+                "packed": node["id"] in packed_ids,
+            }
+            for field_name in (
+                "created_at", "supersedes", "superseded_by", "source_type",
+                "source_id", "observed_at", "valid_from", "valid_until",
+                "trust_level", "supersession_reason", "retracted_at",
+                "retraction_reason",
+            ):
+                value = node.get(field_name)
+                if value is not None:
+                    item[field_name] = value
+            evidence.append(item)
+
+        try:
+            run_trace_store.append_event(effective_tenant, payload.run_id, {
+                "schema_version": 1,
+                "event_id": "evt_" + _uuid.uuid4().hex,
+                "run_id": payload.run_id,
+                "event_type": RunEventType.MEMORY_RETRIEVAL.value,
+                "timestamp": datetime.datetime.now(datetime.timezone.utc),
+                "run_status": RunStatus.RUNNING.value,
+                "retrieval_id": retrieval_id,
+                "retrieval_as_of": retrieval_as_of,
+                "memory_evidence": evidence,
+            })
+        except RunNotFoundError as exc:
+            raise HTTPException(status_code=404, detail="Run not found for the authenticated tenant.") from exc
+        except RunConflictError as exc:
+            raise HTTPException(status_code=409, detail="Run cannot accept another retrieval event.") from exc
+        except RunTraceError as exc:
+            raise HTTPException(status_code=503, detail="Retrieval trace storage unavailable.") from exc
+        except (ValueError, TypeError) as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
 
     global _retrieval_success, _last_candidate_count, _last_packed_tokens
     with _metrics_lock:
@@ -904,6 +968,7 @@ def query_memory(
             "injected_nodes": packed_nodes,
             "active_storage_backend": ACTIVE_BACKEND,
             "retrieval_as_of": retrieval_as_of,
+            "retrieval_id": retrieval_id,
         },
         request,
     )
