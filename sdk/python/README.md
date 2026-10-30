@@ -124,4 +124,4 @@ The Synapse Memory SDK source in this distribution is licensed under the
 redistribution subject to the license conditions. Third-party dependencies
 remain under their respective licenses. The Synapse name and logos are not
 licensed by the Apache 2.0 grant; see the repository
-[trademark policy](../../TRADEMARKS.md).
+[trademark policy](https://github.com/721189/Synapse-Memory/blob/main/TRADEMARKS.md).
