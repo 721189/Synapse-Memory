@@ -91,11 +91,15 @@ Items requiring explicit notice/redistribution review include:
 - `dirtyjson 1.0.8` reports an AFL/MIT dual-license expression. Select and
   record the applicable license basis when distributing it.
 
-The initial Node report also marked the local gateway package `UNLICENSED`
-because the lockfile root package metadata lacked its license field. The
-lockfile root entry has since been aligned with `package.json` as
-`Apache-2.0`; the refreshed report must confirm that the stale `UNLICENSED`
-entry is gone.
+The Node inventory includes one additional record for the local
+`synapse-memory-gateway@1.3.1` workspace itself. `license-checker` reports
+that record as `UNLICENSED` because the workspace package is intentionally
+marked `private: true` to prevent accidental npm publication. This is not a
+third-party dependency. The source repository and both `package.json` and
+lockfile root metadata declare `Apache-2.0`. Excluding that local workspace
+record leaves 184 third-party package entries, all with a reported license
+expression; this is not a substitute for review of the special-license
+obligations above.
 
 This inventory is a useful triage result, not a legal sign-off. For binary
 container releases, check the exact packages that make it into each image,
