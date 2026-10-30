@@ -61,6 +61,10 @@ class TestMigrations(unittest.TestCase):
         cols = self._columns("memories")
         self.assertIn("embedding_dimension", cols)
         self.assertIn("model_version", cols)
+        self.assertTrue({
+            "source_type", "source_id", "observed_at", "valid_from", "valid_until",
+            "trust_level", "supersession_reason", "retracted_at", "retraction_reason",
+        } <= cols)
 
         conn = self._get_conn()
         try:
@@ -97,6 +101,7 @@ class TestMigrations(unittest.TestCase):
 
     def test_current_version_constant_matches_registry(self):
         self.assertEqual(CURRENT_SCHEMA_VERSION, MIGRATIONS[-1].version)
+        self.assertEqual(CURRENT_SCHEMA_VERSION, 7)
 
 
 if __name__ == "__main__":
