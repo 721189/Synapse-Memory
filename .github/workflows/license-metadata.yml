@@ -7,6 +7,10 @@ on:
       - "LICENSE"
       - "sdk/python/LICENSE"
       - "sdk/python/**"
+      - "package.json"
+      - "package-lock.json"
+      - "requirements*.txt"
+      - "pyproject.toml"
       - ".github/workflows/license-metadata.yml"
   push:
     branches: [main]
