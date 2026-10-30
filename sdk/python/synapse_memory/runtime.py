@@ -35,6 +35,7 @@ __all__ = [
     "RunToolCallLimitExceeded",
     "RunDeadlineExceeded",
     "RepeatedToolCallError",
+    "PostconditionFailed",
 ]
 
 T = TypeVar("T")
