@@ -1,0 +1,332 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#080c17">
+  <meta name="description" content="Synapse is a self-hostable memory and execution-reliability layer for Python AI agents: provenance-aware retrieval, bounded tool runs, and metadata-only traces.">
+  <meta property="og:type" content="website">
+  <meta property="og:title" content="Synapse — Memory for agents. Boundaries for runs.">
+  <meta property="og:description" content="Persistent memory, opt-in execution controls, and useful run evidence for Python AI agents.">
+  <meta property="og:url" content="https://721189.github.io/Synapse-Memory/">
+  <meta name="twitter:card" content="summary">
+  <title>Synapse — Memory for agents. Boundaries for runs.</title>
+  <link rel="icon" href="assets/favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="assets/site.css">
+  <script defer src="assets/site.js"></script>
+</head>
+<body>
+  <a class="skip-link" href="#main">Skip to content</a>
+
+  <header class="site-header">
+    <div class="container nav-wrap">
+      <a class="brand" href="./" aria-label="Synapse home">
+        <span class="brand-mark" aria-hidden="true">
+          <svg viewBox="0 0 40 40" fill="none">
+            <path d="M20 4.5 32.8 11.8v16.4L20 35.5 7.2 28.2V11.8L20 4.5Z" stroke="currentColor" stroke-width="1.5"/>
+            <path d="M12 14.2 20 9.7l8 4.5v11.6l-8 4.5-8-4.5V14.2Z" stroke="currentColor" stroke-width="1.5" opacity=".58"/>
+            <path d="m12 14.2 8 4.6 8-4.6M20 18.8v11.5" stroke="currentColor" stroke-width="1.5"/>
+            <circle cx="20" cy="18.8" r="2.3" fill="#a8f0d0"/>
+          </svg>
+        </span>
+        <span class="brand-name">synapse<span class="brand-dot">.</span></span>
+      </a>
+
+      <button class="nav-toggle" type="button" aria-expanded="false" aria-controls="primary-nav" aria-label="Open navigation">
+        <span></span><span></span>
+      </button>
+
+      <nav class="primary-nav" id="primary-nav" aria-label="Main navigation">
+        <a href="#why">Why Synapse</a>
+        <a href="#capabilities">Capabilities</a>
+        <a href="docs/">Docs</a>
+        <a href="#security">Security</a>
+        <a href="feedback/">Feedback</a>
+      </nav>
+      <div class="nav-actions">
+        <a class="nav-github" href="https://github.com/721189/Synapse-Memory" target="_blank" rel="noreferrer">GitHub <span aria-hidden="true">↗</span></a>
+        <a class="button button-small button-primary" href="docs/">Get started <span aria-hidden="true">→</span></a>
+      </div>
+    </div>
+  </header>
+
+  <main id="main">
+    <section class="hero section-shell">
+      <div class="hero-glow hero-glow-one" aria-hidden="true"></div>
+      <div class="hero-glow hero-glow-two" aria-hidden="true"></div>
+      <div class="container hero-grid">
+        <div class="hero-copy">
+          <div class="eyebrow"><span class="eyebrow-pulse"></span> OPEN-SOURCE DEVELOPER INFRASTRUCTURE</div>
+          <h1>Memory for agents.<br><span class="gradient-text">Boundaries for runs.</span></h1>
+          <p class="hero-lede">Give Python agents context that can be traced, tool calls that can be bounded, and failures that are easier to understand.</p>
+          <p class="hero-support">Synapse brings persistent memory, provenance-aware retrieval, opt-in execution controls, and privacy-minimized run traces into one self-hostable layer.</p>
+          <div class="hero-actions">
+            <a class="button button-primary" href="docs/">Explore the quickstart <span aria-hidden="true">→</span></a>
+            <a class="button button-quiet" href="https://github.com/721189/Synapse-Memory" target="_blank" rel="noreferrer">View source <span aria-hidden="true">↗</span></a>
+          </div>
+          <div class="hero-footnote"><span class="footnote-icon">⌘</span> Python SDK · HTTP API · LangChain · LlamaIndex</div>
+        </div>
+
+        <div class="hero-visual" aria-label="Illustrative agent run trace interface">
+          <div class="visual-orbit orbit-a"></div>
+          <div class="visual-orbit orbit-b"></div>
+          <div class="trace-window">
+            <div class="window-topbar">
+              <div class="window-dots"><i></i><i></i><i></i></div>
+              <span>RUN INSPECTOR <b>·</b> illustrative view</span>
+              <span class="window-live"><i></i> TRACE</span>
+            </div>
+            <div class="trace-heading">
+              <div>
+                <span class="micro-label">RUN / SYN-8F2A</span>
+                <h3>customer_lookup</h3>
+                <p>Started just now · 4 events</p>
+              </div>
+              <span class="status-pill status-blocked"><i></i> Limit reached</span>
+            </div>
+            <div class="trace-metrics">
+              <div><span>STEPS</span><strong>04 <small>/ 04</small></strong></div>
+              <div><span>TOOL CALLS</span><strong>02 <small>/ 03</small></strong></div>
+              <div><span>STATUS</span><strong class="text-amber">Stopped</strong></div>
+            </div>
+            <div class="trace-line">
+              <div class="trace-event">
+                <span class="event-node node-green"></span>
+                <div class="event-copy"><b>Run started</b><small>Policy attached · metadata only</small></div>
+                <time>00:00</time>
+              </div>
+              <div class="trace-event">
+                <span class="event-node node-blue"></span>
+                <div class="event-copy"><b>Memory retrieval</b><small>3 evidence records · 2 packed</small></div>
+                <time>00:01</time>
+              </div>
+              <div class="trace-event">
+                <span class="event-node node-blue"></span>
+                <div class="event-copy"><b>Tool call failed</b><small>customer_lookup · timeout</small></div>
+                <time>00:02</time>
+              </div>
+              <div class="trace-event trace-event-last">
+                <span class="event-node node-amber"></span>
+                <div class="event-copy"><b>Repeated call blocked</b><small>Configured failure ceiling reached</small></div>
+                <time>00:03</time>
+              </div>
+            </div>
+            <div class="trace-foot"><span><i class="privacy-dot"></i> No raw prompt or tool arguments shown</span><span>EVENTS <b>04</b></span></div>
+          </div>
+          <div class="floating-chip chip-context"><span class="chip-icon">✳</span><span><b>Context with provenance</b><small>Source · time · trust · packing</small></span></div>
+          <div class="floating-chip chip-guard"><span class="chip-icon">⌁</span><span><b>Explicit run limits</b><small>Steps · calls · deadline</small></span></div>
+        </div>
+      </div>
+      <div class="container hero-bottom">
+        <span>BUILT FOR DEVELOPERS WHO SHIP AGENTS</span>
+        <div class="stack-list"><b>PYTHON</b><i></i><b>HTTP API</b><i></i><b>POSTGRES + PGVECTOR</b><i></i><b>APACHE 2.0 SOURCE</b></div>
+      </div>
+    </section>
+
+    <section class="release-strip">
+      <div class="container release-inner">
+        <span class="release-dot"></span>
+        <p><strong>Release status:</strong> PyPI package <b>1.3.1</b> is published. Repository source targets <b>1.4.0</b>; that version is prepared but not yet published to PyPI.</p>
+        <a href="docs/#version-status">Understand the difference <span aria-hidden="true">→</span></a>
+      </div>
+    </section>
+
+    <section class="section section-light" id="why">
+      <div class="container">
+        <div class="section-intro intro-centered">
+          <span class="section-kicker">THE PROBLEM</span>
+          <h2>Agents can fail in ways<br><span class="muted-heading">a better prompt cannot fix.</span></h2>
+          <p>Useful agents need more than a longer context window. They need a way to manage what they remember, constrain what they do, and inspect what happened.</p>
+        </div>
+        <div class="problem-grid">
+          <article class="problem-card">
+            <span class="problem-number">01 / CONTEXT</span>
+            <div class="problem-icon icon-violet">◈</div>
+            <h3>Relevant context gets lost</h3>
+            <p>Naive history replay grows without bounds. Stale or superseded facts can keep influencing new decisions.</p>
+          </article>
+          <article class="problem-card">
+            <span class="problem-number">02 / EXECUTION</span>
+            <div class="problem-icon icon-mint">⌁</div>
+            <h3>Tool calls can repeat</h3>
+            <p>Retries and loops can multiply side effects. A model saying “done” does not prove an external action succeeded.</p>
+          </article>
+          <article class="problem-card">
+            <span class="problem-number">03 / DIAGNOSIS</span>
+            <div class="problem-icon icon-blue">⌘</div>
+            <h3>Failure evidence is fragmented</h3>
+            <p>Without a connected run record, it is harder to understand which context was selected and where execution stopped.</p>
+          </article>
+        </div>
+      </div>
+    </section>
+
+    <section class="section section-dark" id="capabilities">
+      <div class="container">
+        <div class="section-intro">
+          <span class="section-kicker">WHAT SYNAPSE BRINGS TOGETHER</span>
+          <h2>One layer. <span class="gradient-text">Four useful primitives.</span></h2>
+          <p>Start with the part your application needs. Keep your existing agent framework and deployment decisions.</p>
+        </div>
+        <div class="capability-grid">
+          <article class="capability-card capability-large">
+            <div class="capability-top"><span class="capability-icon">◈</span><span class="capability-tag">MEMORY</span></div>
+            <h3>Memory that has a lifecycle</h3>
+            <p>Ingest, deduplicate, retrieve, update, supersede, and retract information instead of replaying an ever-growing transcript.</p>
+            <ul class="feature-list">
+              <li>Hybrid lexical + vector retrieval with rank fusion</li>
+              <li>Temporal validity and source/provenance metadata</li>
+              <li>Token-budgeted context packing</li>
+            </ul>
+            <div class="mini-flow"><span>INGEST</span><i>→</i><span>RETRIEVE</span><i>→</i><span>PACK</span><i>→</i><span>USE</span></div>
+          </article>
+          <article class="capability-card">
+            <div class="capability-top"><span class="capability-icon icon-mint">⌁</span><span class="capability-tag">EXECUTION</span></div>
+            <h3>Opt-in run boundaries</h3>
+            <p>Route selected work through SynapseRun to enforce step, tool-call, and cooperative deadline limits, with repeated-failure controls.</p>
+            <a class="text-link" href="docs/#run-controls">Explore run controls <span>→</span></a>
+          </article>
+          <article class="capability-card">
+            <div class="capability-top"><span class="capability-icon icon-blue">⌘</span><span class="capability-tag">EVIDENCE</span></div>
+            <h3>Traces tied to context</h3>
+            <p>Connect run events with retrieval IDs, memory evidence, ranking signals, token costs, and packing decisions—without storing raw prompts or tool payloads.</p>
+            <a class="text-link" href="docs/#run-traces">Explore trace model <span>→</span></a>
+          </article>
+          <article class="capability-card capability-wide">
+            <div class="capability-top"><span class="capability-icon icon-amber">⌂</span><span class="capability-tag">DEPLOYMENT & CONTROL</span></div>
+            <h3>Keep the infrastructure in your environment</h3>
+            <p>Use the Python SDK or HTTP API. Develop locally with SQLite; use PostgreSQL and pgvector for production-shaped deployments. Tenant boundaries, scoped keys, and operational requirements are documented—not hidden behind a hosted-only workflow.</p>
+            <div class="deployment-tags"><span>Python SDK</span><span>HTTP API</span><span>SQLite · local development</span><span>PostgreSQL + pgvector</span><span>Docker · Helm</span></div>
+          </article>
+        </div>
+      </div>
+    </section>
+
+    <section class="section section-light" id="how-it-works">
+      <div class="container">
+        <div class="section-intro intro-centered">
+          <span class="section-kicker">HOW IT FITS</span>
+          <h2>Keep your agent.<br><span class="muted-heading">Add the missing layer.</span></h2>
+          <p>Synapse is designed to sit beside your existing application—not replace your orchestration framework.</p>
+        </div>
+        <div class="architecture-flow">
+          <div class="architecture-client">
+            <span class="architecture-label">YOUR APPLICATION</span>
+            <div class="architecture-app-mark">✳</div>
+            <h3>Python agent</h3>
+            <p>Tools · model calls · business logic</p>
+            <div class="app-chips"><span>LangChain</span><span>LlamaIndex</span><span>Custom</span></div>
+          </div>
+          <div class="architecture-connector"><span>SDK / HTTP</span><i></i></div>
+          <div class="architecture-synapse">
+            <span class="architecture-label">SYNAPSE LAYER</span>
+            <div class="synapse-core-mark">S</div>
+            <h3>Memory + run evidence</h3>
+            <div class="synapse-modules"><span>Memory & retrieval</span><span>Run boundaries</span><span>Trace events</span></div>
+          </div>
+          <div class="architecture-connector"><span>Storage</span><i></i></div>
+          <div class="architecture-data">
+            <span class="architecture-label">YOUR DATA LAYER</span>
+            <div class="database-icon">▤</div>
+            <h3>SQLite / PostgreSQL</h3>
+            <p>pgvector · tenant isolation</p>
+            <span class="data-note">Operator-managed infrastructure</span>
+          </div>
+        </div>
+        <p class="architecture-caption">Conceptual architecture. Exact deployment topology depends on your environment and configuration.</p>
+      </div>
+    </section>
+
+    <section class="section section-dark" id="start">
+      <div class="container start-grid">
+        <div class="start-copy">
+          <span class="section-kicker">FIRST STEP</span>
+          <h2>Try the memory layer<br><span class="gradient-text">on your machine.</span></h2>
+          <p>The published package supports a local SQLite evaluation path. It is the easiest way to test the write-and-retrieve flow before provisioning production infrastructure.</p>
+          <a class="button button-primary" href="docs/">Read the developer quickstart <span aria-hidden="true">→</span></a>
+          <p class="start-note">Python 3.10+ · local-only evaluation · no external database required</p>
+        </div>
+        <div class="code-card">
+          <div class="code-card-head"><span><i class="terminal-dot"></i> TERMINAL</span><button class="copy-button" type="button" data-copy="#home-install">Copy</button></div>
+          <pre><code id="home-install">python -m pip install synapse-memory-engine==1.3.1</code></pre>
+          <div class="code-divider"></div>
+          <div class="code-card-head"><span><i class="terminal-dot terminal-dot-blue"></i> PYTHON</span><button class="copy-button" type="button" data-copy="#home-python">Copy</button></div>
+          <pre><code id="home-python">from synapse_memory import SynapseClient
+
+with SynapseClient(
+    "http://127.0.0.1:8008",
+    tenant_id="local-dev",
+) as client:
+    saved = client.create_memory(
+        "The app uses SQLite for local evaluation.",
+        category="fact",
+    )
+    result = client.retrieve("Which database is used locally?")
+    print(saved.id)
+    print(result.fused_context)</code></pre>
+          <div class="code-card-foot"><span class="code-check">✓</span> Example follows the published SDK quickstart</div>
+        </div>
+      </div>
+    </section>
+
+    <section class="section section-light" id="security">
+      <div class="container security-layout">
+        <div class="security-copy">
+          <span class="section-kicker">TRUST BY BEING PRECISE</span>
+          <h2>Security details<br><span class="muted-heading">should be explicit.</span></h2>
+          <p>Synapse documents its boundaries so developers can decide whether its data model and deployment requirements fit their workload.</p>
+          <a class="text-link text-link-dark" href="https://github.com/721189/Synapse-Memory/blob/main/SECURITY.md" target="_blank" rel="noreferrer">Read the security policy <span>↗</span></a>
+        </div>
+        <div class="security-points">
+          <article><span class="security-symbol">01</span><div><h3>Field-level encryption has a defined scope</h3><p>The authoritative <code>content</code> field is Fernet-encrypted. The plaintext search projection, text-search derivative, and embeddings remain readable by design; protect database volumes and backups accordingly.</p></div></article>
+          <article><span class="security-symbol">02</span><div><h3>Tenant isolation depends on deployment roles</h3><p>PostgreSQL RLS must be paired with the documented non-owner, non-superuser runtime role and migrate-then-run setup.</p></div></article>
+          <article><span class="security-symbol">03</span><div><h3>Run evidence is metadata-only</h3><p>Trace events are designed to exclude prompts, raw tool arguments, tool results, and memory text. Applications remain responsible for safe event metadata.</p></div></article>
+          <article><span class="security-symbol">04</span><div><h3>Validation status is not overstated</h3><p>CI and synthetic fault-injection tests are not customer-workload proof, a security certification, or a production-readiness guarantee.</p></div></article>
+        </div>
+      </div>
+    </section>
+
+    <section class="section section-dark status-section">
+      <div class="container status-grid">
+        <div>
+          <span class="section-kicker">CURRENT PROJECT STATUS</span>
+          <h2>Built in the open.<br><span class="gradient-text">Validated in stages.</span></h2>
+          <p>We want developers to see what exists, what is still being validated, and where their feedback can change the direction.</p>
+        </div>
+        <div class="status-card">
+          <div class="status-row"><span>Published Python package</span><strong>1.3.1</strong></div>
+          <div class="status-row"><span>Repository source target</span><strong>1.4.0 prepared</strong></div>
+          <div class="status-row"><span>Independent security review</span><em>Pending</em></div>
+          <div class="status-row"><span>Real-world pilot validation</span><em>Open</em></div>
+          <div class="status-foot">The 1.4.0 source additions are not part of the published 1.3.1 package. See the <a href="docs/#version-status">version notes</a>.</div>
+        </div>
+      </div>
+    </section>
+
+    <section class="section feedback-cta">
+      <div class="container feedback-banner">
+        <div class="feedback-spark" aria-hidden="true">✳</div>
+        <div>
+          <span class="section-kicker">YOUR EXPERIENCE MATTERS</span>
+          <h2>Found something confusing?<br><span class="muted-heading">That is useful feedback.</span></h2>
+          <p>You do not need to write a detailed report. A few quick answers about what you tried, what worked, or where you got stuck are enough to help us improve the developer experience.</p>
+        </div>
+        <a class="button button-dark" href="feedback/">Share a quick check-in <span aria-hidden="true">→</span></a>
+      </div>
+    </section>
+  </main>
+
+  <footer class="site-footer">
+    <div class="container footer-main">
+      <div class="footer-brand">
+        <a class="brand" href="./"><span class="brand-mark" aria-hidden="true">S</span><span class="brand-name">synapse<span class="brand-dot">.</span></span></a>
+        <p>Memory infrastructure and execution controls for AI agents.</p>
+      </div>
+      <div class="footer-column"><b>EXPLORE</b><a href="docs/">Documentation</a><a href="https://github.com/721189/Synapse-Memory" target="_blank" rel="noreferrer">GitHub repository ↗</a><a href="https://pypi.org/project/synapse-memory-engine/" target="_blank" rel="noreferrer">PyPI package ↗</a></div>
+      <div class="footer-column"><b>COMMUNITY</b><a href="feedback/">Share feedback</a><a href="https://github.com/721189/Synapse-Memory/issues" target="_blank" rel="noreferrer">Issues ↗</a><a href="https://github.com/721189/Synapse-Memory/security/advisories" target="_blank" rel="noreferrer">Private security report ↗</a></div>
+      <div class="footer-column"><b>PROJECT</b><a href="https://github.com/721189/Synapse-Memory/blob/main/docs/licensing.md" target="_blank" rel="noreferrer">Licensing</a><a href="https://github.com/721189/Synapse-Memory/blob/main/TRADEMARKS.md" target="_blank" rel="noreferrer">Trademarks</a><a href="https://github.com/721189/Synapse-Memory/blob/main/CHANGELOG.md" target="_blank" rel="noreferrer">Changelog</a></div>
+    </div>
+    <div class="container footer-bottom"><span>© 2026 Synapse Memory · Open-source core under Apache 2.0</span><span>Built for careful builders.</span></div>
+  </footer>
+</body>
+</html>
