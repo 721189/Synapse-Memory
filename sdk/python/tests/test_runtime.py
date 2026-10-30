@@ -361,6 +361,28 @@ def test_retry_configuration_cannot_exceed_policy_or_bypass_idempotency():
     assert calls == []
 
 
+def test_retry_delay_cannot_outlive_run_timeout_or_exceed_global_cap():
+    with SynapseRun(policy=RunPolicy(timeout_seconds=2.0)) as run:
+        with pytest.raises(ValueError, match="retry_delay_seconds"):
+            run.call_tool_with_retry(
+                "read_status",
+                {},
+                lambda: None,
+                retry_safe=True,
+                max_attempts=2,
+                retry_delay_seconds=2.1,
+            )
+        with pytest.raises(ValueError, match="retry_delay_seconds"):
+            run.call_tool_with_retry(
+                "read_status",
+                {},
+                lambda: None,
+                retry_safe=True,
+                max_attempts=2,
+                retry_delay_seconds=30.1,
+            )
+
+
 def test_tool_success_is_not_task_success_until_postcondition_passes():
     with SynapseRun() as run:
         with pytest.raises(PostconditionFailed):
