@@ -1063,6 +1063,50 @@ def delete_memory(
     return envelope({"status": "DELETED", "id": memory_id}, request)
 
 
+@app.post("/api/memories/{memory_id}/retract", tags=["Memory Operations"])
+def retract_memory(
+    request: Request,
+    payload: RetractionRequest,
+    memory_id: str = Path(..., min_length=1, max_length=128, pattern=r"^[A-Za-z0-9._:-]+$"),
+    tenant_id: Optional[str] = None,
+    principal: APIKeyRecord = Depends(require_scope("memories:delete")),
+):
+    """Retract evidence while retaining its record and provenance lineage."""
+    effective_tenant = resolve_tenant(principal, tenant_id)
+    try:
+        changed = store.retract_memory(
+            memory_id, tenant_id=effective_tenant, reason=payload.reason,
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail="Memory retraction unavailable.") from exc
+    if not changed:
+        existing = store.get_memory_by_id(memory_id, tenant_id=effective_tenant)
+        if existing is None:
+            raise HTTPException(status_code=404, detail="Memory not found for the authenticated tenant.")
+        return envelope({
+            "id": memory_id,
+            "status": "ALREADY_RETRACTED" if existing.get("retracted_at") is not None else "NOT_RETRACTED",
+            "retracted_at": existing.get("retracted_at"),
+            "retraction_reason": existing.get("retraction_reason"),
+        }, request)
+
+    existing = store.get_memory_by_id(memory_id, tenant_id=effective_tenant)
+    security_manager.log_audit_action(
+        actor_key_id=principal.key_id,
+        tenant_id=effective_tenant,
+        action="MEMORY_RETRACT",
+        resource=memory_id,
+        status="SUCCESS",
+        metadata={"reason": payload.reason},
+    )
+    return envelope({
+        "id": memory_id,
+        "status": "RETRACTED",
+        "retracted_at": existing.get("retracted_at") if existing else None,
+        "retraction_reason": payload.reason,
+    }, request)
+
+
 @app.post("/api/memories/clear", tags=["Memory Operations"])
 def clear_memories(
     request: Request,
