@@ -209,11 +209,16 @@ class SynapseClient:
         max_tokens: int = 1500,
         *,
         as_of: Optional[float] = None,
+        run_id: Optional[str] = None,
     ) -> QueryResult:
         """Retrieve context using current validity time or an explicit Unix timestamp."""
         payload: Dict[str, Any] = {"prompt": query, "maxTokens": max_tokens}
         if as_of is not None:
             payload["asOf"] = as_of
+        if run_id is not None:
+            if not isinstance(run_id, str) or not re.fullmatch(r"[A-Za-z0-9._:-]{1,128}", run_id):
+                raise ValueError("run_id must match [A-Za-z0-9._:-] and be 1–128 characters")
+            payload["run_id"] = run_id
         data = self._request("POST", "/query", payload)
         return QueryResult(
             fused_context=data.get("fused_context", ""),
@@ -221,6 +226,7 @@ class SynapseClient:
             injected_nodes=data.get("injected_nodes", []),
             storage_backend=data.get("active_storage_backend", "unknown"),
             retrieval_as_of=data.get("retrieval_as_of"),
+            retrieval_id=data.get("retrieval_id"),
         )
 
     def list_memories(self, limit: int = 50, offset: int = 0) -> Dict[str, Any]:
