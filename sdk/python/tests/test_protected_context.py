@@ -3,6 +3,7 @@
 import json
 import time
 import uuid
+from datetime import datetime, timezone
 from unittest.mock import patch
 
 from fastapi.testclient import TestClient
@@ -106,9 +107,7 @@ class TestProtectedRunConstraints:
                 "event_id": "evt-start-" + uuid.uuid4().hex,
                 "run_id": run_id,
                 "event_type": "run.started",
-                "timestamp": __import__("datetime").datetime.now(
-                    __import__("datetime").timezone.utc
-                ).isoformat(),
+                "timestamp": datetime.now(timezone.utc).isoformat(),
                 "run_status": "running",
             },
             headers=self.headers,
