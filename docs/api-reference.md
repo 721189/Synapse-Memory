@@ -31,7 +31,7 @@ compatibility shims returning identical envelopes.
 | `GET /api/memories` (+ alias) | `memories:read` | Tenant-scoped list |
 | `POST /ingest`, `/api/memories/create`, `/api/memories/add` | `memories:write` | 201 on success |
 | `POST /api/memories/bulk` | `memories:write` | max 100 items, 500KB text |
-| `POST /query`, `/api/memories/query`, `/api/retrieval/knapsack-pack` | `memories:read` | Retrieval + packing |
+| `POST /query`, `/api/memories/query`, `/api/retrieval/knapsack-pack` | `memories:read` | Retrieval + packing; optional run correlation also requires `agent-runs:write` |
 | `POST /feedback` | `memories:write` | Reinforcement signal |
 | `DELETE /api/memories/{memory_id}` | `memories:delete` | Hard delete; ownership enforced |
 | `POST /api/memories/{memory_id}/retract` | `memories:delete` | Soft-retract evidence; retains provenance; audited |
@@ -298,6 +298,7 @@ Scope: `memories:read`. Hybrid vector + lexical RRF fusion, Ebbinghaus decay
 | `category` | No | null | `^[a-z0-9_\-]+$`, ≤64 chars |
 | `tenant_id` (`tenantId` alias) | No | from principal | tenant pattern, ≤128 chars |
 | `as_of` (`asOf` alias) | No | request time | finite Unix timestamp ≥ 0 |
+| `run_id` | No | null | active tenant-scoped run ID; requires `agent-runs:write` |
 
 Retrieval filters future-observed, not-yet-valid, expired, superseded, and retracted memories **before** dense/lexical ranking and top-K selection. Validity uses the half-open interval `valid_from <= as_of < valid_until`; legacy rows without `observed_at` use `created_at`. The response includes `retrieval_as_of` so an evaluation or replay can reproduce the time boundary.
 
@@ -305,7 +306,10 @@ Retrieval filters future-observed, not-yet-valid, expired, superseded, and retra
 returns an empty packed context, not an error.
 
 Response `data`: `{fused_context, injected_nodes_count, injected_nodes,
-active_storage_backend, retrieval_as_of}`. Packed nodes preserve `retrieval_score` and
+active_storage_backend, retrieval_as_of, retrieval_id}`. When `run_id` is
+provided, `/query` appends a metadata-only `memory.retrieval` event to that
+active run (rank, scores, token cost, packed flag, memory IDs, and safe
+provenance only); query text and memory contents are not recorded. Packed nodes preserve `retrieval_score` and
 `decay_multiplier`; access counts increment per node; every packed response
 respects the token budget.
 
