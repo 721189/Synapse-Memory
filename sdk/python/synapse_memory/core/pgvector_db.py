@@ -1206,10 +1206,8 @@ class PGVectorMemoryStore:
         try:
             with conn.cursor(cursor_factory=RealDictCursor) as cur:
                 self._set_tenant_context(cur, tenant_id)
-                # NOTE: placeholders are positional — build params in exact SQL
-                # text order: dense rank (emb), dense cat?, dense order (emb),
-                # dense limit, lexical rank (q), lexical where (q), lexical
-                # cat?, lexical order (q), lexical limit, final limit.
+                # Each CTE applies observation, validity, and retraction filters
+                # before ranking so stale rows cannot consume a top-K slot.
                 temporal_clause = (
                     "AND retracted_at IS NULL "
                     "AND COALESCE(observed_at, created_at) <= %s "
@@ -1246,6 +1244,7 @@ class PGVectorMemoryStore:
                     WHERE search_vector @@ plainto_tsquery('english', %s)
                       AND tenant_id = NULLIF(current_setting('app.current_tenant', true), '')
                       AND superseded_by IS NULL
+                      {temporal_clause}
                       {cat_clause}
                     ORDER BY ts_rank(search_vector, plainto_tsquery('english', %s)) DESC
                     LIMIT %s
