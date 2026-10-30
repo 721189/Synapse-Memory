@@ -50,6 +50,74 @@ class TestProtectedRunConstraints:
         assert data["protected_constraints_count"] == 1
         assert data["protected_constraints_token_cost"] > 0
 
+    def test_empty_query_with_run_id_requires_scope_and_is_traced(self):
+        run_id = "protected-blank-" + uuid.uuid4().hex[:12]
+        readonly_headers = _mint_key(self.tenant_id + "_readonly")
+        # The request must not bypass the run-write scope check just because the
+        # retrieval prompt is empty.
+        denied = self.client.post(
+            "/query",
+            json={
+                "prompt": " ",
+                "run_id": run_id,
+                "protected_constraints": [
+                    {"kind": "goal", "text": "Keep this objective in context."},
+                ],
+            },
+            headers=readonly_headers,
+        )
+        assert denied.status_code == 403, denied.text
+
+        created = self.client.post(
+            "/api/agent-runs",
+            json={"run_id": run_id},
+            headers=self.headers,
+        )
+        assert created.status_code == 200, created.text
+        started = self.client.post(
+            f"/api/agent-runs/{run_id}/events",
+            json={
+                "schema_version": 1,
+                "event_id": "evt-start-" + uuid.uuid4().hex,
+                "run_id": run_id,
+                "event_type": "run.started",
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "run_status": "running",
+            },
+            headers=self.headers,
+        )
+        assert started.status_code == 200, started.text
+
+        constraint_text = "Do not modify resources outside this workspace."
+        response = self.client.post(
+            "/query",
+            json={
+                "prompt": " ",
+                "run_id": run_id,
+                "protected_constraints": [
+                    {"kind": "authorization", "text": constraint_text},
+                ],
+            },
+            headers=self.headers,
+        )
+        assert response.status_code == 200, response.text
+        data = response.json()["data"]
+        assert data["retrieval_id"]
+        assert constraint_text in data["fused_context"]
+
+        events_response = self.client.get(
+            f"/api/agent-runs/{run_id}/events",
+            headers=self.headers,
+        )
+        assert events_response.status_code == 200, events_response.text
+        events = events_response.json()["data"]["events"]
+        retrieval = next(event for event in events if event["event_type"] == "memory.retrieval")
+        assert retrieval["retrieval_id"] == data["retrieval_id"]
+        assert retrieval["protected_constraints_count"] == 1
+        assert retrieval["protected_constraints_token_cost"] == data["protected_constraints_token_cost"]
+        assert retrieval["memory_evidence"] == []
+        assert constraint_text not in json.dumps(retrieval)
+
     def test_over_budget_protected_context_is_rejected_not_truncated(self):
         constraint_text = "Never drop this mandatory authorization rule. " * 20
         response = self.client.post(
