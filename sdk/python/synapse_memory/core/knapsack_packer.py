@@ -35,20 +35,39 @@ class KnapsackPacker:
     def pack(
         self,
         memories: List[Dict[str, Any]],
-        token_budget: Optional[int] = None
+        token_budget: Optional[int] = None,
+        *,
+        reserved_token_cost: int = 0,
     ) -> List[MemoryNodeResult]:
         """
-        Packs memories into the token budget using a DP approach.
+        Packs optional memories after reserving budget for mandatory context.
 
         Args:
             memories: List of memory nodes with 'id', 'token_cost', and 'relevance_score'.
-            token_budget: Optional override for budget. If None, uses self.token_budget.
+            token_budget: Optional total context budget. If None, uses self.token_budget.
+            reserved_token_cost: Tokens already committed to mandatory context. This
+                amount is never available to optional memories and must fit in budget.
 
         Returns:
-            List of packed memory nodes that maximize total relevance score within budget.
+            Optional memory nodes maximizing relevance within the remaining budget.
+
+        Raises:
+            ValueError: If the reserved context cost is invalid or exceeds the budget.
         """
         budget = token_budget if token_budget is not None else self.token_budget
         budget = min(budget, self.MAX_BUDGET)
+        if (
+            isinstance(reserved_token_cost, bool)
+            or not isinstance(reserved_token_cost, int)
+            or reserved_token_cost < 0
+        ):
+            raise ValueError("reserved_token_cost must be a non-negative integer")
+        if reserved_token_cost > budget:
+            raise ValueError(
+                f"Protected context requires {reserved_token_cost} tokens, "
+                f"which exceeds the {budget}-token request budget."
+            )
+        budget -= reserved_token_cost
         if not memories or budget <= 0:
             return []
 
