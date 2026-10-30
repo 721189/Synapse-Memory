@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools>=61.0"]
+requires = ["setuptools>=77.0.0"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -12,12 +12,14 @@ authors = [
   { name = "Synapse Cognitive Systems", email = "synapse-memory@users.noreply.github.com" },
 ]
 description = "A sovereign, secure, and performant cognitive memory engine for AI agents."
+license = "Apache-2.0"
+license-files = ["LICENSE"]
 readme = "README.md"
 requires-python = ">=3.10"
 classifiers = [
     "Programming Language :: Python :: 3",
     "Operating System :: OS Independent",
-    "License :: Other/Proprietary License",
+    "License :: OSI Approved :: Apache Software License",
 ]
 dependencies = [
     "fastapi>=0.95.0",
