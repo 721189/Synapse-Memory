@@ -1216,12 +1216,11 @@ class PGVectorMemoryStore:
                     "AND (valid_from IS NULL OR valid_from <= %s) "
                     "AND (valid_until IS NULL OR valid_until > %s)"
                 )
-                params: List[Any] = [emb_str]
+                params: List[Any] = [emb_str, as_of, as_of, as_of]
                 cat_clause = ""
                 if category:
                     cat_clause = "AND category = %s"
                     params.append(category)
-                params.extend([as_of, as_of, as_of])
                 distance_sql = self._vector_distance_sql("%s")
                 params.extend([emb_str, candidate_pool, query, query, as_of, as_of, as_of])
                 if category:
