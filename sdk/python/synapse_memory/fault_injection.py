@@ -375,9 +375,15 @@ def run_fault_injection_suite() -> Dict[str, Any]:
     # Record representative instrumentation/storage overhead separately from
     # functional pass/fail: these wall-clock values are machine-specific.
     plain_count = 80
+    redaction_probe = "fixture-secret-redaction-probe"
+
+    def local_noop(index: int, secret: str) -> int:
+        return index + 1
+
     plain_started = time.perf_counter_ns()
     for value in range(plain_count):
-        value + 1
+        arguments = {"index": value, "secret": redaction_probe}
+        local_noop(**arguments)
     plain_ns = time.perf_counter_ns() - plain_started
 
     instrumented_run = SynapseRun(
@@ -387,14 +393,15 @@ def run_fault_injection_suite() -> Dict[str, Any]:
     instrumented_started = time.perf_counter_ns()
     with instrumented_run:
         for value in range(plain_count):
+            arguments = {"index": value, "secret": redaction_probe}
             instrumented_run.call_tool(
                 "local_noop",
-                {"index": value, "secret": "fixture-secret-redaction-probe"},
-                lambda index, secret: index + 1,
+                arguments,
+                local_noop,
             )
     instrumented_ns = time.perf_counter_ns() - instrumented_started
     trace_repr = json.dumps([event.to_dict() for event in instrumented_run.events], sort_keys=True)
-    redaction_passed = "fixture-secret-redaction-probe" not in trace_repr
+    redaction_passed = redaction_probe not in trace_repr
 
     persisted_events = 0
     trace_delivery_failures = 0
