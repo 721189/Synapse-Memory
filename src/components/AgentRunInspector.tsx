@@ -47,6 +47,7 @@ interface RunEvent {
   step_index?: number;
   tool_call_index?: number;
   tool_name?: string;
+  tool_fingerprint?: string;
   reason?: string;
   error_type?: string;
   retrieval_id?: string;
@@ -111,6 +112,7 @@ function safeExport(run: AgentRun, events: RunEvent[]) {
     step_index: event.step_index,
     tool_call_index: event.tool_call_index,
     tool_name: event.tool_name,
+    tool_fingerprint: event.tool_fingerprint,
     reason: event.reason,
     error_type: event.error_type,
     retrieval_id: event.retrieval_id,
@@ -443,6 +445,7 @@ const EventRow: React.FC<{ event: RunEvent }> = ({ event }) => {
               <span className="text-xs font-mono text-slate-400">#{event.sequence_number}</span>
               <span className="text-sm font-semibold text-slate-800 capitalize">{eventLabel(event)}</span>
               {event.tool_name && <span className="rounded bg-slate-100 px-2 py-0.5 text-[11px] font-mono text-slate-600">{event.tool_name}</span>}
+              {event.tool_fingerprint && <span title="Per-run keyed argument fingerprint" className="rounded bg-slate-100 px-2 py-0.5 text-[10px] font-mono text-slate-500">args {event.tool_fingerprint.slice(0, 12)}…</span>}
             </div>
             <time className="text-[11px] text-slate-400 shrink-0">{formatDate(event.timestamp)}</time>
           </div>
@@ -466,7 +469,7 @@ const EventRow: React.FC<{ event: RunEvent }> = ({ event }) => {
                 <div className="mt-2 space-y-1.5">
                   {evidence.map((item) => (
                     <div key={item.memory_id} className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-1 rounded bg-white/80 px-2.5 py-2 text-[11px]">
-                      <div className="min-w-0"><span className="font-mono text-slate-700 break-all">{item.memory_id}</span><span className="text-slate-400 ml-2">rank {item.rank}</span>{item.trust_level && <span className="ml-2 text-slate-500">{item.trust_level} trust</span>}</div>
+                      <div className="min-w-0"><span className="font-mono text-slate-700 break-all">{item.memory_id}</span><span className="text-slate-400 ml-2">rank {item.rank}</span>{item.trust_level && <span className="ml-2 text-slate-500">{item.trust_level} trust</span>}{item.source_type && <span className="ml-2 text-slate-400">{item.source_type}</span>}{item.superseded_by && <span className="ml-2 text-amber-700">superseded</span>}{item.retracted_at != null && <span className="ml-2 text-rose-700">retracted</span>}</div>
                       <div className="flex items-center gap-2 shrink-0"><span className="text-slate-500">{item.token_cost} tokens</span><span className={'rounded px-2 py-0.5 font-semibold ' + (item.packed ? 'bg-emerald-100 text-emerald-700' : 'bg-slate-100 text-slate-500')}>{item.packed ? 'packed' : 'not packed'}</span></div>
                     </div>
                   ))}
