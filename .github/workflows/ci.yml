@@ -445,8 +445,18 @@ jobs:
           PYTHONPATH: sdk/python
         run: |
           mkdir -p artifacts
-          python -m synapse_memory.fault_injection \
-            --output artifacts/agent-reliability-fault-injection.json
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          from synapse_memory.fault_injection_report import build_fault_injection_report
+
+          report = build_fault_injection_report()
+          output = Path("artifacts/agent-reliability-fault-injection.json")
+          output.write_text(json.dumps(report, indent=2, sort_keys=True) + "\\n")
+          print(json.dumps(report["summary"], sort_keys=True))
+          if not report["summary"]["all_passed"]:
+              raise SystemExit(1)
+          PY
 
       - name: Validate machine-readable report
         run: |
