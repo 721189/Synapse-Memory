@@ -7,10 +7,15 @@ time and tool-call admission checks.
 """
 from __future__ import annotations
 
+import time
+import uuid
+from datetime import datetime, timezone
 from typing import Any, Dict, cast
 from unittest.mock import patch
-import time
 
+from fastapi.testclient import TestClient
+
+import synapse_memory.api.fastapi_server as server
 from synapse_memory.fault_injection import run_fault_injection_suite
 from synapse_memory.core.memory_manager import MemoryManager
 from synapse_memory.core.sqlite_db import SQLiteMemoryStore
@@ -75,6 +80,116 @@ def _storage_correction_scenario() -> bool:
     return bool(success)
 
 
+def _protected_context_api_scenario(goal: str, token_budget: int, turns: int = 40) -> Dict[str, Any]:
+    """Exercise the real /query protected-context assembly and trace path."""
+    tenant_id = "fault-injection-" + uuid.uuid4().hex[:10]
+    run_id = "fi-protected-context-" + uuid.uuid4().hex[:12]
+    token, _ = server.security_manager.generate_api_key(
+        name="fault-injection-protected-context",
+        organization_id="org-fault-injection",
+        project_id="project-fault-injection",
+        tenant_id=tenant_id,
+        scopes=[
+            "memories:read",
+            "agent-runs:read",
+            "agent-runs:write",
+            "agent-runs:delete",
+        ],
+        role="developer",
+    )
+    headers = {"X-Synapse-API-Key": token, "X-Tenant-ID": tenant_id}
+    client = TestClient(server.app)
+
+    created = client.post("/api/agent-runs", json={"run_id": run_id}, headers=headers)
+    if created.status_code != 200:
+        return {"api_assembly_verified": False, "failure": "run_create_failed"}
+
+    started = client.post(
+        f"/api/agent-runs/{run_id}/events",
+        json={
+            "schema_version": 1,
+            "event_id": "evt-start-" + uuid.uuid4().hex,
+            "run_id": run_id,
+            "event_type": "run.started",
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "run_status": "running",
+        },
+        headers=headers,
+    )
+    if started.status_code != 200:
+        return {"api_assembly_verified": False, "failure": "run_start_failed"}
+
+    retained_turns = 0
+    total_overshoot = 0
+    response_token_costs = []
+    with (
+        patch.object(
+            server.embedder,
+            "embed_query",
+            return_value=[0.1] * server.embedding_dimension,
+        ),
+        patch.object(server.store, "vector_search", return_value=[]),
+        patch.object(server.store, "lexical_search", return_value=[]),
+        patch.object(server.store, "get_all_memories", return_value=[]),
+        patch.object(server, "ACTIVE_BACKEND", "sqlite"),
+    ):
+        for _turn in range(turns):
+            response = client.post(
+                "/query",
+                json={
+                    "prompt": "What is the task objective that must remain active?",
+                    "maxTokens": token_budget,
+                    "run_id": run_id,
+                    "protected_constraints": [{"kind": "goal", "text": goal}],
+                },
+                headers=headers,
+            )
+            if response.status_code != 200:
+                break
+            data = response.json()["data"]
+            if goal in data.get("fused_context", ""):
+                retained_turns += 1
+            constraint_tokens = int(data.get("protected_constraints_token_cost", 0))
+            optional_tokens = sum(
+                int(item.get("token_cost", 0))
+                for item in data.get("injected_nodes", [])
+            )
+            total_overshoot = max(
+                total_overshoot,
+                constraint_tokens + optional_tokens - token_budget,
+            )
+            response_token_costs.append(constraint_tokens)
+
+    event_response = client.get(
+        f"/api/agent-runs/{run_id}/events?limit=100",
+        headers=headers,
+    )
+    events = event_response.json().get("data", {}).get("events", []) if event_response.status_code == 200 else []
+    retrieval_events = [
+        event for event in events if event.get("event_type") == "memory.retrieval"
+    ]
+    traces_have_metadata_only = (
+        len(retrieval_events) == turns
+        and all(
+            event.get("protected_constraints_count") == 1
+            and isinstance(event.get("protected_constraints_token_cost"), int)
+            for event in retrieval_events
+        )
+        and goal not in json.dumps(retrieval_events)
+    )
+    client.delete(f"/api/agent-runs/{run_id}", headers=headers)
+    return {
+        "api_assembly_verified": retained_turns == turns,
+        "turns_requested": turns,
+        "turns_completed": len(response_token_costs),
+        "goal_retained_turns": retained_turns,
+        "trace_events_confirmed": traces_have_metadata_only,
+        "trace_event_count": len(retrieval_events),
+        "max_token_overshoot": max(0, total_overshoot),
+        "protected_token_costs_recorded": len(response_token_costs) == turns,
+    }
+
+
 def build_fault_injection_report() -> Dict[str, Any]:
     report = run_fault_injection_suite()
 
@@ -113,6 +228,32 @@ def build_fault_injection_report() -> Dict[str, Any]:
     correction_scenario["passed"] = bool(
         correction_scenario["passed"] and storage_correction_confirmed
     )
+
+    protected_scenario = next(
+        scenario for scenario in report["scenarios"]
+        if scenario["scenario"] == "protected-goal-retention-over-long-run"
+    )
+    api_assembly = _protected_context_api_scenario(
+        goal=(
+            "The objective is to update only the approved workspace and preserve "
+            "the customer's existing production data."
+        ),
+        token_budget=512,
+        turns=40,
+    )
+    protected_scenario.update(api_assembly)
+    protected_scenario["passed"] = bool(
+        protected_scenario["passed"]
+        and api_assembly["api_assembly_verified"]
+        and api_assembly["trace_events_confirmed"]
+        and api_assembly["max_token_overshoot"] == 0
+    )
+
+    report["metrics"]["retrieval_evidence"].update({
+        "protected_context_api_turns": api_assembly["turns_completed"],
+        "protected_context_api_trace_events": api_assembly["trace_event_count"],
+        "protected_context_api_max_overshoot_tokens": api_assembly["max_token_overshoot"],
+    })
 
     budget_scenario = next(
         scenario for scenario in report["scenarios"]
