@@ -483,8 +483,24 @@ class SynapseRun:
                     error_type=type(exc).__name__,
                 )
                 if delay > 0:
-                    time.sleep(delay)
+                    self._wait_for_retry(delay)
         raise AssertionError("bounded retry loop exited without returning or raising")
+
+    def _wait_for_retry(self, delay_seconds: float) -> None:
+        """Wait only within the cooperative run deadline; never sleep past it."""
+        if self._started_monotonic is None:
+            time.sleep(delay_seconds)
+            return
+        remaining = self.policy.timeout_seconds - (
+            time.monotonic() - self._started_monotonic
+        )
+        if remaining <= 0:
+            self._mark_limit(RunStatus.TIMED_OUT, "timeout")
+            raise RunDeadlineExceeded("The configured run deadline passed before retry.")
+        time.sleep(min(delay_seconds, remaining))
+        if self._deadline_passed():
+            self._mark_limit(RunStatus.TIMED_OUT, "timeout")
+            raise RunDeadlineExceeded("The configured run deadline passed during retry backoff.")
 
     def call_tool_verified(
         self,
