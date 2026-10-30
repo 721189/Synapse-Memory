@@ -30,6 +30,9 @@ jobs:
       - name: Validate local links and assets
         run: python website/scripts/validate.py
 
+      - name: Configure GitHub Pages
+        uses: actions/configure-pages@v5
+
       - name: Upload static website
         uses: actions/upload-pages-artifact@v3
         with:
