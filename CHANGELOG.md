@@ -5,8 +5,7 @@
 - **Temporal retrieval and retraction:** filter future-observed, not-yet-valid, expired, superseded, and retracted memories before ranking/packing; add as-of retrieval and tenant-scoped audited retraction.
 - **Automatic retrieval evidence correlation:** optionally attach `/query` to an active run via `run_id`, requiring `agent-runs:write`; persist ranked IDs, score components, token costs, packing outcomes, safe provenance, and the as-of boundary without query or memory text.
 
-- **Temporal retrieval and retraction:** filter future-observed, not-yet-valid, expired, superseded, and retracted memories before ranking/packing; add as-of retrieval and tenant-scoped audited retraction.
-
+- **Memory provenance foundation:** add schema v7 source, observation-time, validity-window, trust-classification, supersession-reason, and retraction metadata for SQLite and PostgreSQL. Retrieval enforcement and retraction APIs remain follow-up work.
 
 ## 1.4.0 — prepared 2026-10-29
 
