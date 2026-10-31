@@ -1,0 +1,30 @@
+name: Validate public website
+
+on:
+  pull_request:
+    paths:
+      - "website/**"
+      - ".github/ISSUE_TEMPLATE/product_feedback.md"
+      - ".github/workflows/pages.yml"
+      - ".github/workflows/website-check.yml"
+  push:
+    branches: [main]
+    paths:
+      - "website/**"
+      - ".github/ISSUE_TEMPLATE/product_feedback.md"
+      - ".github/workflows/pages.yml"
+      - ".github/workflows/website-check.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+      - name: Check JavaScript syntax
+        run: node --check website/assets/site.js
+      - name: Check local links and assets
+        run: python website/scripts/validate.py
