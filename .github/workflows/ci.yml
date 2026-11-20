@@ -293,7 +293,7 @@ jobs:
         run: docker compose -f deploy/docker-compose.yml config
 
       - name: Scan engine image
-        uses: aquasecurity/trivy-action@6abccf398f78b4c337599c0656f933d91efb91a0
+        uses: aquasecurity/trivy-action@8f28faec26515256b6d22074d1d2a8986f4cbd87
         with:
           image-ref: synapse-engine:ci
           severity: 'CRITICAL,HIGH'
@@ -310,7 +310,7 @@ jobs:
           skip-dirs: 'usr/local/lib/python3.11/site-packages/pip/_vendor'
 
       - name: Scan gateway image
-        uses: aquasecurity/trivy-action@6abccf398f78b4c337599c0656f933d91efb91a0
+        uses: aquasecurity/trivy-action@8f28faec26515256b6d22074d1d2a8986f4cbd87
         with:
           image-ref: synapse-gateway:ci
           severity: 'CRITICAL,HIGH'
