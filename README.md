@@ -9,6 +9,7 @@
 Field-level encryption on `content` at rest (the `content_plain` search projection is plaintext â€” see [SECURITY.md](SECURITY.md)) Â· Hybrid retrieval (BM25 + pgvector HNSW + RRF) Â· Token-budgeted context packing (0/1 Knapsack DP)
 Database-level tenant isolation (PostgreSQL RLS) Â· Fail-closed paths are covered by tests Â· v1.3.1 published; production validation remains open
 
+[![XERJ Corpus Hub contributor](https://hub.xerj.org/contributors/721189/badge.svg)](https://hub.xerj.org/contributors/721189)
 [![CI/CD Pipeline](https://github.com/721189/Synapse-Memory/actions/workflows/ci.yml/badge.svg)](https://github.com/721189/Synapse-Memory/actions/workflows/ci.yml)
 [![PyPI version](https://img.shields.io/pypi/v/synapse-memory-engine?color=brightgreen)](https://pypi.org/project/synapse-memory-engine/)
 [![Python](https://img.shields.io/badge/python-3.10%20%7C%203.11%20%7C%203.12-blue.svg)](https://www.python.org/)
