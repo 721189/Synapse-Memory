@@ -28,6 +28,7 @@ from synapse_memory.core.decay_engine import DecayEngine
 from synapse_memory.core.hybrid_search import HybridSearch
 from synapse_memory.core.temporal import is_retrieval_eligible
 from synapse_memory.runtime import RunEventType, RunStatus
+from synapse_memory.core.observability import log_exception_summary
 from synapse_memory.core.run_trace_store import (
     RunTraceStore, RunTraceError, RunNotFoundError, RunConflictError,
 )
@@ -91,9 +92,9 @@ if STORAGE_BACKEND == "pgvector":
             apply_schema=APPLY_DB_SCHEMA,
         )
         ACTIVE_BACKEND = "pgvector"
-        logger.info(f"Canonical Production Engine using PostgreSQL + pgvector ({embedding_dimension}-d HNSW) at {str(DATABASE_URL)[:20]}...")
+        logger.info(f"Canonical Production Engine using PostgreSQL + pgvector ({embedding_dimension}-d HNSW).")
     except Exception as e:
-        logger.exception(f"PostgreSQL startup failed in pgvector mode: {e}")
+        log_exception_summary(logger, "PostgreSQL startup failed in pgvector mode.", e)
         raise
 elif STORAGE_BACKEND == "auto" and DATABASE_URL:
     try:
@@ -104,12 +105,12 @@ elif STORAGE_BACKEND == "auto" and DATABASE_URL:
             apply_schema=APPLY_DB_SCHEMA,
         )
         ACTIVE_BACKEND = "pgvector"
-        logger.info(f"Canonical Production Engine using PostgreSQL + pgvector ({embedding_dimension}-d HNSW) at {str(DATABASE_URL)[:20]}...")
+        logger.info(f"Canonical Production Engine using PostgreSQL + pgvector ({embedding_dimension}-d HNSW).")
     except Exception as e:
         if FAIL_CLOSED_DB or IS_PRODUCTION:
-            logger.exception(f"PostgreSQL startup failed (fail-closed): {e}")
+            log_exception_summary(logger, "PostgreSQL startup failed (fail-closed).", e)
             raise
-        logger.warning(f"Could not connect to PostgreSQL ({e}); initializing SQLiteMemoryStore.")
+        log_exception_summary(logger, "Could not connect to PostgreSQL; initializing SQLiteMemoryStore.", e, level=logging.WARNING)
         store = SQLiteMemoryStore(SQLITE_DB_PATH)
         ACTIVE_BACKEND = "sqlite"
 else:
@@ -682,7 +683,7 @@ def readiness():
                 cur.fetchone()
             conn.rollback()  # end the probe's transaction before returning it
         except Exception as e:
-            logger.warning("Readiness check failed: " + str(e))
+            log_exception_summary(logger, "Readiness check failed.", e, level=logging.WARNING)
             raise HTTPException(
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
                 detail={
@@ -1727,8 +1728,8 @@ def prometheus_metrics():
             continue
         try:
             candidate_stats = stats_fn() or {}
-        except Exception:
-            logger.debug("pool_stats() failed for %r", candidate)
+        except Exception as exc:
+            log_exception_summary(logger, "pool_stats() failed.", exc, level=logging.DEBUG)
             candidate_stats = {}
         if candidate_stats:
             pool_stats = candidate_stats
