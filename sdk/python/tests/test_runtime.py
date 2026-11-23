@@ -297,6 +297,38 @@ def test_memory_evidence_defensively_copies_score_components():
         evidence.score_components["unapproved"] = 1.0  # type: ignore[index]
 
 
+def test_memory_evidence_rejects_mutable_and_non_finite_score_values():
+    with pytest.raises(ValueError, match="finite numbers"):
+        MemoryEvidence(
+            memory_id="memory-invalid",
+            rank=1,
+            score_components={"nested": {"untrusted": "payload"}},
+        )
+
+    with pytest.raises(ValueError, match="finite numbers"):
+        MemoryEvidence(
+            memory_id="memory-invalid",
+            rank=1,
+            score_components={"not_finite": float("nan")},
+        )
+
+    with pytest.raises(ValueError, match="finite numbers"):
+        MemoryEvidence(
+            memory_id="memory-invalid",
+            rank=1,
+            score_components={"boolean_is_not_a_score": True},
+        )
+
+
+def test_memory_evidence_rejects_non_string_score_component_names():
+    with pytest.raises(TypeError, match="names must be strings"):
+        MemoryEvidence(
+            memory_id="memory-invalid",
+            rank=1,
+            score_components={1: 0.5},
+        )
+
+
 def test_memory_retrieval_rejects_duplicate_memory_ids_and_invalid_scores():
     with SynapseRun() as run:
         with pytest.raises(ValueError, match="unique"):
