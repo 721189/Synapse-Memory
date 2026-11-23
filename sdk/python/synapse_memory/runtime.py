@@ -19,6 +19,7 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
+from types import MappingProxyType
 from typing import Any, Literal, Optional, TypeVar
 
 __all__ = [
@@ -112,6 +113,34 @@ class MemoryEvidence:
     created_at: Optional[float] = None
     supersedes: Optional[str] = None
     superseded_by: Optional[str] = None
+
+    def __post_init__(self) -> None:
+        """Defensively freeze nested score metadata.
+
+        A frozen dataclass does not make a caller-supplied dict immutable. Copy
+        the mapping before wrapping it so neither the original reference nor an
+        event consumer can mutate metadata after it has been recorded.
+        """
+        if not isinstance(self.score_components, Mapping):
+            raise TypeError("score_components must be a mapping")
+        normalized_scores: dict[str, float] = {}
+        for key, value in self.score_components.items():
+            if not isinstance(key, str):
+                raise TypeError("score component names must be strings")
+            if isinstance(value, bool) or not isinstance(value, (int, float)):
+                raise ValueError("score components must be finite numbers")
+            try:
+                numeric_value = float(value)
+            except (OverflowError, ValueError):
+                raise ValueError("score components must be finite numbers") from None
+            if not math.isfinite(numeric_value):
+                raise ValueError("score components must be finite numbers")
+            normalized_scores[key] = numeric_value
+        object.__setattr__(
+            self,
+            "score_components",
+            MappingProxyType(normalized_scores),
+        )
 
     def to_dict(self) -> dict[str, Any]:
         result: dict[str, Any] = {

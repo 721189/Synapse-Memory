@@ -4,6 +4,7 @@ from datetime import timezone
 import pytest
 
 from synapse_memory.runtime import (
+    MemoryEvidence,
     RepeatedToolCallError,
     PostconditionFailed,
     RunDeadlineExceeded,
@@ -259,6 +260,73 @@ def test_memory_retrieval_event_captures_only_allowlisted_evidence():
     assert payload["memory_evidence"][0]["score_components"]["relevance_score"] == 0.91
     assert secret_content not in repr(payload)
     assert secret_query not in repr(payload)
+
+
+def test_recorded_memory_evidence_score_components_are_deeply_immutable():
+    with SynapseRun() as run:
+        run.record_memory_retrieval(
+            [{"id": "memory-immutable", "relevance_score": 0.91}]
+        )
+
+    event = next(
+        item for item in run.events
+        if item.event_type is RunEventType.MEMORY_RETRIEVAL
+    )
+    score_components = event.memory_evidence[0].score_components
+
+    with pytest.raises(TypeError):
+        score_components["raw_prompt"] = "must not enter a persisted trace"  # type: ignore[index]
+
+    payload = event.to_dict()
+    payload["memory_evidence"][0]["score_components"]["tampered"] = 1.0
+    assert "tampered" not in event.to_dict()["memory_evidence"][0]["score_components"]
+
+
+def test_memory_evidence_defensively_copies_score_components():
+    original_scores = {"relevance_score": 0.91}
+    evidence = MemoryEvidence(
+        memory_id="memory-copy",
+        rank=1,
+        score_components=original_scores,
+    )
+
+    original_scores["unapproved"] = 1.0
+
+    assert dict(evidence.score_components) == {"relevance_score": 0.91}
+    with pytest.raises(TypeError):
+        evidence.score_components["unapproved"] = 1.0  # type: ignore[index]
+
+
+def test_memory_evidence_rejects_mutable_and_non_finite_score_values():
+    with pytest.raises(ValueError, match="finite numbers"):
+        MemoryEvidence(
+            memory_id="memory-invalid",
+            rank=1,
+            score_components={"nested": {"untrusted": "payload"}},  # type: ignore[dict-item]
+        )
+
+    with pytest.raises(ValueError, match="finite numbers"):
+        MemoryEvidence(
+            memory_id="memory-invalid",
+            rank=1,
+            score_components={"not_finite": float("nan")},
+        )
+
+    with pytest.raises(ValueError, match="finite numbers"):
+        MemoryEvidence(
+            memory_id="memory-invalid",
+            rank=1,
+            score_components={"boolean_is_not_a_score": True},
+        )
+
+
+def test_memory_evidence_rejects_non_string_score_component_names():
+    with pytest.raises(TypeError, match="names must be strings"):
+        MemoryEvidence(
+            memory_id="memory-invalid",
+            rank=1,
+            score_components={1: 0.5},  # type: ignore[dict-item]
+        )
 
 
 def test_memory_retrieval_rejects_duplicate_memory_ids_and_invalid_scores():
