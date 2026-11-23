@@ -123,10 +123,21 @@ class MemoryEvidence:
         """
         if not isinstance(self.score_components, Mapping):
             raise TypeError("score_components must be a mapping")
+        normalized_scores: dict[str, float] = {}
+        for key, value in self.score_components.items():
+            if not isinstance(key, str):
+                raise TypeError("score component names must be strings")
+            if (
+                isinstance(value, bool)
+                or not isinstance(value, (int, float))
+                or not math.isfinite(value)
+            ):
+                raise ValueError("score components must be finite numbers")
+            normalized_scores[key] = float(value)
         object.__setattr__(
             self,
             "score_components",
-            MappingProxyType(dict(self.score_components)),
+            MappingProxyType(normalized_scores),
         )
 
     def to_dict(self) -> dict[str, Any]:
