@@ -302,7 +302,7 @@ def test_memory_evidence_rejects_mutable_and_non_finite_score_values():
         MemoryEvidence(
             memory_id="memory-invalid",
             rank=1,
-            score_components={"nested": {"untrusted": "payload"}},
+            score_components={"nested": {"untrusted": "payload"}},  # type: ignore[dict-item]
         )
 
     with pytest.raises(ValueError, match="finite numbers"):
@@ -325,7 +325,7 @@ def test_memory_evidence_rejects_non_string_score_component_names():
         MemoryEvidence(
             memory_id="memory-invalid",
             rank=1,
-            score_components={1: 0.5},
+            score_components={1: 0.5},  # type: ignore[dict-item]
         )
 
 
