@@ -59,3 +59,19 @@ class MetricsCollector:
 
     def get_metrics(self) -> Dict[str, float]:
         return self.metrics
+
+
+def log_exception_summary(
+    target_logger: logging.Logger,
+    message: str,
+    exc: BaseException,
+    level: int = logging.ERROR,
+) -> None:
+    """Log an operational failure without serializing exception content.
+
+    Provider, database, and transport exceptions may contain credentials,
+    request bodies, prompts, or other sensitive values. Keep this diagnostic
+    limited to an authored message and the exception class name; deliberately
+    do not attach exception info or format the exception itself.
+    """
+    target_logger.log(level, "%s (error_type=%s)", message, type(exc).__name__)
