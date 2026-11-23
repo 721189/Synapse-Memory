@@ -20,7 +20,11 @@ def log_event(event_name: str, status: str, details: Dict[str, Any], level: int 
 
 
 def instrument_operation(operation_name: str):
-    """Decorator to instrument method execution times and failures."""
+    """Decorate an operation with duration and privacy-safe failure telemetry.
+
+    Exception messages are deliberately excluded: provider and database errors
+    can embed prompts, credentials, request bodies, or other sensitive values.
+    """
     def decorator(func):
         @wraps(func)
         def wrapper(*args, **kwargs):
@@ -29,9 +33,18 @@ def instrument_operation(operation_name: str):
                 result = func(*args, **kwargs)
                 log_event(operation_name, "SUCCESS", {"duration_ms": (time.perf_counter() - start) * 1000})
                 return result
-            except Exception as e:
-                log_event(operation_name, "FAILURE", {"error": str(e), "duration_ms": (time.perf_counter() - start) * 1000}, level=logging.ERROR)
-                raise e
+            except Exception as exc:
+                log_event(
+                    operation_name,
+                    "FAILURE",
+                    {
+                        "error_type": type(exc).__name__,
+                        "duration_ms": (time.perf_counter() - start) * 1000,
+                    },
+                    level=logging.ERROR,
+                )
+                # Preserve the original exception and traceback for callers.
+                raise
         return wrapper
     return decorator
 
