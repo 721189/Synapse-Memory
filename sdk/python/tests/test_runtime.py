@@ -275,7 +275,7 @@ def test_recorded_memory_evidence_score_components_are_deeply_immutable():
     score_components = event.memory_evidence[0].score_components
 
     with pytest.raises(TypeError):
-        score_components["raw_prompt"] = "must not enter a persisted trace"
+        score_components["raw_prompt"] = "must not enter a persisted trace"  # type: ignore[index]
 
     payload = event.to_dict()
     payload["memory_evidence"][0]["score_components"]["tampered"] = 1.0
@@ -294,7 +294,7 @@ def test_memory_evidence_defensively_copies_score_components():
 
     assert dict(evidence.score_components) == {"relevance_score": 0.91}
     with pytest.raises(TypeError):
-        evidence.score_components["unapproved"] = 1.0
+        evidence.score_components["unapproved"] = 1.0  # type: ignore[index]
 
 
 def test_memory_retrieval_rejects_duplicate_memory_ids_and_invalid_scores():
