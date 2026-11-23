@@ -61,7 +61,6 @@ class MetricsCollector:
         return self.metrics
 
 
-
 def log_exception_summary(
     target_logger: logging.Logger,
     message: str,
