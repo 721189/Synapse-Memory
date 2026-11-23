@@ -127,13 +127,15 @@ class MemoryEvidence:
         for key, value in self.score_components.items():
             if not isinstance(key, str):
                 raise TypeError("score component names must be strings")
-            if (
-                isinstance(value, bool)
-                or not isinstance(value, (int, float))
-                or not math.isfinite(value)
-            ):
+            if isinstance(value, bool) or not isinstance(value, (int, float)):
                 raise ValueError("score components must be finite numbers")
-            normalized_scores[key] = float(value)
+            try:
+                numeric_value = float(value)
+            except (OverflowError, ValueError):
+                raise ValueError("score components must be finite numbers") from None
+            if not math.isfinite(numeric_value):
+                raise ValueError("score components must be finite numbers")
+            normalized_scores[key] = numeric_value
         object.__setattr__(
             self,
             "score_components",
