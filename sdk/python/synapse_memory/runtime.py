@@ -229,7 +229,11 @@ class PostconditionFailed(RunGuardError):
     """Raised when a successful tool result fails its independent postcondition."""
 
 
-def _normalize_json(value: Any, path: str = "arguments") -> Any:
+def _normalize_json(
+    value: Any,
+    path: str = "arguments",
+    _active_containers: Optional[set[int]] = None,
+) -> Any:
     """Return JSON-safe data and reject ambiguous/non-finite input values."""
     if value is None or isinstance(value, (str, bool, int)):
         return value
@@ -237,15 +241,34 @@ def _normalize_json(value: Any, path: str = "arguments") -> Any:
         if not math.isfinite(value):
             raise ValueError(f"{path} contains a non-finite number")
         return value
+    if _active_containers is None:
+        _active_containers = set()
     if isinstance(value, Mapping):
-        normalized: dict[str, Any] = {}
-        for key, item in value.items():
-            if not isinstance(key, str):
-                raise TypeError(f"{path} must use string keys")
-            normalized[key] = _normalize_json(item, f"{path}.{key}")
-        return normalized
+        container_id = id(value)
+        if container_id in _active_containers:
+            raise TypeError(f"{path} contains a circular reference")
+        _active_containers.add(container_id)
+        try:
+            normalized: dict[str, Any] = {}
+            for key, item in value.items():
+                if not isinstance(key, str):
+                    raise TypeError(f"{path} must use string keys")
+                normalized[key] = _normalize_json(item, f"{path}.{key}", _active_containers)
+            return normalized
+        finally:
+            _active_containers.remove(container_id)
     if isinstance(value, list):
-        return [_normalize_json(item, f"{path}[{index}]") for index, item in enumerate(value)]
+        container_id = id(value)
+        if container_id in _active_containers:
+            raise TypeError(f"{path} contains a circular reference")
+        _active_containers.add(container_id)
+        try:
+            return [
+                _normalize_json(item, f"{path}[{index}]", _active_containers)
+                for index, item in enumerate(value)
+            ]
+        finally:
+            _active_containers.remove(container_id)
     raise TypeError(f"{path} must contain only JSON-compatible values")
 
 

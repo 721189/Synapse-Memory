@@ -208,6 +208,43 @@ def test_non_json_arguments_are_rejected_before_tool_execution():
     assert run.status is RunStatus.SUCCEEDED
 
 
+@pytest.mark.parametrize("container_type", ["list", "mapping"])
+def test_circular_json_arguments_are_rejected_before_tool_execution(container_type):
+    if container_type == "list":
+        circular = []
+        circular.append(circular)
+    else:
+        circular = {}
+        circular["self"] = circular
+
+    executed = False
+
+    def tool(**_kwargs):
+        nonlocal executed
+        executed = True
+
+    with SynapseRun() as run:
+        with pytest.raises(TypeError, match="circular reference"):
+            run.call_tool("bad", {"value": circular}, tool)
+
+    assert not executed
+    assert run.status is RunStatus.SUCCEEDED
+
+
+def test_shared_json_argument_subobjects_are_not_mistaken_for_cycles():
+    shared = {"value": 1}
+
+    with SynapseRun() as run:
+        result = run.call_tool(
+            "echo",
+            {"left": shared, "right": shared},
+            lambda left, right: (left, right),
+        )
+
+    assert result == ({"value": 1}, {"value": 1})
+    assert run.status is RunStatus.SUCCEEDED
+
+
 def test_non_finite_arguments_are_rejected_before_tool_execution():
     with SynapseRun() as run:
         with pytest.raises(ValueError, match="non-finite"):
