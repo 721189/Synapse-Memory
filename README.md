@@ -7,7 +7,7 @@
 **Self-hostable, tenant-aware memory infrastructure for AI applications.**
 
 Field-level encryption on `content` at rest (the `content_plain` search projection is plaintext â€” see [SECURITY.md](SECURITY.md)) Â· Hybrid retrieval (BM25 + pgvector HNSW + RRF) Â· Token-budgeted context packing (0/1 Knapsack DP)
-Database-level tenant isolation (PostgreSQL RLS) Â· Fail-closed paths are covered by tests Â· v1.3.1 published; production validation remains open
+Database-level tenant isolation (PostgreSQL RLS) Â· Fail-closed paths are covered by tests Â· PyPI 1.4.0 published under its original proprietary terms; current repository source is Apache 2.0
 
 [![XERJ Corpus Hub contributor](https://hub.xerj.org/contributors/721189/badge.svg)](https://hub.xerj.org/contributors/721189)
 [![CI/CD Pipeline](https://github.com/721189/Synapse-Memory/actions/workflows/ci.yml/badge.svg)](https://github.com/721189/Synapse-Memory/actions/workflows/ci.yml)
@@ -63,8 +63,8 @@ truncation.
 
 | | |
 |---|---|
-| **Status** | Source targets SDK v1.4.0; PyPI publication is a separate signed-tag workflow. Passing CI is not independent production sign-off: workload-specific validation, an independent security review, and customer usage remain outstanding. |
-| **Surfaces** | HTTP engine (FastAPI, `:8008`) · Node gateway + React dashboard (`:3000`) · Python SDK source (`synapse-memory-engine` 1.4.0; published availability follows the release workflow) |
+| **Status** | PyPI SDK 1.4.0 was published on 2026-10-30 under the proprietary terms included in that artifact. The current repository source is Apache 2.0; that license does not retroactively relicense 1.4.0. Later main-branch changes remain unreleased. Passing CI is not independent production sign-off: workload-specific validation, an independent security review, and customer usage remain outstanding. |
+| **Surfaces** | HTTP engine (FastAPI, `:8008`) · Node gateway + React dashboard (`:3000`) · Python SDK (`synapse-memory-engine` 1.4.0 published; artifact retains its original proprietary terms) |
 | **Storage** | PostgreSQL 16 + pgvector HNSW (production) Â· SQLite (single-node dev) â€” both with Fernet field encryption |
 | **Integrations** | LangChain Â· LlamaIndex Â· raw HTTP (any language) |
 | **Deployment** | Docker Compose (4 services) Â· Kubernetes Helm chart (split engine/gateway + HPA) Â· bare `uvicorn` |
@@ -571,7 +571,7 @@ python scripts/provision_db_roles.py --verify-only   # must exit 0
 
 | Component | Version | Notes |
 |---|---|---|
-| Python SDK (`synapse-memory-engine`) | **1.4.0 source candidate** | `SynapseClient`, `__version__ = "1.4.0"`; PyPI publication requires the signed-tag release workflow |
+| Python SDK (`synapse-memory-engine`) | **1.4.0 published** | Published 2026-10-30; artifact retains proprietary terms. Current repository source is Apache 2.0; later source changes are unreleased. |
 | HTTP API compat | **v1** | canonical `{success, data, request_id}` envelope; `/api/*` aliases stable |
 | Engine / gateway images | **v1.3.1 default image tags** | PyPI publication does not publish container images; Helm defaults remain pinned to the last image tag |
 | Helm chart | **0.3.0** (app 1.3.1) | chart version â‰  app version; see `Chart.yaml` |
@@ -1012,6 +1012,7 @@ Synapse-Memory/
 
 | Version | Date | Highlights |
 |---|---|---|
+| **1.4.0** | 2026-10-30 | Agent run guard and persistent tenant-scoped run traces; PyPI artifact published with provenance and retains its original proprietary terms. |
 | **1.3.1** | 2026-10-27 | Correctness and release hardening: pgvector halfvec HNSW compatibility for shipped 3,072-dimensional embeddings; guard against implicit embedding-width changes; safer SDK retry semantics; Compose failure diagnostics; aligned version metadata; least-privilege migration-role validation; tenant aliases; production gateway data hygiene. Python SDK published to PyPI. |
 | **1.2.0** | 2026-10-15 | Production-hardening release: NULL-safe RRF, combined-protection encryption (`content` + `content_plain`), `S = R Ã— D` decay composition, fail-closed gateway, thread-safe pooling, Helm split workloads (18 contract tests), load/resilience suite (17 tests), `/metrics`, distributed rate limiting, least-privilege roles, `SynapseClient`, retrieval-eval corpus |
 | 1.2.0 (hardening) | 2026-10-16/17 | P0â€“P2 roadmap closed: RLS live proof with runtime role, SHA-pinned CI, TruffleHog base/head fix, `query_candidates` tenant-scoped PG path, final docs batch (api-reference, security-review, branch-protection, performance-baseline, CODEOWNERS) |

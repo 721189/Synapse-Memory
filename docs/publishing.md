@@ -28,10 +28,14 @@ install commands as `pip install synapse-memory-engine[...]`.
 
 ## License metadata and distribution checks
 
-The SDK is distributed under Apache License 2.0. Its build metadata declares
-`license = "Apache-2.0"` and includes `sdk/python/LICENSE` through
-`license-files`. Keep the root `LICENSE`, SDK copy, `pyproject.toml`, and
-legacy `setup.py` metadata in sync.
+The current repository SDK source is licensed under Apache License 2.0. The
+PyPI `1.4.0` artifact published on 2026-10-30 retains the license notice and
+distribution terms included in that artifact; the later repository migration
+does not retroactively relicense it. Do not describe the published `1.4.0`
+artifact as Apache-licensed. For a future release built from the current
+Apache-licensed source, verify the wheel and sdist contain the intended Apache
+license file and metadata before publishing. Keep the root `LICENSE`, SDK
+copy, `pyproject.toml`, and legacy `setup.py` metadata in sync.
 
 Before publishing, build both artifacts and verify that their metadata and
 license file are present:
@@ -47,10 +51,11 @@ Also generate and review the resolved Python and Node dependency license
 inventories described in [the licensing policy](licensing.md). Do not infer
 that dependencies are Apache-licensed merely because Synapse is.
 
-The Apache 2.0 license applies only to revisions and artifacts that contain
-this licensing change. Previously published package versions are not
-retroactively relicensed. Do not overwrite or relabel an existing PyPI
-release; publish the next version through the normal signed-tag workflow.
+The Apache 2.0 license applies only to repository revisions and package
+artifacts that actually include this licensing change. Previously published
+artifacts, including `1.4.0`, are not retroactively relicensed. Do not overwrite
+or relabel an existing PyPI release; publish the next version through the
+normal signed-tag workflow.
 
 ## One-time setup (operator / maintainer)
 
