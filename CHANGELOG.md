@@ -13,7 +13,9 @@
 
 - **Memory provenance foundation:** add schema v7 source, observation-time, validity-window, trust-classification, supersession-reason, and retraction metadata for SQLite and PostgreSQL; temporal filtering and tenant-scoped soft retraction are now enforced by retrieval APIs.
 
-## 1.4.0 — prepared 2026-10-29
+## 1.4.0 — released 2026-10-30
+
+The PyPI artifact was published with provenance on this date. Its embedded license notice and distribution terms remain proprietary; the later Apache 2.0 repository migration does not apply retroactively.
 
 - **Persistent agent-run traces:** add schema migration v6, SQLite/PostgreSQL persistence, chronological event sequencing, idempotent uploads, and authenticated run/event APIs.
 - **Tenant isolation and least privilege:** enforce PostgreSQL RLS for trace tables, keep trace scopes separate from memory/admin scopes, and verify post-migration runtime grants.
