@@ -18,15 +18,15 @@ source .venv/bin/activate
 .venv\Scripts\Activate.ps1
 
 python -m pip install --upgrade pip
-python -m pip install synapse-memory-engine==1.3.1
+python -m pip install synapse-memory-engine==1.4.0
 ```
 
 The package is named `synapse-memory-engine`; the Python import is
-`synapse_memory`. Note that PyPI version `1.3.1` predates this repository's
-Apache 2.0 migration and is **not** retroactively relicensed by it; the license
-terms accompanying that published artifact continue to apply. The Apache 2.0
-license applies to the original source in this repository at this revision and
-to subsequent artifacts that include the Apache license notice. Third-party
+`synapse_memory`. PyPI version `1.4.0` was published on 2026-10-30 and retains the license notice
+and distribution terms included in that artifact; the later Apache 2.0 source
+migration does **not** retroactively relicense it. The current repository source
+is Apache 2.0, and that license applies to subsequent package artifacts built
+from revisions that include the Apache 2.0 license notice. Third-party
 dependencies retain their own licenses. See [LICENSE](../LICENSE) and the
 [licensing policy](licensing.md).
 
