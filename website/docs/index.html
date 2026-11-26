@@ -53,13 +53,13 @@
             <div class="version-callout">
               <div class="version-callout-icon">i</div>
               <div>
-                <h3>Published package and repository source are on different release stages.</h3>
-                <p><strong>PyPI:</strong> <code>synapse-memory-engine==1.3.1</code> is the published SDK version documented for the quickstart.</p>
-                <p><strong>Repository:</strong> the current source tree targets <code>1.4.0</code> and contains newer run-guard, trace, and provenance work. The 1.4.0 package has not yet been published to PyPI.</p>
-                <p>Do not expect 1.4.0-only APIs to exist when you install the published 1.3.1 package.</p>
+                <h3>SDK 1.4.0 is published; the current source tree has moved on.</h3>
+                <p><strong>PyPI:</strong> <code>synapse-memory-engine==1.4.0</code> was published on Oct 30, 2026 with provenance. It includes the opt-in run guard and persistent run-trace APIs documented below.</p>
+                <p><strong>Repository:</strong> current main-branch source is licensed under Apache 2.0 and contains additional changes that have not yet been released as a new package version.</p>
+                <p><strong>Important:</strong> the published 1.4.0 artifact contains a proprietary license notice and retains those original distribution terms. The current Apache 2.0 repository license does not retroactively change the published artifact's terms.</p>
               </div>
             </div>
-            <p>The repository source is licensed under Apache 2.0. The published PyPI 1.3.1 artifact predates that repository license migration; its original distribution terms were not changed retroactively. See the <a href="https://github.com/721189/Synapse-Memory/blob/main/docs/licensing.md" target="_blank" rel="noreferrer">licensing policy</a>.</p>
+            <p>For the precise boundary between the Apache 2.0 repository source and previously published package artifacts, see the <a href="https://github.com/721189/Synapse-Memory/blob/main/docs/licensing.md" target="_blank" rel="noreferrer">licensing policy</a>.</p>
           </section>
 
           <section class="docs-section" id="quickstart">
@@ -74,14 +74,14 @@
                 <pre><code id="docs-install">python -m venv .venv
 source .venv/bin/activate
 python -m pip install --upgrade pip
-python -m pip install synapse-memory-engine==1.3.1</code></pre>
+python -m pip install synapse-memory-engine==1.4.0</code></pre>
               </div>
               <div class="code-panel">
                 <div class="code-panel-head"><span>WINDOWS POWERSHELL</span><button class="copy-button" type="button" data-copy="#docs-install-win">Copy</button></div>
                 <pre><code id="docs-install-win">python -m venv .venv
 .venv\Scripts\Activate.ps1
 python -m pip install --upgrade pip
-python -m pip install synapse-memory-engine==1.3.1</code></pre>
+python -m pip install synapse-memory-engine==1.4.0</code></pre>
               </div>
             </div>
 
@@ -162,7 +162,7 @@ with SynapseRun(policy=policy) as run:
         lookup_customer,
     )</code></pre>
             </div>
-            <div class="note note-warning"><strong>Important limits:</strong> this source API is not included in the published 1.3.1 package. Guards apply only to calls explicitly routed through <code>SynapseRun</code>; they do not intercept arbitrary framework/tool calls. Deadlines are cooperative and cannot forcibly interrupt a synchronous tool that is already running. A retry-safe flag is an application assertion, not proof of idempotency.</div>
+            <div class="note note-warning"><strong>Important limits:</strong> the run-guard API is included in the published 1.4.0 package; later main-branch additions may not be included until a subsequent release. Guards apply only to calls explicitly routed through <code>SynapseRun</code>; they do not intercept arbitrary framework/tool calls. Deadlines are cooperative and cannot forcibly interrupt a synchronous tool that is already running. A retry-safe flag is an application assertion, not proof of idempotency.</div>
             <p>Applications supply their own postconditions for tool outcomes. Synapse records whether that supplied check passed or failed; it cannot independently prove that the check represents the user's real-world objective.</p>
           </section>
 
@@ -222,7 +222,7 @@ with SynapseRun(policy=policy) as run:
               <details><summary>HTTP 429</summary><p>The configured rate limit was reached. Back off and review <code>RATE_LIMIT_PER_MIN</code> and Redis configuration.</p></details>
               <details><summary>Readiness returns 503</summary><p>Inspect engine logs and verify database connectivity, schema availability, and the runtime database role.</p></details>
               <details><summary>Retrieval returns an empty context</summary><p>Confirm the memory write succeeded and inspect engine logs. The deterministic hash embedder is not semantic; use a real embedding provider to evaluate semantic retrieval.</p></details>
-              <details><summary>Can I use 1.4.0 from PyPI?</summary><p>Not yet. The published package is 1.3.1. Version 1.4.0 is present in the repository source but has not been published to PyPI.</p></details>
+              <details><summary>Can I use 1.4.0 from PyPI?</summary><p>Yes. Version 1.4.0 was published on Oct 30, 2026. Its artifact retains the proprietary terms included in that distribution. The current repository source is Apache 2.0; that later license change does not retroactively apply to the published artifact.</p></details>
             </div>
           </section>
 
