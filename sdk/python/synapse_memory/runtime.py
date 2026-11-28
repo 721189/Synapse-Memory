@@ -13,6 +13,7 @@ import json
 import math
 import re
 import secrets
+import threading
 import time
 import uuid
 from collections.abc import Callable, Mapping, Sequence
@@ -35,6 +36,7 @@ __all__ = [
     "RunStepLimitExceeded",
     "RunToolCallLimitExceeded",
     "RunDeadlineExceeded",
+    "RunCancelled",
     "RepeatedToolCallError",
     "PostconditionFailed",
 ]
@@ -221,6 +223,10 @@ class RunDeadlineExceeded(RunLimitExceeded):
     """Raised when the cooperative run deadline has passed."""
 
 
+class RunCancelled(RunGuardError):
+    """Raised when cooperative cancellation has been requested for a run."""
+
+
 class RepeatedToolCallError(RunLimitExceeded):
     """Raised when an equivalent tool call has failed too many times."""
 
@@ -295,6 +301,8 @@ class SynapseRun:
         self._failure_counts: dict[str, int] = {}
         self._fingerprint_key = secrets.token_bytes(32)
         self._events: list[RunEvent] = []
+        # Thread-safe signal; public cancellation/checkpoint behavior is added separately.
+        self._cancel_requested = threading.Event()
 
     @property
     def status(self) -> RunStatus:
