@@ -68,6 +68,7 @@ class RunEventType(str, Enum):
     LIMIT_EXCEEDED = "run.limit_exceeded"
     RUN_FINISHED = "run.finished"
     MEMORY_RETRIEVAL = "memory.retrieval"
+    RUN_CANCELLED = "run.cancelled"
 
 
 @dataclass(frozen=True)
@@ -308,6 +309,32 @@ class SynapseRun:
     def status(self) -> RunStatus:
         return self._status
 
+    def cancel(self) -> bool:
+        """Request cooperative cancellation from any thread.
+
+        Returns True only for the first request while the run is active. The
+        request is observed at the next checkpoint; it does not kill a running
+        synchronous callable or undo side effects already performed.
+        """
+        if self._status is not RunStatus.RUNNING:
+            return False
+        already_requested = self._cancel_requested.is_set()
+        self._cancel_requested.set()
+        return not already_requested
+
+    def checkpoint(self) -> None:
+        """Raise when cancellation or the cooperative deadline is observed.
+
+        Long-running tools should call this between bounded units of work.
+        """
+        self._assert_running()
+        if self._cancel_requested.is_set():
+            self._mark_cancelled()
+            raise RunCancelled("Cancellation was requested for this run.")
+        if self._deadline_passed():
+            self._mark_limit(RunStatus.TIMED_OUT, "timeout")
+            raise RunDeadlineExceeded("The configured run deadline has passed.")
+
     @property
     def steps(self) -> int:
         return self._steps
@@ -331,7 +358,11 @@ class SynapseRun:
 
     def __exit__(self, exc_type: Any, exc_value: Any, traceback: Any) -> Literal[False]:
         if self._status is RunStatus.RUNNING:
-            if self._deadline_passed():
+            if self._cancel_requested.is_set() or (
+                isinstance(exc_type, type) and issubclass(exc_type, RunCancelled)
+            ):
+                self._mark_cancelled()
+            elif self._deadline_passed():
                 self._mark_limit(RunStatus.TIMED_OUT, "timeout")
             elif exc_type is None:
                 self._status = RunStatus.SUCCEEDED
@@ -548,20 +579,19 @@ class SynapseRun:
         raise AssertionError("bounded retry loop exited without returning or raising")
 
     def _wait_for_retry(self, delay_seconds: float) -> None:
-        """Wait only within the cooperative run deadline; never sleep past it."""
+        """Wait interruptibly within the cooperative run deadline."""
+        self.checkpoint()
         if self._started_monotonic is None:
-            time.sleep(delay_seconds)
-            return
-        remaining = self.policy.timeout_seconds - (
-            time.monotonic() - self._started_monotonic
-        )
-        if remaining <= 0:
-            self._mark_limit(RunStatus.TIMED_OUT, "timeout")
-            raise RunDeadlineExceeded("The configured run deadline passed before retry.")
-        time.sleep(min(delay_seconds, remaining))
-        if self._deadline_passed():
-            self._mark_limit(RunStatus.TIMED_OUT, "timeout")
-            raise RunDeadlineExceeded("The configured run deadline passed during retry backoff.")
+            self._cancel_requested.wait(delay_seconds)
+        else:
+            remaining = self.policy.timeout_seconds - (
+                time.monotonic() - self._started_monotonic
+            )
+            if remaining <= 0:
+                self._mark_limit(RunStatus.TIMED_OUT, "timeout")
+                raise RunDeadlineExceeded("The configured run deadline passed before retry.")
+            self._cancel_requested.wait(min(delay_seconds, remaining))
+        self.checkpoint()
 
     def call_tool_verified(
         self,
@@ -623,7 +653,7 @@ class SynapseRun:
         Only a per-run keyed HMAC fingerprint of canonical arguments is emitted.
         Raw arguments and exception messages are never added to events.
         """
-        self._assert_running()
+        self.checkpoint()
         if not isinstance(tool_name, str) or not re.fullmatch(r"[A-Za-z][A-Za-z0-9_.:-]{0,127}", tool_name.strip()):
             raise ValueError("tool_name must be a safe identifier of at most 128 characters")
         tool_name = tool_name.strip()
@@ -670,7 +700,8 @@ class SynapseRun:
         try:
             result = tool(**normalized)
         except BaseException as exc:
-            self._failure_counts[fingerprint] = self._failure_counts.get(fingerprint, 0) + 1
+            if not isinstance(exc, RunCancelled):
+                self._failure_counts[fingerprint] = self._failure_counts.get(fingerprint, 0) + 1
             self._emit(
                 RunEventType.TOOL_CALL_FAILED,
                 step_index=self._steps,
@@ -688,17 +719,22 @@ class SynapseRun:
             tool_name=tool_name,
             tool_fingerprint=fingerprint,
         )
+        # A non-cooperative synchronous tool cannot be interrupted. Observe a
+        # cancellation request immediately after it returns, before more work.
+        self.checkpoint()
         return result
 
     def _assert_running(self) -> None:
         if self._status is not RunStatus.RUNNING:
             raise RunStateError("Guarded work requires an active, non-terminal SynapseRun.")
 
+    def _mark_cancelled(self) -> None:
+        if self._status is RunStatus.RUNNING:
+            self._status = RunStatus.ABORTED
+            self._emit(RunEventType.RUN_CANCELLED, reason="cancellation_requested")
+
     def _reserve_step(self) -> None:
-        self._assert_running()
-        if self._deadline_passed():
-            self._mark_limit(RunStatus.TIMED_OUT, "timeout")
-            raise RunDeadlineExceeded("The configured run deadline has passed.")
+        self.checkpoint()
         if self._steps >= self.policy.max_steps:
             self._mark_limit(RunStatus.LIMIT_EXCEEDED, "max_steps")
             raise RunStepLimitExceeded("Configured maximum steps reached.")
