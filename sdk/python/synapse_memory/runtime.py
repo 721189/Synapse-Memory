@@ -1,9 +1,11 @@
 """Opt-in, synchronous guard for bounded and inspectable agent runs.
 
 This module guards only work explicitly routed through SynapseRun. It does not
-intercept arbitrary framework calls or forcibly cancel an already-running tool.
-Events are held in memory and contain metadata only; tool arguments are never
-stored in the event stream.
+intercept arbitrary framework calls or forcibly terminate an already-running
+synchronous tool. Cancellation is cooperative: tools may call checkpoint()
+between bounded units of work, and guarded calls observe requests before and
+after tool execution. Events are held in memory and contain metadata only; tool
+arguments are never stored in the event stream.
 """
 from __future__ import annotations
 
@@ -284,7 +286,8 @@ class SynapseRun:
 
     Each call to call_tool consumes one step and, if admitted, one tool call.
     record_step() accounts for non-tool work. The tool callable receives the
-    provided JSON-compatible arguments as keyword arguments.
+    provided JSON-compatible arguments as keyword arguments. Cancellation is
+    cooperative; long-running tools should call checkpoint() periodically.
     """
 
     def __init__(self, policy: Optional[RunPolicy] = None, run_id: Optional[str] = None):
