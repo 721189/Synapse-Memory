@@ -8,6 +8,7 @@ from synapse_memory.runtime import (
     RepeatedToolCallError,
     PostconditionFailed,
     RunDeadlineExceeded,
+    RunCancelled,
     RunPolicy,
     RunStateError,
     RunStatus,
@@ -35,6 +36,12 @@ from synapse_memory.runtime import (
 def test_policy_rejects_invalid_limits(kwargs):
     with pytest.raises(ValueError):
         RunPolicy(**kwargs)
+
+
+def test_run_cancelled_exception_is_a_public_run_guard_error():
+    assert issubclass(RunCancelled, RuntimeError)
+    from synapse_memory.runtime import RunGuardError
+    assert issubclass(RunCancelled, RunGuardError)
 
 
 def test_run_records_metadata_and_returns_tool_result():
