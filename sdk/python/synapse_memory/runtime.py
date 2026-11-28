@@ -307,11 +307,12 @@ class SynapseRun:
         self._events: list[RunEvent] = []
         # Thread-safe signal; public cancellation/checkpoint behavior is added separately.
         self._cancel_requested = threading.Event()
-        self._cancel_lock = threading.Lock()
+        self._cancel_lock = threading.RLock()
 
     @property
     def status(self) -> RunStatus:
-        return self._status
+        with self._cancel_lock:
+            return self._status
 
     def cancel(self) -> bool:
         """Request cooperative cancellation from any thread.
@@ -332,13 +333,14 @@ class SynapseRun:
 
         Long-running tools should call this between bounded units of work.
         """
-        self._assert_running()
-        if self._cancel_requested.is_set():
-            self._mark_cancelled()
-            raise RunCancelled("Cancellation was requested for this run.")
-        if self._deadline_passed():
-            self._mark_limit(RunStatus.TIMED_OUT, "timeout")
-            raise RunDeadlineExceeded("The configured run deadline has passed.")
+        with self._cancel_lock:
+            self._assert_running()
+            if self._cancel_requested.is_set():
+                self._mark_cancelled()
+                raise RunCancelled("Cancellation was requested for this run.")
+            if self._deadline_passed():
+                self._mark_limit(RunStatus.TIMED_OUT, "timeout")
+                raise RunDeadlineExceeded("The configured run deadline has passed.")
 
     @property
     def steps(self) -> int:
@@ -362,19 +364,20 @@ class SynapseRun:
         return self
 
     def __exit__(self, exc_type: Any, exc_value: Any, traceback: Any) -> Literal[False]:
-        if self._status is RunStatus.RUNNING:
-            if self._cancel_requested.is_set() or (
-                isinstance(exc_type, type) and issubclass(exc_type, RunCancelled)
-            ):
-                self._mark_cancelled()
-            elif self._deadline_passed():
-                self._mark_limit(RunStatus.TIMED_OUT, "timeout")
-            elif exc_type is None:
-                self._status = RunStatus.SUCCEEDED
-            elif isinstance(exc_type, type) and issubclass(exc_type, Exception):
-                self._status = RunStatus.FAILED
-            else:
-                self._status = RunStatus.ABORTED
+        with self._cancel_lock:
+            if self._status is RunStatus.RUNNING:
+                if self._cancel_requested.is_set() or (
+                    isinstance(exc_type, type) and issubclass(exc_type, RunCancelled)
+                ):
+                    self._mark_cancelled()
+                elif self._deadline_passed():
+                    self._mark_limit(RunStatus.TIMED_OUT, "timeout")
+                elif exc_type is None:
+                    self._status = RunStatus.SUCCEEDED
+                elif isinstance(exc_type, type) and issubclass(exc_type, Exception):
+                    self._status = RunStatus.FAILED
+                else:
+                    self._status = RunStatus.ABORTED
         self._emit(
             RunEventType.RUN_FINISHED,
             reason=self._status.value,
@@ -730,13 +733,15 @@ class SynapseRun:
         return result
 
     def _assert_running(self) -> None:
-        if self._status is not RunStatus.RUNNING:
-            raise RunStateError("Guarded work requires an active, non-terminal SynapseRun.")
+        with self._cancel_lock:
+            if self._status is not RunStatus.RUNNING:
+                raise RunStateError("Guarded work requires an active, non-terminal SynapseRun.")
 
     def _mark_cancelled(self) -> None:
-        if self._status is RunStatus.RUNNING:
-            self._status = RunStatus.ABORTED
-            self._emit(RunEventType.RUN_CANCELLED, reason="cancellation_requested")
+        with self._cancel_lock:
+            if self._status is RunStatus.RUNNING:
+                self._status = RunStatus.ABORTED
+                self._emit(RunEventType.RUN_CANCELLED, reason="cancellation_requested")
 
     def _reserve_step(self) -> None:
         self.checkpoint()
@@ -771,9 +776,10 @@ class SynapseRun:
         )
 
     def _mark_limit(self, status: RunStatus, reason: str) -> None:
-        if self._status is RunStatus.RUNNING:
-            self._status = status
-            self._emit(RunEventType.LIMIT_EXCEEDED, reason=reason)
+        with self._cancel_lock:
+            if self._status is RunStatus.RUNNING:
+                self._status = status
+                self._emit(RunEventType.LIMIT_EXCEEDED, reason=reason)
 
     def _emit(
         self,
