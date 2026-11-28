@@ -22,6 +22,7 @@ from synapse_memory.runtime import (
     RunStepLimitExceeded,
     RunToolCallLimitExceeded,
     RunDeadlineExceeded,
+    RunCancelled,
     RepeatedToolCallError,
     PostconditionFailed,
 )
@@ -56,6 +57,7 @@ __all__ = [
     "RunStepLimitExceeded",
     "RunToolCallLimitExceeded",
     "RunDeadlineExceeded",
+    "RunCancelled",
     "RepeatedToolCallError",
     "PostconditionFailed",
 ]

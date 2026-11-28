@@ -1,5 +1,6 @@
 """Regression tests for the opt-in agent run guard."""
 from datetime import timezone
+import threading
 
 import pytest
 
@@ -8,6 +9,8 @@ from synapse_memory.runtime import (
     RepeatedToolCallError,
     PostconditionFailed,
     RunDeadlineExceeded,
+    RunGuardError,
+    RunCancelled,
     RunPolicy,
     RunStateError,
     RunStatus,
@@ -35,6 +38,106 @@ from synapse_memory.runtime import (
 def test_policy_rejects_invalid_limits(kwargs):
     with pytest.raises(ValueError):
         RunPolicy(**kwargs)
+
+
+def test_run_cancelled_exception_is_a_public_run_guard_error():
+    assert issubclass(RunCancelled, RuntimeError)
+    assert issubclass(RunCancelled, RunGuardError)
+
+
+def test_cancel_before_next_guarded_operation_aborts_without_running_tool():
+    executed = False
+    run = SynapseRun()
+
+    with run:
+        assert run.cancel() is True
+        assert run.cancel() is False
+
+        def tool(**_kwargs):
+            nonlocal executed
+            executed = True
+
+        with pytest.raises(RunCancelled):
+            run.call_tool("must_not_run", {}, tool)
+
+    assert executed is False
+    assert run.status is RunStatus.ABORTED
+    assert any(event.event_type is RunEventType.RUN_CANCELLED for event in run.events)
+    assert run.events[-1].reason == "aborted"
+
+
+def test_cooperative_tool_checkpoint_observes_cancellation_without_retry():
+    attempts = 0
+    run = SynapseRun()
+
+    def cooperative_tool(**_kwargs):
+        nonlocal attempts
+        attempts += 1
+        assert run.cancel() is True
+        run.checkpoint()
+
+    with pytest.raises(RunCancelled):
+        with run:
+            run.call_tool_with_retry(
+                "cooperative",
+                {},
+                cooperative_tool,
+                retry_safe=True,
+                max_attempts=2,
+            )
+
+    assert attempts == 1
+    assert run.status is RunStatus.ABORTED
+    assert not any(
+        event.event_type is RunEventType.TOOL_CALL_RETRYING
+        for event in run.events
+    )
+
+
+def test_concurrent_cancel_is_observed_after_non_cooperative_tool_returns():
+    tool_started = threading.Event()
+    release_tool = threading.Event()
+    errors = []
+    run = SynapseRun()
+
+    def blocking_tool(**_kwargs):
+        tool_started.set()
+        assert release_tool.wait(timeout=3)
+        return "completed"
+
+    def execute_run():
+        try:
+            with run:
+                run.call_tool("blocking", {}, blocking_tool)
+        except BaseException as exc:
+            errors.append(exc)
+
+    worker = threading.Thread(target=execute_run)
+    worker.start()
+    assert tool_started.wait(timeout=3)
+    assert run.cancel() is True
+    assert run.cancel() is False
+    release_tool.set()
+    worker.join(timeout=3)
+
+    assert not worker.is_alive()
+    assert len(errors) == 1 and isinstance(errors[0], RunCancelled)
+    assert run.status is RunStatus.ABORTED
+    # The synchronous callable completed; cancellation was observed afterward.
+    assert any(
+        event.event_type is RunEventType.TOOL_CALL_SUCCEEDED
+        for event in run.events
+    )
+    assert run.events[-1].reason == "aborted"
+
+
+def test_cancel_after_run_finishes_is_a_noop():
+    run = SynapseRun()
+    with run:
+        pass
+
+    assert run.status is RunStatus.SUCCEEDED
+    assert run.cancel() is False
 
 
 def test_run_records_metadata_and_returns_tool_result():
