@@ -83,7 +83,7 @@ def test_cooperative_tool_checkpoint_observes_cancellation_without_retry():
                 {},
                 cooperative_tool,
                 retry_safe=True,
-                max_attempts=3,
+                max_attempts=2,
             )
 
     assert attempts == 1
