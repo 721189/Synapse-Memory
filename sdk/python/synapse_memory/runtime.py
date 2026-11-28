@@ -304,6 +304,7 @@ class SynapseRun:
         self._events: list[RunEvent] = []
         # Thread-safe signal; public cancellation/checkpoint behavior is added separately.
         self._cancel_requested = threading.Event()
+        self._cancel_lock = threading.Lock()
 
     @property
     def status(self) -> RunStatus:
@@ -316,11 +317,12 @@ class SynapseRun:
         request is observed at the next checkpoint; it does not kill a running
         synchronous callable or undo side effects already performed.
         """
-        if self._status is not RunStatus.RUNNING:
-            return False
-        already_requested = self._cancel_requested.is_set()
-        self._cancel_requested.set()
-        return not already_requested
+        with self._cancel_lock:
+            if self._status is not RunStatus.RUNNING:
+                return False
+            already_requested = self._cancel_requested.is_set()
+            self._cancel_requested.set()
+            return not already_requested
 
     def checkpoint(self) -> None:
         """Raise when cancellation or the cooperative deadline is observed.
